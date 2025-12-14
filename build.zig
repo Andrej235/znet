@@ -4,14 +4,29 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const role_option = b.option(
+        []const u8,
+        "role",
+        "Build role: client or server",
+    ) orelse "";
+
+    const role = if (std.mem.eql(u8, role_option, "server"))
+        @import("src/role.zig").Role.server
+    else
+        @import("src/role.zig").Role.client;
+
+    @import("src/role.zig").running_as = role;
+
     const exe = b.addExecutable(.{
-        .name = "znet",
+        .name = if (role == .server) "znet-server" else "znet-client",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
+            .root_source_file = b.path(if (role == .server) "src/server-main.zig" else "src/client-main.zig"),
             .target = target,
             .optimize = optimize,
         }),
     });
+
+    std.debug.print("Building for role: {s}\n", .{if (role == .server) "server" else "client"});
 
     b.installArtifact(exe);
 
