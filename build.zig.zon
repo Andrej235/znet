@@ -1,0 +1,14 @@
+.{
+    .name = .znet,
+    .version = "0.0.0",
+    .fingerprint = 0x286d5309fb18a3a8,
+    .minimum_zig_version = "0.15.2",
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "LICENSE",
+        "README.md",
+    },
+}
