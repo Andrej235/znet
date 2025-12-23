@@ -19,6 +19,12 @@ const TestStruct = struct {
     c: Vector,
 };
 
+const BigStruct = struct {
+    test_struct: TestStruct,
+    numbers: [10]u64,
+    vectors: [5]Vector,
+};
+
 test "int s/d" {
     try testing.expectEqual(12345, roundTrip(comptime_int, 12345));
 
@@ -231,23 +237,69 @@ test "slices s/d" {
         "serialization",
     };
     const mat_slice = mat[0..];
-
     try testing.expectEqualDeep(
         mat_slice,
         roundTripInfer(mat_slice),
+    );
+
+    const allocator = std.heap.page_allocator;
+    var vecs = try allocator.alloc(Vector, 3);
+    vecs[0] = Vector{ .x = 1.1, .y = 2.2, .z = 3.3 };
+    vecs[1] = Vector{ .x = 4.4, .y = 5.5, .z = 6.6 };
+    vecs[2] = Vector{ .x = 7.7, .y = 8.8, .z = 9.9 };
+    try testing.expectEqualDeep(
+        vecs,
+        roundTrip([]Vector, vecs),
+    );
+
+    var structs = try allocator.alloc(TestStruct, 3);
+    structs[0] = TestStruct{ .a = 1, .b = "first", .c = Vector{ .x = 1.1, .y = 2.2, .z = 3.3 } };
+    structs[1] = TestStruct{ .a = 2, .b = "second", .c = Vector{ .x = 4.4, .y = 5.5, .z = 6.6 } };
+    structs[2] = TestStruct{ .a = 3, .b = "third", .c = Vector{ .x = 7.7, .y = 8.8, .z = 9.9 } };
+    try testing.expectEqualDeep(
+        structs,
+        roundTrip([]TestStruct, structs),
+    );
+
+    var big_structs = try allocator.alloc(BigStruct, 2);
+    big_structs[0] = BigStruct{
+        .test_struct = TestStruct{ .a = 1, .b = "first", .c = Vector{ .x = 1.1, .y = 2.2, .z = 3.3 } },
+        .numbers = [_]u64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 },
+        .vectors = [_]Vector{
+            Vector{ .x = 1.1, .y = 2.2, .z = 3.3 },
+            Vector{ .x = 4.4, .y = 5.5, .z = 6.6 },
+            Vector{ .x = 7.7, .y = 8.8, .z = 9.9 },
+            Vector{ .x = 10.1, .y = 11.2, .z = 12.3 },
+            Vector{ .x = 13.4, .y = 14.5, .z = 15.6 },
+        },
+    };
+    big_structs[1] = BigStruct{
+        .test_struct = TestStruct{ .a = 2, .b = "second", .c = Vector{ .x = 4.4, .y = 5.5, .z = 6.6 } },
+        .numbers = [_]u64{ 11, 12, 13, 14, 15, 16, 17, 18, 19, 20 },
+        .vectors = [_]Vector{
+            Vector{ .x = 16.1, .y = 17.2, .z = 18.3 },
+            Vector{ .x = 19.4, .y = 20.5, .z = 21.6 },
+            Vector{ .x = 22.7, .y = 23.8, .z = 24.9 },
+            Vector{ .x = 25.0, .y = 26.1, .z = 27.2 },
+            Vector{ .x = 28.3, .y = 29.4, .z = 30.5 },
+        },
+    };
+    try testing.expectEqualDeep(
+        big_structs,
+        roundTrip([]BigStruct, big_structs),
     );
 }
 
 var deserializer = zNet.Deserializer.init(std.heap.page_allocator);
 
-fn roundTrip(comptime T: type, comptime data: T) T {
+fn roundTrip(comptime T: type, data: T) T {
     var buffer: [1024]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
 
     const writer = fbs.writer();
     const reader = fbs.reader();
 
-    zNet.Serializer.serialize(writer, data) catch unreachable;
+    zNet.Serializer.serialize(T, writer, data) catch unreachable;
     fbs.reset(); // reset position before reading
     const deserialized: T = deserializer.deserialize(reader, T) catch unreachable;
     return deserialized;
@@ -260,7 +312,7 @@ fn roundTripInfer(comptime data: anytype) @TypeOf(data) {
     const writer = fbs.writer();
     const reader = fbs.reader();
 
-    zNet.Serializer.serialize(writer, data) catch unreachable;
+    zNet.Serializer.serialize(@TypeOf(data), writer, data) catch unreachable;
     fbs.reset(); // reset position before reading
     const deserialized: @TypeOf(data) = deserializer.deserialize(reader, @TypeOf(data)) catch unreachable;
     return deserialized;

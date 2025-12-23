@@ -86,7 +86,10 @@ pub const Deserializer = struct {
                     sentinel,
                 ) else try self.allocator.alloc(TChild, len);
 
-                try reader.readNoEof(buf[0..len]);
+                for (0..len) |i| {
+                    buf[i] = try self.deserialize(reader, TChild);
+                }
+
                 return buf;
             },
         }
