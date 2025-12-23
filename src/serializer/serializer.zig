@@ -8,13 +8,15 @@ pub const Serializer = struct {
             .@"struct" => |struct_info| try serializeStruct(writer, data, struct_info),
             .array => |array_info| try serializeArray(writer, data, array_info),
             .pointer => |pointer_info| try serializePointer(writer, data, pointer_info),
+            .optional => |optional_info| try serializeOptional(writer, data, optional_info),
+            .bool => try serializeBool(writer, data),
             .int => |int_info| try serializeInt(writer, data, int_info),
             .comptime_int => try serializeComptimeInt(writer, data),
             .float => |float_info| try serializeFloat(writer, data, float_info),
             .comptime_float => try serializeComptimeFloat(writer, data),
-            else => {
-                try writer.writeAll("Unhandled data " ++ @typeName(T) ++ "\n");
-            },
+            .@"fn" => @compileError("Functions cannot be serialized"),
+            .@"opaque" => @compileError("Opaque types cannot be serialized due to lack of type information at compile time"),
+            else => @compileError("Unhandled data " ++ @typeName(T) ++ "\n"),
         }
     }
 
@@ -71,6 +73,19 @@ pub const Serializer = struct {
                 }
             },
         }
+    }
+
+    inline fn serializeOptional(writer: anytype, data: anytype, comptime optional_info: std.builtin.Type.Optional) !void {
+        const is_some = data != null;
+        try serializeBool(writer, is_some);
+        if (is_some) {
+            try serialize(optional_info.child, writer, data.?);
+        }
+    }
+
+    inline fn serializeBool(writer: anytype, data: bool) !void {
+        const byte_value: u8 = if (data) 1 else 0;
+        try writer.writeInt(u8, byte_value, .big);
     }
 
     inline fn serializeInt(writer: anytype, data: anytype, comptime _: std.builtin.Type.Int) !void {

@@ -16,13 +16,15 @@ pub const Deserializer = struct {
             .@"struct" => try self.deserializeStruct(reader, T),
             .array => try self.deserializeArray(reader, T),
             .pointer => try self.deserializePointer(reader, T),
+            .optional => try self.deserializeOptional(reader, T),
+            .bool => try self.deserializeBool(reader),
             .int => try self.deserializeInt(reader, T),
             .comptime_int => try self.deserializeComptimeInt(reader),
             .float => try self.deserializeFloat(reader, T),
             .comptime_float => try self.deserializeComptimeFloat(reader),
-            else => {
-                try reader.writeAll("Unhandled data " ++ @typeName(T) ++ "\n");
-            },
+            .@"fn" => @compileError("Functions cannot be serialized"),
+            .@"opaque" => @compileError("Opaque types cannot be serialized due to lack of type information at compile time"),
+            else => @compileError("Unhandled data " ++ @typeName(T) ++ "\n"),
         };
     }
 
@@ -93,6 +95,26 @@ pub const Deserializer = struct {
                 return buf;
             },
         }
+    }
+
+    inline fn deserializeOptional(self: *Deserializer, reader: anytype, comptime TOptional: type) !TOptional {
+        const optional_info = @typeInfo(TOptional).optional;
+        const is_some = try self.deserializeBool(reader);
+        if (is_some) {
+            const value = try self.deserialize(reader, optional_info.child);
+            return value;
+        } else {
+            return null;
+        }
+    }
+
+    inline fn deserializeBool(_: *Deserializer, reader: anytype) !bool {
+        const byte = try reader.readByte();
+        return switch (byte) {
+            0 => false,
+            1 => true,
+            else => error.InvalidBooleanValue,
+        };
     }
 
     inline fn deserializeInt(_: *Deserializer, reader: anytype, comptime TInt: type) !TInt {

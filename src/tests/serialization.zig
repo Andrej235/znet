@@ -290,6 +290,37 @@ test "slices s/d" {
     );
 }
 
+test "optional s/d" {
+    try testing.expectEqual(
+        null,
+        roundTrip(?i32, null),
+    );
+    try testing.expectEqual(
+        12345,
+        roundTrip(?i32, 12345),
+    );
+
+    try testing.expectEqualDeep(
+        null,
+        roundTrip(?TestStruct, null),
+    );
+    try testing.expectEqualDeep(
+        TestStruct{ .a = 54321, .b = "optional struct", .c = Vector{ .x = 9.87, .y = 6.54, .z = 3.21 } },
+        roundTrip(?TestStruct, TestStruct{ .a = 54321, .b = "optional struct", .c = Vector{ .x = 9.87, .y = 6.54, .z = 3.21 } }),
+    );
+}
+
+test "bool s/d" {
+    try testing.expectEqual(
+        true,
+        roundTrip(bool, true),
+    );
+    try testing.expectEqual(
+        false,
+        roundTrip(bool, false),
+    );
+}
+
 var deserializer = zNet.Deserializer.init(std.heap.page_allocator);
 
 fn roundTrip(comptime T: type, data: T) T {
