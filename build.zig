@@ -17,6 +17,10 @@ pub fn build(b: *std.Build) void {
 
     @import("src/role.zig").running_as = role;
 
+    const root_module = b.addModule("src", .{
+        .root_source_file = b.path("src/root.zig"),
+    });
+
     const exe = b.addExecutable(.{
         .name = if (role == .server) "znet-server" else "znet-client",
         .root_module = b.createModule(.{
@@ -26,7 +30,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    std.debug.print("Building for role: {s}\n", .{if (role == .server) "server" else "client"});
+    // std.debug.print("Building for role: {s}\n", .{if (role == .server) "server" else "client"});
 
     b.installArtifact(exe);
 
@@ -39,5 +43,30 @@ pub fn build(b: *std.Build) void {
 
     if (b.args) |args| {
         run_cmd.addArgs(args);
+    }
+
+    const test_step = b.step("test", "Run all tests");
+
+    // Open the tests directory
+    const tests_dir = std.fs.cwd().openDir("src/tests", .{ .iterate = true }) catch unreachable;
+    var it = tests_dir.iterate();
+
+    while (it.next() catch unreachable) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.name, ".zig")) continue;
+
+        const path = b.pathJoin(&.{ "src/tests", entry.name });
+
+        const test_exe = b.addTest(.{
+            .root_module = b.createModule(
+                .{
+                    .root_source_file = b.path(path),
+                    .target = target,
+                    .optimize = optimize,
+                },
+            ),
+        });
+        test_exe.root_module.addImport("zNet", root_module);
+        test_step.dependOn(&b.addRunArtifact(test_exe).step);
     }
 }
