@@ -178,6 +178,66 @@ test "array s/d" {
     );
 }
 
+test "slices s/d" {
+    const str: []const u8 = "Hello, Zig!";
+    try testing.expectEqualStrings(
+        str,
+        roundTripInfer(str),
+    );
+
+    const str_empty: []const u8 = "";
+    try testing.expectEqualStrings(
+        str_empty,
+        roundTripInfer(str_empty),
+    );
+
+    const str_w_sentinel: [:0]const u8 = "Hello, Zig!";
+    try testing.expectEqualStrings(
+        str_w_sentinel,
+        roundTripInfer(str_w_sentinel),
+    );
+
+    const many_ptr_w_sentinel: [:0]const u8 = "Hello, Zig!";
+    try testing.expectEqualDeep(
+        many_ptr_w_sentinel,
+        roundTripInfer(many_ptr_w_sentinel),
+    );
+    try testing.expectEqualSentinel(
+        u8,
+        0,
+        many_ptr_w_sentinel,
+        roundTripInfer(many_ptr_w_sentinel),
+    );
+
+    const empty_many_ptr_w_sentinel: [:0]const u8 = "";
+    try testing.expectEqualDeep(
+        empty_many_ptr_w_sentinel,
+        roundTripInfer(empty_many_ptr_w_sentinel),
+    );
+    try testing.expectEqualSentinel(
+        u8,
+        0,
+        empty_many_ptr_w_sentinel,
+        roundTripInfer(empty_many_ptr_w_sentinel),
+    );
+
+    const mat = [_][]const u8{
+        "This",
+        "is",
+        "a",
+        "test",
+        "of",
+        "slices",
+        "serialization",
+    };
+    const mat_slice = mat[0..];
+
+    try testing.expectEqualDeep(
+        mat_slice,
+        roundTripInfer(mat_slice),
+    );
+}
+
 var deserializer = zNet.Deserializer.init(std.heap.page_allocator);
 
 fn roundTrip(comptime T: type, comptime data: T) T {

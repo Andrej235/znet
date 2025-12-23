@@ -35,14 +35,42 @@ pub const Serializer = struct {
     }
 
     inline fn serializePointer(writer: anytype, comptime data: anytype, comptime pointer_info: std.builtin.Type.Pointer) !void {
-        const TChild = pointer_info.child;
+        switch (pointer_info.size) {
+            .one => {
+                const pointed_value = data.*;
+                try serialize(writer, pointed_value);
+            },
+            .many => {
+                if (pointer_info.sentinel()) |sentinel| {
+                    const start_pos = try writer.context.getPos();
+                    try writer.context.seekBy(@sizeOf(usize));
 
-        // string
-        if (TChild == u8) {
-            const len = data.len;
-            try writer.writeInt(@TypeOf(len), len, .big);
-            try writer.writeAll(data);
-            return;
+                    var count: usize = 0;
+                    while (data[count] != sentinel) : (count += 1) {
+                        try serialize(writer, data[count]);
+                    }
+                    const end_pos = try writer.context.getPos();
+
+                    writer.context.seekTo(start_pos);
+                    try writer.writeInt(usize, count, .big);
+                    writer.context.seekTo(end_pos);
+                } else {
+                    // It is impossible to iterate over a many pointer without a sentinel
+                    @compileError("Many pointers must have a sentinel to be serializable");
+                }
+            },
+            .c => {
+                @compileError("C pointers are not supported");
+            },
+            .slice => {
+                // todo: optimize for strings, use writeAll
+                const len = data.len;
+                try writer.writeInt(@TypeOf(len), len, .big);
+                inline for (0..len) |i| {
+                    const element = data[i];
+                    try serialize(writer, element);
+                }
+            },
         }
     }
 

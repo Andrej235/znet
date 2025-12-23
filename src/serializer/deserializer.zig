@@ -53,14 +53,42 @@ pub const Deserializer = struct {
         const pointer_info = @typeInfo(TPointer).pointer;
         const TChild = pointer_info.child;
 
-        // string
-        if (TChild == u8) {
-            const len = try self.deserializeInt(reader, usize);
-            // try writer.writeAll(data);
+        switch (pointer_info.size) {
+            .one => {
+                const pointed_value = try self.allocator.create(TChild);
+                pointed_value.* = try self.deserialize(reader, TChild);
+                return pointed_value;
+            },
+            .many => {
+                if (pointer_info.sentinel()) |sentinel| {
+                    const len = try self.deserializeInt(reader, usize);
+                    const buf = try self.allocator.allocSentinel(
+                        TChild,
+                        len,
+                        sentinel,
+                    );
 
-            const buf = try self.allocator.alloc(u8, len);
-            try reader.readNoEof(buf);
-            return buf;
+                    try reader.readNoEof(buf[0..len]);
+                    return buf;
+                } else {
+                    // It is impossible to iterate over a many pointer without a sentinel
+                    @compileError("Many pointers must have a sentinel to be serializable");
+                }
+            },
+            .c => {
+                @compileError("C pointers are not supported");
+            },
+            .slice => {
+                const len = try self.deserializeInt(reader, usize);
+                const buf = if (pointer_info.sentinel()) |sentinel| try self.allocator.allocSentinel(
+                    TChild,
+                    len,
+                    sentinel,
+                ) else try self.allocator.alloc(TChild, len);
+
+                try reader.readNoEof(buf[0..len]);
+                return buf;
+            },
         }
     }
 
