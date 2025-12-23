@@ -81,6 +81,103 @@ test "struct s/d" {
     );
 }
 
+test "array s/d" {
+    try testing.expectEqualDeep(
+        [_]i32{ 1, 2, 3, 4, 5 },
+        roundTripInfer([5]i32{ 1, 2, 3, 4, 5 }),
+    );
+
+    try testing.expectEqualDeep(
+        [_]Vector{
+            .{ .x = 1.1, .y = 2.2, .z = 3.3 },
+            .{ .x = 4.4, .y = 5.5, .z = 6.6 },
+            .{ .x = 7.7, .y = 8.8, .z = 9.9 },
+        },
+        roundTripInfer([3]Vector{
+            .{ .x = 1.1, .y = 2.2, .z = 3.3 },
+            .{ .x = 4.4, .y = 5.5, .z = 6.6 },
+            .{ .x = 7.7, .y = 8.8, .z = 9.9 },
+        }),
+    );
+
+    try testing.expectEqualDeep(
+        [_][]const u8{
+            "Hello",
+            "from",
+            "Zig",
+            "array",
+            "serialization",
+        },
+        roundTripInfer([5][]const u8{
+            "Hello",
+            "from",
+            "Zig",
+            "array",
+            "serialization",
+        }),
+    );
+
+    try testing.expectEqualDeep(
+        [_][3]f32{
+            .{ 1.1, 2.2, 3.3 },
+            .{ 4.4, 5.5, 6.6 },
+            .{ 7.7, 8.8, 9.9 },
+        },
+        roundTripInfer([3][3]f32{
+            .{ 1.1, 2.2, 3.3 },
+            .{ 4.4, 5.5, 6.6 },
+            .{ 7.7, 8.8, 9.9 },
+        }),
+    );
+
+    try testing.expectEqualDeep([_]TestStruct{
+        .{ .a = 1, .b = "first", .c = Vector{ .x = 1.1, .y = 2.2, .z = 3.3 } },
+        .{ .a = 2, .b = "second", .c = Vector{ .x = 4.4, .y = 5.5, .z = 6.6 } },
+        .{ .a = 3, .b = "third", .c = Vector{ .x = 7.7, .y = 8.8, .z = 9.9 } },
+    }, roundTripInfer([3]TestStruct{
+        .{ .a = 1, .b = "first", .c = Vector{ .x = 1.1, .y = 2.2, .z = 3.3 } },
+        .{ .a = 2, .b = "second", .c = Vector{ .x = 4.4, .y = 5.5, .z = 6.6 } },
+        .{ .a = 3, .b = "third", .c = Vector{ .x = 7.7, .y = 8.8, .z = 9.9 } },
+    }));
+
+    try testing.expectEqualDeep(
+        [_][3]TestStruct{
+            .{
+                .{ .a = 1, .b = "a", .c = Vector{ .x = 0.1, .y = 0.2, .z = 0.3 } },
+                .{ .a = 2, .b = "b", .c = Vector{ .x = 1.1, .y = 1.2, .z = 1.3 } },
+                .{ .a = 3, .b = "c", .c = Vector{ .x = 2.1, .y = 2.2, .z = 2.3 } },
+            },
+            .{
+                .{ .a = 4, .b = "d", .c = Vector{ .x = 3.1, .y = 3.2, .z = 3.3 } },
+                .{ .a = 5, .b = "e", .c = Vector{ .x = 4.1, .y = 4.2, .z = 4.3 } },
+                .{ .a = 6, .b = "f", .c = Vector{ .x = 5.1, .y = 5.2, .z = 5.3 } },
+            },
+            .{
+                .{ .a = 7, .b = "g", .c = Vector{ .x = 6.1, .y = 6.2, .z = 6.3 } },
+                .{ .a = 8, .b = "h", .c = Vector{ .x = 7.1, .y = 7.2, .z = 7.3 } },
+                .{ .a = 9, .b = "i", .c = Vector{ .x = 8.1, .y = 8.2, .z = 8.3 } },
+            },
+        },
+        roundTripInfer([3][3]TestStruct{
+            .{
+                .{ .a = 1, .b = "a", .c = Vector{ .x = 0.1, .y = 0.2, .z = 0.3 } },
+                .{ .a = 2, .b = "b", .c = Vector{ .x = 1.1, .y = 1.2, .z = 1.3 } },
+                .{ .a = 3, .b = "c", .c = Vector{ .x = 2.1, .y = 2.2, .z = 2.3 } },
+            },
+            .{
+                .{ .a = 4, .b = "d", .c = Vector{ .x = 3.1, .y = 3.2, .z = 3.3 } },
+                .{ .a = 5, .b = "e", .c = Vector{ .x = 4.1, .y = 4.2, .z = 4.3 } },
+                .{ .a = 6, .b = "f", .c = Vector{ .x = 5.1, .y = 5.2, .z = 5.3 } },
+            },
+            .{
+                .{ .a = 7, .b = "g", .c = Vector{ .x = 6.1, .y = 6.2, .z = 6.3 } },
+                .{ .a = 8, .b = "h", .c = Vector{ .x = 7.1, .y = 7.2, .z = 7.3 } },
+                .{ .a = 9, .b = "i", .c = Vector{ .x = 8.1, .y = 8.2, .z = 8.3 } },
+            },
+        }),
+    );
+}
+
 var deserializer = zNet.Deserializer.init(std.heap.page_allocator);
 
 fn roundTrip(comptime T: type, comptime data: T) T {

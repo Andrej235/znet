@@ -7,6 +7,7 @@ pub const Serializer = struct {
         const info = @typeInfo(T);
         switch (info) {
             .@"struct" => |struct_info| try serializeStruct(writer, data, struct_info),
+            .array => |array_info| try serializeArray(writer, data, array_info),
             .pointer => |pointer_info| try serializePointer(writer, data, pointer_info),
             .int => |int_info| try serializeInt(writer, data, int_info),
             .comptime_int => try serializeComptimeInt(writer, data),
@@ -22,6 +23,14 @@ pub const Serializer = struct {
         inline for (struct_info.fields) |field| {
             const field_value = @field(data, field.name);
             try serialize(writer, field_value);
+        }
+    }
+
+    inline fn serializeArray(writer: anytype, comptime data: anytype, comptime array_info: std.builtin.Type.Array) !void {
+        const len = array_info.len;
+        inline for (0..len) |i| {
+            const element = data[i];
+            try serialize(writer, element);
         }
     }
 

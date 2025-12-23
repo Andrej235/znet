@@ -14,6 +14,7 @@ pub const Deserializer = struct {
 
         return switch (info) {
             .@"struct" => try self.deserializeStruct(reader, T),
+            .array => try self.deserializeArray(reader, T),
             .pointer => try self.deserializePointer(reader, T),
             .int => try self.deserializeInt(reader, T),
             .comptime_int => try self.deserializeComptimeInt(reader),
@@ -32,6 +33,18 @@ pub const Deserializer = struct {
         inline for (info.fields) |field| {
             const field_value = try self.deserialize(reader, field.type);
             @field(instance, field.name) = field_value;
+        }
+        return instance;
+    }
+
+    inline fn deserializeArray(self: *Deserializer, reader: anytype, comptime TArray: type) !TArray {
+        const array_info = @typeInfo(TArray).array;
+        const len = array_info.len;
+        var instance: TArray = undefined;
+
+        inline for (0..len) |i| {
+            const element = try self.deserialize(reader, array_info.child);
+            instance[i] = element;
         }
         return instance;
     }
