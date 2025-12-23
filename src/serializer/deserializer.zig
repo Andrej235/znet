@@ -25,6 +25,7 @@ pub const Deserializer = struct {
             .@"enum" => try self.deserializeEnum(reader, T),
             .@"fn" => @compileError("Functions cannot be serialized"),
             .@"opaque" => @compileError("Opaque types cannot be serialized due to lack of type information at compile time"),
+            .enum_literal => @compileError("Enum literals cannot be serialized directly, try using the enum type instead"),
             else => @compileError("Unhandled data " ++ @typeName(T) ++ "\n"),
         };
     }

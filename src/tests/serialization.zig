@@ -25,7 +25,7 @@ const BigStruct = struct {
     vectors: [5]Vector,
 };
 
-const Weekday = enum(u8) {
+const Weekday = enum {
     Sunday,
     Monday,
     Tuesday,
@@ -36,10 +36,11 @@ const Weekday = enum(u8) {
 };
 
 const DayType = enum(u8) {
-    Weekday = 1,
-    Weekend = 2,
-    Holiday = 4,
-    Workday = 8,
+    Weekday,
+    Weekend = 123,
+    Holiday,
+    Workday = 32,
+    _,
 };
 
 test "int s/d" {
@@ -350,6 +351,19 @@ test "enum s/d" {
     try testing.expectEqual(
         Weekday.Sunday,
         roundTrip(Weekday, Weekday.Sunday),
+    );
+
+    try testing.expectEqual(
+        DayType.Weekend,
+        roundTrip(DayType, DayType.Weekend),
+    );
+    try testing.expectEqual(
+        DayType.Holiday,
+        roundTrip(DayType, DayType.Holiday),
+    );
+    try testing.expectEqual(
+        @as(DayType, @enumFromInt(16)),
+        roundTrip(DayType, @as(DayType, @enumFromInt(16))),
     );
 }
 
