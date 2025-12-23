@@ -14,6 +14,7 @@ pub const Serializer = struct {
             .comptime_int => try serializeComptimeInt(writer, data),
             .float => |float_info| try serializeFloat(writer, data, float_info),
             .comptime_float => try serializeComptimeFloat(writer, data),
+            .@"enum" => |enum_info| try serializeEnum(writer, data, enum_info),
             .@"fn" => @compileError("Functions cannot be serialized"),
             .@"opaque" => @compileError("Opaque types cannot be serialized due to lack of type information at compile time"),
             else => @compileError("Unhandled data " ++ @typeName(T) ++ "\n"),
@@ -110,5 +111,20 @@ pub const Serializer = struct {
 
     inline fn serializeComptimeFloat(writer: anytype, data: anytype) !void {
         try serializeFloat(writer, @as(f32, @floatCast(data)), @typeInfo(f32).float);
+    }
+
+    inline fn serializeEnum(writer: anytype, data: anytype, comptime enum_info: std.builtin.Type.Enum) !void {
+        const int_info = @typeInfo(enum_info.tag_type).int;
+        if (int_info.signedness == .signed) {
+            @compileError("Signed enum tag types are not supported");
+        }
+
+        const bit_size_with_padding = comptime (int_info.bits + 7) / 8 * 8;
+        const int_info_padded = std.builtin.Type.Int{
+            .bits = bit_size_with_padding,
+            .signedness = int_info.signedness,
+        };
+
+        try serializeInt(writer, @as(@Type(.{ .int = int_info_padded }), @intCast(@intFromEnum(data))), int_info_padded);
     }
 };

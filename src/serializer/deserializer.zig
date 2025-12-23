@@ -22,6 +22,7 @@ pub const Deserializer = struct {
             .comptime_int => try self.deserializeComptimeInt(reader),
             .float => try self.deserializeFloat(reader, T),
             .comptime_float => try self.deserializeComptimeFloat(reader),
+            .@"enum" => try self.deserializeEnum(reader, T),
             .@"fn" => @compileError("Functions cannot be serialized"),
             .@"opaque" => @compileError("Opaque types cannot be serialized due to lack of type information at compile time"),
             else => @compileError("Unhandled data " ++ @typeName(T) ++ "\n"),
@@ -139,5 +140,21 @@ pub const Deserializer = struct {
 
     inline fn deserializeComptimeFloat(self: *Deserializer, reader: anytype) !comptime_float {
         return self.deserializeFloat(reader, f32);
+    }
+
+    inline fn deserializeEnum(self: *Deserializer, reader: anytype, comptime T: type) !T {
+        const enum_info = @typeInfo(T).@"enum";
+        const int_info = @typeInfo(enum_info.tag_type).int;
+        if (int_info.signedness == .signed) {
+            @compileError("Signed enum tag types are not supported");
+        }
+
+        const bit_size_with_padding = comptime (int_info.bits + 7) / 8 * 8;
+        const int_info_padded = std.builtin.Type.Int{
+            .bits = bit_size_with_padding,
+            .signedness = int_info.signedness,
+        };
+
+        return @enumFromInt(try self.deserializeInt(reader, @Type(.{ .int = int_info_padded })));
     }
 };
