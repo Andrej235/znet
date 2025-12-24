@@ -31,7 +31,6 @@ pub const Serializer = struct {
     }
 
     inline fn serializeUnion(writer: anytype, data: anytype, comptime union_info: std.builtin.Type.Union) !void {
-        // tagged unions
         if (union_info.tag_type) |enum_tag_type| {
             try serializeEnum(writer, data, @typeInfo(enum_tag_type).@"enum");
 
@@ -45,13 +44,11 @@ pub const Serializer = struct {
                     return;
                 }
             }
-        }
-        // untagged unions
-        else {
-            @compileError("Unions without tag types are not supported yet");
-        }
 
-        return error.InvalidUnionTag;
+            return error.InvalidUnionTag;
+        } else {
+            @compileError("Untagged unions are not supported");
+        }
     }
 
     inline fn serializeArray(writer: anytype, data: anytype, comptime array_info: std.builtin.Type.Array) !void {

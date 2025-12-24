@@ -44,7 +44,6 @@ pub const Deserializer = struct {
 
     inline fn deserializeUnion(self: *Deserializer, reader: anytype, comptime TUnion: type) !TUnion {
         const union_info = @typeInfo(TUnion).@"union";
-        // tagged unions
         if (union_info.tag_type) |enum_tag_type| {
             const active = @intFromEnum(try self.deserializeEnum(reader, enum_tag_type));
 
@@ -56,13 +55,11 @@ pub const Deserializer = struct {
                     return @unionInit(TUnion, field.name, field_value);
                 }
             }
+            
+            return error.InvalidUnionTag;
+        } else {
+            @compileError("Unions without tag types are not supported");
         }
-        // untagged unions
-        else {
-            @compileError("Unions without tag types are not supported yet");
-        }
-
-        return error.InvalidUnionTag;
     }
 
     inline fn deserializeArray(self: *Deserializer, reader: anytype, comptime TArray: type) !TArray {

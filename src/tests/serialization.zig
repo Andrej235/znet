@@ -61,6 +61,19 @@ const TaggedUnionCustomEnumValsSmall = union(enum(u5)) {
     TextValue: []const u8 = 1,
 };
 
+const UntaggedUnion = union {
+    IntValue: i32,
+    FloatValue: f32,
+    TextValue: []const u8,
+};
+
+const TaggedUnionWithCustomTagType = union(DayType) {
+    Weekday: f32,
+    Weekend: f128,
+    Holiday: Vector,
+    Workday: []Vector,
+};
+
 test "int s/d" {
     try testing.expectEqual(12345, roundTrip(comptime_int, 12345));
 
@@ -423,6 +436,28 @@ test "union s/d" {
     try testing.expectEqualDeep(
         TaggedUnionCustomEnumValsSmall{ .TextValue = "Custom Enum Values!" },
         roundTripInfer(TaggedUnionCustomEnumValsSmall{ .TextValue = "Custom Enum Values!" }),
+    );
+
+    try testing.expectEqualDeep(
+        TaggedUnionWithCustomTagType{ .Weekday = 5.67 },
+        roundTripInfer(TaggedUnionWithCustomTagType{ .Weekday = 5.67 }),
+    );
+    try testing.expectEqualDeep(
+        TaggedUnionWithCustomTagType{ .Weekend = 12345678912345.6789 },
+        roundTripInfer(TaggedUnionWithCustomTagType{ .Weekend = 12345678912345.6789 }),
+    );
+    try testing.expectEqualDeep(
+        TaggedUnionWithCustomTagType{ .Holiday = Vector{ .x = 1.23, .y = 4.56, .z = 7.89 } },
+        roundTripInfer(TaggedUnionWithCustomTagType{ .Holiday = Vector{ .x = 1.23, .y = 4.56, .z = 7.89 } }),
+    );
+    const allocator = std.heap.page_allocator;
+    var vecs = try allocator.alloc(Vector, 3);
+    vecs[0] = Vector{ .x = 1.1, .y = 2.2, .z = 3.3 };
+    vecs[1] = Vector{ .x = 4.4, .y = 5.5, .z = 6.6 };
+    vecs[2] = Vector{ .x = 7.7, .y = 8.8, .z = 9.9 };
+    try testing.expectEqualDeep(
+        TaggedUnionWithCustomTagType{ .Workday = vecs },
+        roundTrip(TaggedUnionWithCustomTagType, TaggedUnionWithCustomTagType{ .Workday = vecs }),
     );
 }
 
