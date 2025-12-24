@@ -6,6 +6,7 @@ pub const Serializer = struct {
 
         switch (info) {
             .@"struct" => |struct_info| try serializeStruct(writer, data, struct_info),
+            .@"union" => |union_info| try serializeUnion(writer, data, union_info),
             .array => |array_info| try serializeArray(writer, data, array_info),
             .pointer => |pointer_info| try serializePointer(writer, data, pointer_info),
             .optional => |optional_info| try serializeOptional(writer, data, optional_info),
@@ -27,6 +28,30 @@ pub const Serializer = struct {
             const field_value = @field(data, field.name);
             try serialize(field.type, writer, field_value);
         }
+    }
+
+    inline fn serializeUnion(writer: anytype, data: anytype, comptime union_info: std.builtin.Type.Union) !void {
+        // tagged unions
+        if (union_info.tag_type) |enum_tag_type| {
+            try serializeEnum(writer, data, @typeInfo(enum_tag_type).@"enum");
+
+            const active = @intFromEnum(data);
+            inline for (union_info.fields, 0..) |field, index| {
+                const current = @typeInfo(enum_tag_type).@"enum".fields[index].value;
+
+                if (active == current) {
+                    const field_value = @field(data, field.name);
+                    try serialize(field.type, writer, field_value);
+                    return;
+                }
+            }
+        }
+        // untagged unions
+        else {
+            @compileError("Unions without tag types are not supported yet");
+        }
+
+        return error.InvalidUnionTag;
     }
 
     inline fn serializeArray(writer: anytype, data: anytype, comptime array_info: std.builtin.Type.Array) !void {
@@ -63,7 +88,7 @@ pub const Serializer = struct {
                 }
             },
             .c => {
-                @compileError("C pointers are not supported");
+                @compileError("C pointers are not supported, try converting to a slice or many-pointer instead");
             },
             .slice => {
                 // todo: optimize for strings, use writeAll

@@ -43,6 +43,24 @@ const DayType = enum(u8) {
     _,
 };
 
+const TaggedUnion = union(enum) {
+    IntValue: i32,
+    FloatValue: f32,
+    TextValue: []const u8,
+};
+
+const TaggedUnionCustomEnumVals = union(enum(u16)) {
+    IntValue: i32 = 123,
+    FloatValue: f32 = 2,
+    TextValue: []const u8 = 6543,
+};
+
+const TaggedUnionCustomEnumValsSmall = union(enum(u5)) {
+    IntValue: i32 = 3,
+    FloatValue: f32 = 2,
+    TextValue: []const u8 = 1,
+};
+
 test "int s/d" {
     try testing.expectEqual(12345, roundTrip(comptime_int, 12345));
 
@@ -364,6 +382,47 @@ test "enum s/d" {
     try testing.expectEqual(
         @as(DayType, @enumFromInt(16)),
         roundTrip(DayType, @as(DayType, @enumFromInt(16))),
+    );
+}
+
+test "union s/d" {
+    try testing.expectEqualDeep(
+        TaggedUnion{ .FloatValue = 12345 },
+        roundTripInfer(TaggedUnion{ .FloatValue = 12345 }),
+    );
+    try testing.expectEqualDeep(
+        TaggedUnion{ .IntValue = -54321 },
+        roundTripInfer(TaggedUnion{ .IntValue = -54321 }),
+    );
+    try testing.expectEqualDeep(
+        TaggedUnion{ .TextValue = "Hello, Union!" },
+        roundTripInfer(TaggedUnion{ .TextValue = "Hello, Union!" }),
+    );
+
+    try testing.expectEqualDeep(
+        TaggedUnionCustomEnumVals{ .FloatValue = 3.14 },
+        roundTripInfer(TaggedUnionCustomEnumVals{ .FloatValue = 3.14 }),
+    );
+    try testing.expectEqualDeep(
+        TaggedUnionCustomEnumVals{ .IntValue = -98765 },
+        roundTripInfer(TaggedUnionCustomEnumVals{ .IntValue = -98765 }),
+    );
+    try testing.expectEqualDeep(
+        TaggedUnionCustomEnumVals{ .TextValue = "Custom Enum Values!" },
+        roundTripInfer(TaggedUnionCustomEnumVals{ .TextValue = "Custom Enum Values!" }),
+    );
+
+    try testing.expectEqualDeep(
+        TaggedUnionCustomEnumValsSmall{ .FloatValue = 3.14 },
+        roundTripInfer(TaggedUnionCustomEnumValsSmall{ .FloatValue = 3.14 }),
+    );
+    try testing.expectEqualDeep(
+        TaggedUnionCustomEnumValsSmall{ .IntValue = -98765 },
+        roundTripInfer(TaggedUnionCustomEnumValsSmall{ .IntValue = -98765 }),
+    );
+    try testing.expectEqualDeep(
+        TaggedUnionCustomEnumValsSmall{ .TextValue = "Custom Enum Values!" },
+        roundTripInfer(TaggedUnionCustomEnumValsSmall{ .TextValue = "Custom Enum Values!" }),
     );
 }
 

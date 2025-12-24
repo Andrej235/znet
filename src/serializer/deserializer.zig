@@ -14,6 +14,7 @@ pub const Deserializer = struct {
 
         return switch (info) {
             .@"struct" => try self.deserializeStruct(reader, T),
+            .@"union" => try self.deserializeUnion(reader, T),
             .array => try self.deserializeArray(reader, T),
             .pointer => try self.deserializePointer(reader, T),
             .optional => try self.deserializeOptional(reader, T),
@@ -39,6 +40,29 @@ pub const Deserializer = struct {
             @field(instance, field.name) = field_value;
         }
         return instance;
+    }
+
+    inline fn deserializeUnion(self: *Deserializer, reader: anytype, comptime TUnion: type) !TUnion {
+        const union_info = @typeInfo(TUnion).@"union";
+        // tagged unions
+        if (union_info.tag_type) |enum_tag_type| {
+            const active = @intFromEnum(try self.deserializeEnum(reader, enum_tag_type));
+
+            inline for (union_info.fields, 0..) |field, index| {
+                const current = @typeInfo(enum_tag_type).@"enum".fields[index].value;
+
+                if (active == current) {
+                    const field_value = try self.deserialize(reader, field.type);
+                    return @unionInit(TUnion, field.name, field_value);
+                }
+            }
+        }
+        // untagged unions
+        else {
+            @compileError("Unions without tag types are not supported yet");
+        }
+
+        return error.InvalidUnionTag;
     }
 
     inline fn deserializeArray(self: *Deserializer, reader: anytype, comptime TArray: type) !TArray {
@@ -80,7 +104,7 @@ pub const Deserializer = struct {
                 }
             },
             .c => {
-                @compileError("C pointers are not supported");
+                @compileError("C pointers are not supported, try converting to a slice or many-pointer instead");
             },
             .slice => {
                 const len = try self.deserializeInt(reader, usize);
