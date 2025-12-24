@@ -24,6 +24,13 @@ pub const Deserializer = struct {
             .float => try self.deserializeFloat(reader, T),
             .comptime_float => try self.deserializeComptimeFloat(reader),
             .@"enum" => try self.deserializeEnum(reader, T),
+            .vector => @compileError("Vectors are not a data format, they are a computation type tied to target ABI / SIMD width and thus cannot be serialized directly. Consider converting to an array or slice before serialization"),
+            .frame => @compileError("Frames cannot be serialized"),
+            .@"anyframe" => @compileError("AnyFrames cannot be serialized"),
+            .void => @compileError("Void type cannot be serialized, if you want to serialize nothing, consider using null or an empty struct"),
+            .noreturn => @compileError("Noreturn type cannot be serialized"),
+            .undefined => @compileError("Undefined represents an uninitialized value and cannot be serialized"),
+            .type => @compileError("Types only exist at compile time and cannot be serialized"),
             .@"fn" => @compileError("Functions cannot be serialized"),
             .@"opaque" => @compileError("Opaque types cannot be serialized due to lack of type information at compile time"),
             .enum_literal => @compileError("Enum literals cannot be serialized directly, try using the enum type instead"),
@@ -55,7 +62,7 @@ pub const Deserializer = struct {
                     return @unionInit(TUnion, field.name, field_value);
                 }
             }
-            
+
             return error.InvalidUnionTag;
         } else {
             @compileError("Unions without tag types are not supported");
