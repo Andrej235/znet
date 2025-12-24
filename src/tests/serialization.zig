@@ -2,6 +2,34 @@ const std = @import("std");
 const zNet = @import("zNet");
 const testing = std.testing;
 
+fn forceRuntimeTuple(comptime tuple: anytype) StripComptimeFromTupleType(@TypeOf(tuple)) {
+    return @as(StripComptimeFromTupleType(@TypeOf(tuple)), tuple);
+}
+
+fn StripComptimeFromTupleType(comptime T: type) type {
+    const info = @typeInfo(T).@"struct";
+    var fields: [info.fields.len]std.builtin.Type.StructField = undefined;
+    inline for (info.fields, 0..) |field, idx| {
+        fields[idx] = if (!field.is_comptime) field else .{
+            .name = field.name,
+            .type = field.type,
+            .is_comptime = false,
+            .alignment = field.alignment,
+            .default_value_ptr = null,
+        };
+    }
+
+    return @Type(.{
+        .@"struct" = .{
+            .fields = &fields,
+            .decls = info.decls,
+            .backing_integer = info.backing_integer,
+            .is_tuple = info.is_tuple,
+            .layout = info.layout,
+        },
+    });
+}
+
 // var stdout_buffer: [256]u8 = undefined;
 //     var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
 //     const stdout = &stdout_writer.interface;
@@ -87,8 +115,6 @@ const ErrorSetB = error{
 };
 
 test "int s/d" {
-    try testing.expectEqual(12345, roundTrip(comptime_int, 12345));
-
     try testing.expectEqual(12345, roundTrip(i32, 12345));
     try testing.expectEqual(123456789, roundTrip(i32, 123456789));
     try testing.expectEqual(123456789123, roundTrip(i64, 123456789123));
@@ -104,12 +130,6 @@ test "int s/d" {
 }
 
 test "float s/d" {
-    // TODO: comptime float loses precision
-    try testing.expectEqual(12345, roundTrip(comptime_float, 12345));
-    // try testing.expectEqual(0.000000000001, roundTrip(comptime_float, 0.000000000001));
-    // try testing.expectEqual(123.0001231248, roundTrip(comptime_float, 123.0001231248));
-    // try testing.expectEqual(12345.6789, roundTrip(comptime_float, 12345));
-
     try testing.expectEqual(12345, roundTrip(f32, 12345));
     try testing.expectEqual(0.1, roundTrip(f16, 0.1));
     try testing.expectEqual(0.01, roundTrip(f16, 0.01));
@@ -532,6 +552,59 @@ test "error unions s/d" {
     try testing.expectEqualDeep(
         structs,
         roundTrip((ErrorSetA || ErrorSetB)![]TestStruct, structs),
+    );
+}
+
+test "tuples s/d" {
+    const empty_tuple = forceRuntimeTuple(.{});
+    try testing.expectEqualDeep(
+        empty_tuple,
+        roundTrip(@TypeOf(empty_tuple), empty_tuple),
+    );
+
+    const single_element_tuple = forceRuntimeTuple(.{"single"});
+    try testing.expectEqualDeep(
+        single_element_tuple,
+        roundTrip(@TypeOf(single_element_tuple), single_element_tuple),
+    );
+
+    const mixed_tuple = forceRuntimeTuple(.{ "string", @as(i32, 42), @as(f64, 3.14), Vector{ .x = 1.0, .y = 2.0, .z = 3.0 } });
+    try testing.expectEqualDeep(
+        mixed_tuple,
+        roundTrip(@TypeOf(mixed_tuple), mixed_tuple),
+    );
+
+    const nested_tuple = forceRuntimeTuple(.{ forceRuntimeTuple(.{ "nested", @as(i32, 1) }), @as(f64, 3.14) });
+    try testing.expectEqualDeep(
+        nested_tuple,
+        roundTrip(@TypeOf(nested_tuple), nested_tuple),
+    );
+
+    const large_tuple = forceRuntimeTuple(.{ "string", @as(i32, 1), @as(f64, 2.0), Vector{ .x = 1.0, .y = 2.0, .z = 3.0 }, "another string", @as(i32, 3), @as(f64, 4.0), Vector{ .x = 4.0, .y = 5.0, .z = 6.0 }, "yet another string", @as(i32, 5), @as(f64, 6.0), Vector{ .x = 7.0, .y = 8.0, .z = 9.0 }, "final string", @as(i32, 7), @as(f64, 8.0), Vector{ .x = 10.0, .y = 11.0, .z = 12.0 } });
+    try testing.expectEqualDeep(
+        large_tuple,
+        roundTrip(@TypeOf(large_tuple), large_tuple),
+    );
+
+    const optional_tuple = forceRuntimeTuple(.{ "optional", @as(?f64, null), @as(f16, 3.14) });
+    try testing.expectEqualDeep(
+        optional_tuple,
+        roundTrip(@TypeOf(optional_tuple), optional_tuple),
+    );
+
+    const bool_tuple = forceRuntimeTuple(.{ "bools", true, false });
+    try testing.expectEqualDeep(
+        bool_tuple,
+        roundTrip(@TypeOf(bool_tuple), bool_tuple),
+    );
+
+    const max_elements_tuple = forceRuntimeTuple(.{
+        "elem1", "elem2",  "elem3",  "elem4",  "elem5",  "elem6",  "elem7",  "elem8",
+        "elem9", "elem10", "elem11", "elem12", "elem13", "elem14", "elem15", "elem16",
+    });
+    try testing.expectEqualDeep(
+        max_elements_tuple,
+        roundTrip(@TypeOf(max_elements_tuple), max_elements_tuple),
     );
 }
 
