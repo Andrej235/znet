@@ -1,4 +1,5 @@
 const std = @import("std");
+const DeserializationErrors = @import("errors.zig").DeserializationErrors;
 
 pub const Deserializer = struct {
     allocator: std.mem.Allocator,
@@ -9,7 +10,17 @@ pub const Deserializer = struct {
         };
     }
 
-    pub fn deserialize(self: *Deserializer, reader: anytype, comptime T: type) !T {
+    fn DeserializationResult(comptime TExpected: type) type {
+        const info = @typeInfo(TExpected);
+        return switch (info) {
+            .error_union => |err_union_info| t_result: {
+                break :t_result err_union_info.error_set || DeserializationErrors!TExpected;
+            },
+            else => DeserializationErrors!TExpected,
+        };
+    }
+
+    pub fn deserialize(self: *Deserializer, reader: anytype, comptime T: type) DeserializationResult(T) {
         const info = @typeInfo(T);
 
         return switch (info) {
@@ -28,8 +39,9 @@ pub const Deserializer = struct {
             .frame => @compileError("Frames cannot be serialized"),
             .@"anyframe" => @compileError("AnyFrames cannot be serialized"),
             .void => @compileError("Void type cannot be serialized, if you want to serialize nothing, consider using null or an empty struct"),
-            .noreturn => @compileError("Noreturn type cannot be serialized"),
+            .null => @compileError("Null type cannot be serialized directly, consider using an optional type instead"),
             .undefined => @compileError("Undefined represents an uninitialized value and cannot be serialized"),
+            .noreturn => @compileError("Noreturn type cannot be serialized"),
             .type => @compileError("Types only exist at compile time and cannot be serialized"),
             .@"fn" => @compileError("Functions cannot be serialized"),
             .@"opaque" => @compileError("Opaque types cannot be serialized due to lack of type information at compile time"),
@@ -38,7 +50,7 @@ pub const Deserializer = struct {
         };
     }
 
-    inline fn deserializeStruct(self: *Deserializer, reader: anytype, comptime TStruct: type) !TStruct {
+    inline fn deserializeStruct(self: *Deserializer, reader: anytype, comptime TStruct: type) DeserializationErrors!TStruct {
         const info = @typeInfo(TStruct).@"struct";
         var instance: TStruct = undefined;
 
@@ -49,7 +61,7 @@ pub const Deserializer = struct {
         return instance;
     }
 
-    inline fn deserializeUnion(self: *Deserializer, reader: anytype, comptime TUnion: type) !TUnion {
+    inline fn deserializeUnion(self: *Deserializer, reader: anytype, comptime TUnion: type) DeserializationErrors!TUnion {
         const union_info = @typeInfo(TUnion).@"union";
         if (union_info.tag_type) |enum_tag_type| {
             const active = @intFromEnum(try self.deserializeEnum(reader, enum_tag_type));
@@ -69,7 +81,7 @@ pub const Deserializer = struct {
         }
     }
 
-    inline fn deserializeArray(self: *Deserializer, reader: anytype, comptime TArray: type) !TArray {
+    inline fn deserializeArray(self: *Deserializer, reader: anytype, comptime TArray: type) DeserializationErrors!TArray {
         const array_info = @typeInfo(TArray).array;
         const len = array_info.len;
         var instance: TArray = undefined;
@@ -81,7 +93,7 @@ pub const Deserializer = struct {
         return instance;
     }
 
-    inline fn deserializePointer(self: *Deserializer, reader: anytype, comptime TPointer: type) !TPointer {
+    inline fn deserializePointer(self: *Deserializer, reader: anytype, comptime TPointer: type) DeserializationErrors!TPointer {
         const pointer_info = @typeInfo(TPointer).pointer;
         const TChild = pointer_info.child;
 
@@ -127,7 +139,7 @@ pub const Deserializer = struct {
         }
     }
 
-    inline fn deserializeOptional(self: *Deserializer, reader: anytype, comptime TOptional: type) !TOptional {
+    inline fn deserializeOptional(self: *Deserializer, reader: anytype, comptime TOptional: type) DeserializationErrors!TOptional {
         const optional_info = @typeInfo(TOptional).optional;
         const is_some = try self.deserializeBool(reader);
         if (is_some) {
@@ -138,7 +150,7 @@ pub const Deserializer = struct {
         }
     }
 
-    inline fn deserializeBool(_: *Deserializer, reader: anytype) !bool {
+    inline fn deserializeBool(_: *Deserializer, reader: anytype) DeserializationErrors!bool {
         const byte = try reader.readByte();
         return switch (byte) {
             0 => false,
@@ -147,15 +159,15 @@ pub const Deserializer = struct {
         };
     }
 
-    inline fn deserializeInt(_: *Deserializer, reader: anytype, comptime TInt: type) !TInt {
+    inline fn deserializeInt(_: *Deserializer, reader: anytype, comptime TInt: type) DeserializationErrors!TInt {
         return try reader.readInt(TInt, .big);
     }
 
-    inline fn deserializeComptimeInt(_: *Deserializer, reader: anytype) !comptime_int {
+    inline fn deserializeComptimeInt(_: *Deserializer, reader: anytype) DeserializationErrors!comptime_int {
         return try reader.readInt(i32, .big);
     }
 
-    inline fn deserializeFloat(_: *Deserializer, reader: anytype, comptime T: type) !T {
+    inline fn deserializeFloat(_: *Deserializer, reader: anytype, comptime T: type) DeserializationErrors!T {
         const TURepresentation = @Type(.{
             .int = .{
                 .signedness = .unsigned,
@@ -167,11 +179,11 @@ pub const Deserializer = struct {
         return @bitCast(int_value);
     }
 
-    inline fn deserializeComptimeFloat(self: *Deserializer, reader: anytype) !comptime_float {
+    inline fn deserializeComptimeFloat(self: *Deserializer, reader: anytype) DeserializationErrors!comptime_float {
         return self.deserializeFloat(reader, f32);
     }
 
-    inline fn deserializeEnum(self: *Deserializer, reader: anytype, comptime T: type) !T {
+    inline fn deserializeEnum(self: *Deserializer, reader: anytype, comptime T: type) DeserializationErrors!T {
         const enum_info = @typeInfo(T).@"enum";
         const int_info = @typeInfo(enum_info.tag_type).int;
         if (int_info.signedness == .signed) {

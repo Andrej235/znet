@@ -1,7 +1,8 @@
 const std = @import("std");
+const SerializationErrors = @import("errors.zig").SerializationErrors;
 
 pub const Serializer = struct {
-    pub fn serialize(comptime T: type, writer: anytype, data: T) !void {
+    pub fn serialize(comptime T: type, writer: anytype, data: T) SerializationErrors!void {
         const info = @typeInfo(T);
 
         switch (info) {
@@ -20,8 +21,9 @@ pub const Serializer = struct {
             .frame => @compileError("Frames cannot be serialized"),
             .@"anyframe" => @compileError("AnyFrames cannot be serialized"),
             .void => @compileError("Void type cannot be serialized, if you want to serialize nothing, consider using null or an empty struct"),
-            .noreturn => @compileError("Noreturn type cannot be serialized"),
+            .null => @compileError("Null type cannot be serialized directly, consider using an optional type instead"),
             .undefined => @compileError("Undefined represents an uninitialized value and cannot be serialized"),
+            .noreturn => @compileError("Noreturn type cannot be serialized"),
             .type => @compileError("Types only exist at compile time and cannot be serialized"),
             .@"fn" => @compileError("Functions cannot be serialized"),
             .@"opaque" => @compileError("Opaque types cannot be serialized due to lack of type information at compile time"),
@@ -30,14 +32,14 @@ pub const Serializer = struct {
         }
     }
 
-    inline fn serializeStruct(writer: anytype, data: anytype, comptime struct_info: std.builtin.Type.Struct) !void {
+    inline fn serializeStruct(writer: anytype, data: anytype, comptime struct_info: std.builtin.Type.Struct) SerializationErrors!void {
         inline for (struct_info.fields) |field| {
             const field_value = @field(data, field.name);
             try serialize(field.type, writer, field_value);
         }
     }
 
-    inline fn serializeUnion(writer: anytype, data: anytype, comptime union_info: std.builtin.Type.Union) !void {
+    inline fn serializeUnion(writer: anytype, data: anytype, comptime union_info: std.builtin.Type.Union) SerializationErrors!void {
         if (union_info.tag_type) |enum_tag_type| {
             try serializeEnum(writer, data, @typeInfo(enum_tag_type).@"enum");
 
@@ -58,7 +60,7 @@ pub const Serializer = struct {
         }
     }
 
-    inline fn serializeArray(writer: anytype, data: anytype, comptime array_info: std.builtin.Type.Array) !void {
+    inline fn serializeArray(writer: anytype, data: anytype, comptime array_info: std.builtin.Type.Array) SerializationErrors!void {
         const len = array_info.len;
         inline for (0..len) |i| {
             const element = data[i];
@@ -66,7 +68,7 @@ pub const Serializer = struct {
         }
     }
 
-    inline fn serializePointer(writer: anytype, data: anytype, comptime pointer_info: std.builtin.Type.Pointer) !void {
+    inline fn serializePointer(writer: anytype, data: anytype, comptime pointer_info: std.builtin.Type.Pointer) SerializationErrors!void {
         switch (pointer_info.size) {
             .one => {
                 const pointed_value = data.*;
@@ -106,7 +108,7 @@ pub const Serializer = struct {
         }
     }
 
-    inline fn serializeOptional(writer: anytype, data: anytype, comptime optional_info: std.builtin.Type.Optional) !void {
+    inline fn serializeOptional(writer: anytype, data: anytype, comptime optional_info: std.builtin.Type.Optional) SerializationErrors!void {
         const is_some = data != null;
         try serializeBool(writer, is_some);
         if (is_some) {
@@ -114,20 +116,20 @@ pub const Serializer = struct {
         }
     }
 
-    inline fn serializeBool(writer: anytype, data: bool) !void {
+    inline fn serializeBool(writer: anytype, data: bool) SerializationErrors!void {
         const byte_value: u8 = if (data) 1 else 0;
         try writer.writeInt(u8, byte_value, .big);
     }
 
-    inline fn serializeInt(writer: anytype, data: anytype, comptime _: std.builtin.Type.Int) !void {
+    inline fn serializeInt(writer: anytype, data: anytype, comptime _: std.builtin.Type.Int) SerializationErrors!void {
         try writer.writeInt(@TypeOf(data), data, .big);
     }
 
-    inline fn serializeComptimeInt(writer: anytype, data: anytype) !void {
+    inline fn serializeComptimeInt(writer: anytype, data: anytype) SerializationErrors!void {
         try serializeInt(writer, @as(i32, @intCast(data)), @typeInfo(i32).int);
     }
 
-    inline fn serializeFloat(writer: anytype, data: anytype, comptime float_info: std.builtin.Type.Float) !void {
+    inline fn serializeFloat(writer: anytype, data: anytype, comptime float_info: std.builtin.Type.Float) SerializationErrors!void {
         const TURepresentation = @Type(.{
             .int = .{
                 .signedness = .unsigned,
@@ -139,11 +141,11 @@ pub const Serializer = struct {
         try writer.writeInt(TURepresentation, uint_representation, .big);
     }
 
-    inline fn serializeComptimeFloat(writer: anytype, data: anytype) !void {
+    inline fn serializeComptimeFloat(writer: anytype, data: anytype) SerializationErrors!void {
         try serializeFloat(writer, @as(f32, @floatCast(data)), @typeInfo(f32).float);
     }
 
-    inline fn serializeEnum(writer: anytype, data: anytype, comptime enum_info: std.builtin.Type.Enum) !void {
+    inline fn serializeEnum(writer: anytype, data: anytype, comptime enum_info: std.builtin.Type.Enum) SerializationErrors!void {
         const int_info = @typeInfo(enum_info.tag_type).int;
         if (int_info.signedness == .signed) {
             @compileError("Signed enum tag types are not supported");
