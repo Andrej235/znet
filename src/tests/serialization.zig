@@ -74,6 +74,18 @@ const TaggedUnionWithCustomTagType = union(DayType) {
     Workday: []Vector,
 };
 
+const ErrorSetA = error{
+    MadeUpError1,
+    MadeUpError2,
+    MadeUpError3,
+};
+
+const ErrorSetB = error{
+    MadeUpErrorA,
+    MadeUpErrorB,
+    MadeUpErrorC,
+};
+
 test "int s/d" {
     try testing.expectEqual(12345, roundTrip(comptime_int, 12345));
 
@@ -461,6 +473,68 @@ test "union s/d" {
     );
 }
 
+test "error unions s/d" {
+    try testing.expectEqual(
+        123,
+        roundTrip(ErrorSetA!u32, 123),
+    );
+    try testing.expectEqual(
+        ErrorSetA.MadeUpError3,
+        roundTrip(ErrorSetA!u32, ErrorSetA.MadeUpError3),
+    );
+    try testing.expectEqual(
+        ErrorSetB.MadeUpErrorB,
+        roundTrip(ErrorSetB!u32, ErrorSetB.MadeUpErrorB),
+    );
+    try testing.expectEqual(
+        error.MadeUpErrorB,
+        roundTrip(anyerror!u32, error.MadeUpErrorB),
+    );
+
+    try testing.expectEqual(
+        ErrorSetA.MadeUpError2,
+        roundTrip(ErrorSetA!BigStruct, ErrorSetA.MadeUpError2),
+    );
+    try testing.expectEqual(
+        error.MadeUpError2,
+        roundTrip(anyerror!BigStruct, error.MadeUpError2),
+    );
+    try testing.expectEqualDeep(
+        BigStruct{
+            .test_struct = TestStruct{ .a = 42, .b = "The answer", .c = Vector{ .x = 0.0, .y = 1.1, .z = 2.2 } },
+            .numbers = [_]u64{ 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000 },
+            .vectors = [_]Vector{
+                Vector{ .x = 3.3, .y = 4.4, .z = 5.5 },
+                Vector{ .x = 6.6, .y = 7.7, .z = 8.8 },
+                Vector{ .x = 9.9, .y = 10.10, .z = 11.11 },
+                Vector{ .x = 12.12, .y = 13.13, .z = 14.14 },
+                Vector{ .x = 15.15, .y = 16.16, .z = 17.17 },
+            },
+        },
+        roundTrip(ErrorSetA!BigStruct, BigStruct{
+            .test_struct = TestStruct{ .a = 42, .b = "The answer", .c = Vector{ .x = 0.0, .y = 1.1, .z = 2.2 } },
+            .numbers = [_]u64{ 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000 },
+            .vectors = [_]Vector{
+                Vector{ .x = 3.3, .y = 4.4, .z = 5.5 },
+                Vector{ .x = 6.6, .y = 7.7, .z = 8.8 },
+                Vector{ .x = 9.9, .y = 10.10, .z = 11.11 },
+                Vector{ .x = 12.12, .y = 13.13, .z = 14.14 },
+                Vector{ .x = 15.15, .y = 16.16, .z = 17.17 },
+            },
+        }),
+    );
+
+    const allocator = std.heap.page_allocator;
+    var structs = try allocator.alloc(TestStruct, 3);
+    structs[0] = TestStruct{ .a = 1, .b = "first", .c = Vector{ .x = 1.1, .y = 2.2, .z = 3.3 } };
+    structs[1] = TestStruct{ .a = 2, .b = "second", .c = Vector{ .x = 4.4, .y = 5.5, .z = 6.6 } };
+    structs[2] = TestStruct{ .a = 3, .b = "third", .c = Vector{ .x = 7.7, .y = 8.8, .z = 9.9 } };
+    try testing.expectEqualDeep(
+        structs,
+        roundTrip((ErrorSetA || ErrorSetB)![]TestStruct, structs),
+    );
+}
+
 var deserializer = zNet.Deserializer.init(std.heap.page_allocator);
 
 fn roundTrip(comptime T: type, data: T) T {
@@ -472,7 +546,17 @@ fn roundTrip(comptime T: type, data: T) T {
 
     zNet.Serializer.serialize(T, writer, data) catch unreachable;
     fbs.reset(); // reset position before reading
-    const deserialized: T = deserializer.deserialize(reader, T) catch unreachable;
+
+    const deserialized: T = if (@typeInfo(T) == .error_union) deserializer.deserialize(reader, T) catch |err| switch (err) {
+        error.InvalidUnionTag => unreachable,
+        error.UnexpectedEof => unreachable,
+        error.AllocationFailed => unreachable,
+        error.EndOfStream => unreachable,
+        error.InvalidBooleanValue => unreachable,
+        else => {
+            return @errorCast(err);
+        },
+    } else deserializer.deserialize(reader, T) catch unreachable;
     return deserialized;
 }
 

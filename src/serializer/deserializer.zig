@@ -13,8 +13,11 @@ pub const Deserializer = struct {
     fn DeserializationResult(comptime TExpected: type) type {
         const info = @typeInfo(TExpected);
         return switch (info) {
+            .error_set => |err_set_info| t_result: {
+                break :t_result if (err_set_info) |_| (TExpected || DeserializationErrors)!void else DeserializationErrors!void;
+            },
             .error_union => |err_union_info| t_result: {
-                break :t_result err_union_info.error_set || DeserializationErrors!TExpected;
+                break :t_result (err_union_info.error_set || DeserializationErrors)!err_union_info.payload;
             },
             else => DeserializationErrors!TExpected,
         };
@@ -29,24 +32,25 @@ pub const Deserializer = struct {
             .array => try self.deserializeArray(reader, T),
             .pointer => try self.deserializePointer(reader, T),
             .optional => try self.deserializeOptional(reader, T),
+            .error_union => try self.deserializeErrorUnion(reader, T),
             .bool => try self.deserializeBool(reader),
             .int => try self.deserializeInt(reader, T),
             .comptime_int => try self.deserializeComptimeInt(reader),
             .float => try self.deserializeFloat(reader, T),
             .comptime_float => try self.deserializeComptimeFloat(reader),
             .@"enum" => try self.deserializeEnum(reader, T),
+            .error_set => @compileError("Direct serialization of error sets is not supported, consider using an error union instead"),
             .vector => @compileError("Vectors are not a data format, they are a computation type tied to target ABI / SIMD width and thus cannot be serialized directly. Consider converting to an array or slice before serialization"),
             .frame => @compileError("Frames cannot be serialized"),
             .@"anyframe" => @compileError("AnyFrames cannot be serialized"),
             .void => @compileError("Void type cannot be serialized, if you want to serialize nothing, consider using null or an empty struct"),
-            .null => @compileError("Null type cannot be serialized directly, consider using an optional type instead"),
+            .null => @compileError("Null type cannot be serialized, consider using an optional type instead"),
             .undefined => @compileError("Undefined represents an uninitialized value and cannot be serialized"),
             .noreturn => @compileError("Noreturn type cannot be serialized"),
             .type => @compileError("Types only exist at compile time and cannot be serialized"),
             .@"fn" => @compileError("Functions cannot be serialized"),
             .@"opaque" => @compileError("Opaque types cannot be serialized due to lack of type information at compile time"),
             .enum_literal => @compileError("Enum literals cannot be serialized directly, try using the enum type instead"),
-            else => @compileError("Unhandled data " ++ @typeName(T) ++ "\n"),
         };
     }
 
@@ -150,7 +154,22 @@ pub const Deserializer = struct {
         }
     }
 
-    inline fn deserializeBool(_: *Deserializer, reader: anytype) DeserializationErrors!bool {
+    inline fn deserializeErrorUnion(self: *Deserializer, reader: anytype, comptime T: type) DeserializationResult(T) {
+        const info = @typeInfo(T).error_union;
+
+        const is_error = try self.deserializeBool(reader);
+        if (is_error) {
+            const TInt = u16;
+            const int_value = try self.deserializeInt(reader, TInt);
+            const err = @errorFromInt(int_value);
+            return @errorCast(err);
+        } else {
+            const payload = try self.deserialize(reader, info.payload);
+            return payload;
+        }
+    }
+
+    inline fn deserializeBool(_: *Deserializer, reader: anytype) !bool {
         const byte = try reader.readByte();
         return switch (byte) {
             0 => false,

@@ -11,24 +11,25 @@ pub const Serializer = struct {
             .array => |array_info| try serializeArray(writer, data, array_info),
             .pointer => |pointer_info| try serializePointer(writer, data, pointer_info),
             .optional => |optional_info| try serializeOptional(writer, data, optional_info),
+            .error_union => |error_union_info| try serializeErrorUnion(writer, data, error_union_info),
             .bool => try serializeBool(writer, data),
             .int => |int_info| try serializeInt(writer, data, int_info),
             .comptime_int => try serializeComptimeInt(writer, data),
             .float => |float_info| try serializeFloat(writer, data, float_info),
             .comptime_float => try serializeComptimeFloat(writer, data),
             .@"enum" => |enum_info| try serializeEnum(writer, data, enum_info),
+            .error_set => @compileError("Direct serialization of error sets is not supported, consider using an error union instead"),
             .vector => @compileError("Vectors are not a data format, they are a computation type tied to target ABI / SIMD width and thus cannot be serialized directly. Consider converting to an array or slice before serialization"),
             .frame => @compileError("Frames cannot be serialized"),
             .@"anyframe" => @compileError("AnyFrames cannot be serialized"),
             .void => @compileError("Void type cannot be serialized, if you want to serialize nothing, consider using null or an empty struct"),
-            .null => @compileError("Null type cannot be serialized directly, consider using an optional type instead"),
+            .null => @compileError("Null type cannot be serialized, consider using an optional type instead"),
             .undefined => @compileError("Undefined represents an uninitialized value and cannot be serialized"),
             .noreturn => @compileError("Noreturn type cannot be serialized"),
             .type => @compileError("Types only exist at compile time and cannot be serialized"),
             .@"fn" => @compileError("Functions cannot be serialized"),
             .@"opaque" => @compileError("Opaque types cannot be serialized due to lack of type information at compile time"),
             .enum_literal => @compileError("Enum literals cannot be serialized directly, try using the enum type instead"),
-            else => @compileError("Unhandled data " ++ @typeName(T) ++ "\n"),
         }
     }
 
@@ -116,7 +117,18 @@ pub const Serializer = struct {
         }
     }
 
-    inline fn serializeBool(writer: anytype, data: bool) SerializationErrors!void {
+    inline fn serializeErrorUnion(writer: anytype, data: anytype, comptime error_union_info: std.builtin.Type.ErrorUnion) !void {
+        const safe_data = data catch |err| {
+            try serializeBool(writer, true);
+            try serializeInt(writer, @intFromError(err), @typeInfo(@TypeOf(@intFromError(err))).int);
+            return;
+        };
+
+        try serializeBool(writer, false);
+        try serialize(error_union_info.payload, writer, safe_data);
+    }
+
+    inline fn serializeBool(writer: anytype, data: bool) !void {
         const byte_value: u8 = if (data) 1 else 0;
         try writer.writeInt(u8, byte_value, .big);
     }
