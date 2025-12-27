@@ -1,4 +1,4 @@
 pub const MessageType = enum(u8) {
-    Request,
-    Response,
+    Request = 0,
+    Response = 1,
 };

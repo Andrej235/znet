@@ -14,10 +14,9 @@ pub fn build(b: *std.Build) void {
         @import("src/role.zig").Role.server
     else
         @import("src/role.zig").Role.client;
-
     @import("src/role.zig").running_as = role;
 
-    const root_module = b.addModule("src", .{
+    const znet_module = b.addModule("src", .{
         .root_source_file = b.path("src/root.zig"),
     });
 
@@ -29,8 +28,6 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-
-    // std.debug.print("Building for role: {s}\n", .{if (role == .server) "server" else "client"});
 
     b.installArtifact(exe);
 
@@ -66,7 +63,7 @@ pub fn build(b: *std.Build) void {
                 },
             ),
         });
-        test_exe.root_module.addImport("zNet", root_module);
+        test_exe.root_module.addImport("zNet", znet_module);
         test_step.dependOn(&b.addRunArtifact(test_exe).step);
     }
 }
