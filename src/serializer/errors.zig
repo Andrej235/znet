@@ -1,6 +1,7 @@
 pub const SerializationErrors = error{
     InvalidUnionTag,
     NoSpaceLeft,
+    IntegerSerializationFailed,
 };
 
 pub const DeserializationErrors = error{
@@ -10,4 +11,6 @@ pub const DeserializationErrors = error{
     OutOfMemory,
     EndOfStream,
     InvalidBooleanValue,
+    IntegerDeserializationFailed,
+    BooleanDeserializationFailed,
 };

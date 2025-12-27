@@ -1,16 +1,47 @@
 const std = @import("std");
+
+const Deserializer = @import("../serializer/deserializer.zig").Deserializer;
+const Serializer = @import("../serializer/serializer.zig").Serializer;
 const HandlerFn = @import("handler-fn.zig").HandlerFn;
+const serializeMessageHeader = @import("../message-headers/serialize-message-header.zig").serializeMessageHeader;
 
 pub fn createHandlerFn(comptime fn_impl: anytype) HandlerFn {
     return struct {
-        fn handler(allocator: std.mem.Allocator, input_reader: anytype, output_writer: anytype) anyerror!void {
-            // unimplemented
-            _ = allocator;
-            _ = input_reader;
-            _ = output_writer;
-            std.debug.print("Deserialize payload\n", .{});
-            _ = fn_impl() catch {};
-            std.debug.print("Serialize output headers and payload\n", .{});
+        fn handler(allocator: std.mem.Allocator, input_reader: std.io.AnyReader, output_writer: std.io.AnyWriter) anyerror!void {
+            const TFn = @TypeOf(fn_impl);
+            const fn_info = @typeInfo(TFn);
+            if (fn_info != .@"fn") @compileError("Expected function type");
+
+            const InputType = comptime @Type(.{
+                .@"struct" = .{
+                    .backing_integer = null,
+                    .decls = &.{},
+                    .fields = fields: {
+                        var fields: [fn_info.@"fn".params.len]std.builtin.Type.StructField = undefined;
+                        for (fn_info.@"fn".params, 0..) |param, idx| {
+                            if (param.type) |t| {
+                                fields[idx] = .{
+                                    .name = std.fmt.comptimePrint("{}", .{idx}),
+                                    .type = t,
+                                    .default_value_ptr = null,
+                                    .is_comptime = false,
+                                    .alignment = @alignOf(t),
+                                };
+                            }
+                        }
+
+                        break :fields &fields;
+                    },
+                    .layout = .auto,
+                    .is_tuple = true,
+                },
+            });
+
+            var deserializer = Deserializer.init(allocator);
+            const params = try deserializer.deserialize(input_reader, InputType);
+            const res = @call(.always_inline, fn_impl, params);
+
+            try Serializer.serialize(fn_info.@"fn".return_type.?, output_writer, res);
         }
     }.handler;
 }

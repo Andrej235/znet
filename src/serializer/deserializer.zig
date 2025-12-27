@@ -23,7 +23,7 @@ pub const Deserializer = struct {
         };
     }
 
-    pub fn deserialize(self: *Deserializer, reader: anytype, comptime T: type) DeserializationResult(T) {
+    pub fn deserialize(self: *Deserializer, reader: std.io.AnyReader, comptime T: type) DeserializationResult(T) {
         const info = @typeInfo(T);
 
         return switch (info) {
@@ -54,7 +54,7 @@ pub const Deserializer = struct {
         };
     }
 
-    inline fn deserializeStruct(self: *Deserializer, reader: anytype, comptime TStruct: type) DeserializationErrors!TStruct {
+    inline fn deserializeStruct(self: *Deserializer, reader: std.io.AnyReader, comptime TStruct: type) DeserializationErrors!TStruct {
         const info = @typeInfo(TStruct).@"struct";
         var instance: TStruct = undefined;
 
@@ -65,7 +65,7 @@ pub const Deserializer = struct {
         return instance;
     }
 
-    inline fn deserializeUnion(self: *Deserializer, reader: anytype, comptime TUnion: type) DeserializationErrors!TUnion {
+    inline fn deserializeUnion(self: *Deserializer, reader: std.io.AnyReader, comptime TUnion: type) DeserializationErrors!TUnion {
         const union_info = @typeInfo(TUnion).@"union";
         if (union_info.tag_type) |enum_tag_type| {
             const active = @intFromEnum(try self.deserializeEnum(reader, enum_tag_type));
@@ -85,7 +85,7 @@ pub const Deserializer = struct {
         }
     }
 
-    inline fn deserializeArray(self: *Deserializer, reader: anytype, comptime TArray: type) DeserializationErrors!TArray {
+    inline fn deserializeArray(self: *Deserializer, reader: std.io.AnyReader, comptime TArray: type) DeserializationErrors!TArray {
         const array_info = @typeInfo(TArray).array;
         const len = array_info.len;
         var instance: TArray = undefined;
@@ -97,7 +97,7 @@ pub const Deserializer = struct {
         return instance;
     }
 
-    inline fn deserializePointer(self: *Deserializer, reader: anytype, comptime TPointer: type) DeserializationErrors!TPointer {
+    inline fn deserializePointer(self: *Deserializer, reader: std.io.AnyReader, comptime TPointer: type) DeserializationErrors!TPointer {
         const pointer_info = @typeInfo(TPointer).pointer;
         const TChild = pointer_info.child;
 
@@ -143,7 +143,7 @@ pub const Deserializer = struct {
         }
     }
 
-    inline fn deserializeOptional(self: *Deserializer, reader: anytype, comptime TOptional: type) DeserializationErrors!TOptional {
+    inline fn deserializeOptional(self: *Deserializer, reader: std.io.AnyReader, comptime TOptional: type) DeserializationErrors!TOptional {
         const optional_info = @typeInfo(TOptional).optional;
         const is_some = try self.deserializeBool(reader);
         if (is_some) {
@@ -154,7 +154,7 @@ pub const Deserializer = struct {
         }
     }
 
-    inline fn deserializeErrorUnion(self: *Deserializer, reader: anytype, comptime T: type) DeserializationResult(T) {
+    inline fn deserializeErrorUnion(self: *Deserializer, reader: std.io.AnyReader, comptime T: type) DeserializationResult(T) {
         const info = @typeInfo(T).error_union;
 
         const is_error = try self.deserializeBool(reader);
@@ -169,8 +169,8 @@ pub const Deserializer = struct {
         }
     }
 
-    inline fn deserializeBool(_: *Deserializer, reader: anytype) !bool {
-        const byte = try reader.readByte();
+    inline fn deserializeBool(_: *Deserializer, reader: std.io.AnyReader) DeserializationErrors!bool {
+        const byte = reader.readByte() catch return DeserializationErrors.BooleanDeserializationFailed;
         return switch (byte) {
             0 => false,
             1 => true,
@@ -178,15 +178,11 @@ pub const Deserializer = struct {
         };
     }
 
-    inline fn deserializeInt(_: *Deserializer, reader: anytype, comptime TInt: type) DeserializationErrors!TInt {
-        return try reader.readInt(TInt, .big);
+    inline fn deserializeInt(_: *Deserializer, reader: std.io.AnyReader, comptime TInt: type) DeserializationErrors!TInt {
+        return reader.readInt(TInt, .big) catch return error.IntegerDeserializationFailed;
     }
 
-    inline fn deserializeComptimeInt(_: *Deserializer, reader: anytype) DeserializationErrors!comptime_int {
-        return try reader.readInt(i32, .big);
-    }
-
-    inline fn deserializeFloat(_: *Deserializer, reader: anytype, comptime T: type) DeserializationErrors!T {
+    inline fn deserializeFloat(_: *Deserializer, reader: std.io.AnyReader, comptime T: type) DeserializationErrors!T {
         const TURepresentation = @Type(.{
             .int = .{
                 .signedness = .unsigned,
@@ -194,15 +190,11 @@ pub const Deserializer = struct {
             },
         });
 
-        const int_value: TURepresentation = try reader.readInt(TURepresentation, .big);
+        const int_value: TURepresentation = reader.readInt(TURepresentation, .big) catch return DeserializationErrors.IntegerDeserializationFailed;
         return @bitCast(int_value);
     }
 
-    inline fn deserializeComptimeFloat(self: *Deserializer, reader: anytype) DeserializationErrors!comptime_float {
-        return self.deserializeFloat(reader, f32);
-    }
-
-    inline fn deserializeEnum(self: *Deserializer, reader: anytype, comptime T: type) DeserializationErrors!T {
+    inline fn deserializeEnum(self: *Deserializer, reader: std.io.AnyReader, comptime T: type) DeserializationErrors!T {
         const enum_info = @typeInfo(T).@"enum";
         const int_info = @typeInfo(enum_info.tag_type).int;
         if (int_info.signedness == .signed) {
