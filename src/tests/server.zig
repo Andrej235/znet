@@ -33,6 +33,10 @@ test "server start" {
 
     var deserializer = zNet.Deserializer.init(std.heap.page_allocator);
 
+    const headers = try zNet.deserializeMessageHeader(&output_reader);
+    try testing.expect(headers == .Response);
+    try testing.expectEqual(headers.Response.request_id, 1);
+
     const result = try deserializer.deserialize(&output_reader, @typeInfo(@TypeOf(TestContract.anotherFunction)).@"fn".return_type.?);
     try testing.expectEqual(result, 8);
 }

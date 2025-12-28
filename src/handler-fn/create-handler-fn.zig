@@ -1,13 +1,14 @@
 const std = @import("std");
 
+const RequestHeaders = @import("../message-headers/request-header.zig").RequestHeader;
+const serializeMessageHeader = @import("../message-headers/serialize-message-header.zig").serializeMessageHeader;
 const Deserializer = @import("../serializer/deserializer.zig").Deserializer;
 const Serializer = @import("../serializer/serializer.zig").Serializer;
 const HandlerFn = @import("handler-fn.zig").HandlerFn;
-const serializeMessageHeader = @import("../message-headers/serialize-message-header.zig").serializeMessageHeader;
 
 pub fn createHandlerFn(comptime fn_impl: anytype) HandlerFn {
     return struct {
-        fn handler(allocator: std.mem.Allocator, input_reader: *std.Io.Reader, output_writer: *std.Io.Writer) anyerror!void {
+        fn handler(request_headers: RequestHeaders, allocator: std.mem.Allocator, input_reader: *std.Io.Reader, output_writer: *std.Io.Writer) anyerror!void {
             const TFn = @TypeOf(fn_impl);
             const fn_info = @typeInfo(TFn);
             if (fn_info != .@"fn") @compileError("Expected function type");
@@ -41,6 +42,17 @@ pub fn createHandlerFn(comptime fn_impl: anytype) HandlerFn {
             const params = try deserializer.deserialize(input_reader, TInput);
             const res = @call(.always_inline, fn_impl, params);
 
+            try serializeMessageHeader(
+                output_writer,
+                .{
+                    .Response = .{
+                        .version = request_headers.version,
+                        .msg_type = .Response,
+                        .request_id = request_headers.request_id,
+                        .payload_len = 0, // TODO: update later
+                    },
+                },
+            );
             try Serializer.serialize(fn_info.@"fn".return_type.?, output_writer, res);
         }
     }.handler;

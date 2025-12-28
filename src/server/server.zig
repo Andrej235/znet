@@ -21,7 +21,7 @@ pub fn Server(comptime options: ServerOptions) type {
             switch (header) {
                 .Request => |req_header| {
                     const handler = call_tables[req_header.contract_id][req_header.method_id];
-                    try handler(self.allocator, reader, writer);
+                    try handler(header.Request, self.allocator, reader, writer);
                 },
                 .Response => {
                     return error.UnexpectedResponseHeader;
