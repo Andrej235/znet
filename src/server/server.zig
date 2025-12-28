@@ -15,7 +15,7 @@ pub fn Server(comptime options: ServerOptions) type {
             };
         }
 
-        pub fn call(self: *const Self, reader: std.io.AnyReader, writer: std.io.AnyWriter) !void {
+        pub fn call(self: *const Self, reader: *std.Io.Reader, writer: *std.Io.Writer) !void {
             const header = try deserializeMessageHeader(reader);
 
             switch (header) {

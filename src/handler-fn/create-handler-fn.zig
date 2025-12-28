@@ -7,12 +7,12 @@ const serializeMessageHeader = @import("../message-headers/serialize-message-hea
 
 pub fn createHandlerFn(comptime fn_impl: anytype) HandlerFn {
     return struct {
-        fn handler(allocator: std.mem.Allocator, input_reader: std.io.AnyReader, output_writer: std.io.AnyWriter) anyerror!void {
+        fn handler(allocator: std.mem.Allocator, input_reader: *std.Io.Reader, output_writer: *std.Io.Writer) anyerror!void {
             const TFn = @TypeOf(fn_impl);
             const fn_info = @typeInfo(TFn);
             if (fn_info != .@"fn") @compileError("Expected function type");
 
-            const InputType = comptime @Type(.{
+            const TInput = comptime @Type(.{
                 .@"struct" = .{
                     .backing_integer = null,
                     .decls = &.{},
@@ -38,7 +38,7 @@ pub fn createHandlerFn(comptime fn_impl: anytype) HandlerFn {
             });
 
             var deserializer = Deserializer.init(allocator);
-            const params = try deserializer.deserialize(input_reader, InputType);
+            const params = try deserializer.deserialize(input_reader, TInput);
             const res = @call(.always_inline, fn_impl, params);
 
             try Serializer.serialize(fn_info.@"fn".return_type.?, output_writer, res);

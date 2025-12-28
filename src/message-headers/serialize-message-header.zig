@@ -1,6 +1,7 @@
+const std = @import("std");
 const MessageHeader = @import("../message-headers/message-header.zig").MessageHeader;
 
-pub fn serializeMessageHeader(writer: anytype, header: MessageHeader) anyerror!void {
+pub fn serializeMessageHeader(writer: *std.Io.Writer, header: MessageHeader) anyerror!void {
     switch (header) {
         .Request => |req_header| {
             try writer.writeInt(u8, req_header.version, .big);
