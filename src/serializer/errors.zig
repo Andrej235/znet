@@ -1,3 +1,7 @@
+pub const CountingSerializationErrors = error{
+    InvalidUnionTag,
+};
+
 pub const SerializationErrors = error{
     InvalidUnionTag,
     NoSpaceLeft,

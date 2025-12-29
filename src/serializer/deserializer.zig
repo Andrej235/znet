@@ -166,7 +166,22 @@ pub const Deserializer = struct {
     }
 
     inline fn deserializeInt(_: *Deserializer, reader: *std.Io.Reader, comptime TInt: type) DeserializationErrors!TInt {
-        return reader.takeInt(TInt, .big) catch return error.IntegerDeserializationFailed;
+        const int_info = @typeInfo(TInt).int;
+        const bit_size_with_padding = comptime (int_info.bits + 7) / 8 * 8;
+
+        // early return to avoid unnecessary casts
+        if (int_info.bits == bit_size_with_padding) {
+            return reader.takeInt(TInt, .big) catch return error.IntegerDeserializationFailed;
+        }
+
+        const PaddedType = @Type(.{
+            .int = .{
+                .signedness = int_info.signedness,
+                .bits = bit_size_with_padding,
+            },
+        });
+        const padded_value: PaddedType = reader.takeInt(PaddedType, .big) catch return error.IntegerDeserializationFailed;
+        return @intCast(padded_value);
     }
 
     inline fn deserializeFloat(_: *Deserializer, reader: *std.Io.Reader, comptime T: type) DeserializationErrors!T {

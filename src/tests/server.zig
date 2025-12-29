@@ -20,7 +20,7 @@ test "server start" {
             .request_id = 1,
             .contract_id = 0,
             .method_id = 1,
-            .payload_len = 0,
+            .payload_len = 3, // u8 + u16 = 3 bytes
         },
     });
 

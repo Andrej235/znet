@@ -117,8 +117,23 @@ pub const Serializer = struct {
         writer.writeInt(u8, byte_value, .big) catch return error.IntegerSerializationFailed;
     }
 
-    inline fn serializeInt(writer: *std.Io.Writer, data: anytype, comptime _: std.builtin.Type.Int) SerializationErrors!void {
-        writer.writeInt(@TypeOf(data), data, .big) catch return error.IntegerSerializationFailed;
+    inline fn serializeInt(writer: *std.Io.Writer, data: anytype, comptime int_info: std.builtin.Type.Int) SerializationErrors!void {
+        const bit_size_with_padding = (int_info.bits + 7) / 8 * 8;
+
+        // early return to avoid unnecessary casts
+        if (int_info.bits == bit_size_with_padding) {
+            writer.writeInt(@TypeOf(data), data, .big) catch return error.IntegerSerializationFailed;
+            return;
+        }
+
+        const PaddedType = @Type(.{
+            .int = .{
+                .signedness = int_info.signedness,
+                .bits = bit_size_with_padding,
+            },
+        });
+        const padded_data: PaddedType = @intCast(data);
+        writer.writeInt(PaddedType, padded_data, .big) catch return error.IntegerSerializationFailed;
     }
 
     inline fn serializeFloat(writer: *std.Io.Writer, data: anytype, comptime float_info: std.builtin.Type.Float) SerializationErrors!void {

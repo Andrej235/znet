@@ -4,6 +4,7 @@ const RequestHeaders = @import("../message-headers/request-header.zig").RequestH
 const serializeMessageHeader = @import("../message-headers/serialize-message-header.zig").serializeMessageHeader;
 const Deserializer = @import("../serializer/deserializer.zig").Deserializer;
 const Serializer = @import("../serializer/serializer.zig").Serializer;
+const CountingSerializer = @import("../serializer/counting-serializer.zig").Serializer;
 const HandlerFn = @import("handler-fn.zig").HandlerFn;
 
 pub fn createHandlerFn(comptime fn_impl: anytype) HandlerFn {
@@ -49,7 +50,7 @@ pub fn createHandlerFn(comptime fn_impl: anytype) HandlerFn {
                         .version = request_headers.version,
                         .msg_type = .Response,
                         .request_id = request_headers.request_id,
-                        .payload_len = 0, // TODO: update later
+                        .payload_len = try CountingSerializer.serialize(fn_info.@"fn".return_type.?, res),
                     },
                 },
             );
