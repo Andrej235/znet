@@ -1,6 +1,7 @@
 const MessageType = @import("message-type.zig").MessageType;
 
-pub const RequestHeader = struct {
+// TODO: add flags
+pub const RequestHeaders = struct {
     version: u8,
     msg_type: MessageType,
     request_id: u32,

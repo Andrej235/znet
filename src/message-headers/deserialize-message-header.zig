@@ -1,10 +1,10 @@
 const std = @import("std");
 const MessageHeader = @import("message-header.zig").MessageHeader;
-const RequestHeader = @import("request-header.zig").RequestHeader;
+const RequestHeader = @import("request-header.zig").RequestHeaders;
 const ResponseHeader = @import("response-header.zig").ResponseHeader;
 const app_version = @import("../app-version.zig").app_version;
 
-pub fn deserializeMessageHeader(reader: *std.Io.Reader) DeserializeMessageHeaderErrors!MessageHeader {
+pub fn deserializeMessageHeaders(reader: *std.Io.Reader) DeserializeMessageHeaderErrors!MessageHeader {
     const version = reader.takeInt(u8, .big) catch return DeserializeMessageHeaderErrors.FailedToReadField;
     if (version != app_version) {
         return DeserializeMessageHeaderErrors.InvalidMessageHeaderVersion;

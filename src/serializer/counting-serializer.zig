@@ -85,7 +85,7 @@ pub const Serializer = struct {
             .slice => {
                 // todo: optimize for strings, use writeAll
                 const len = data.len;
-                var size: u32 = 0;
+                var size: u32 = @sizeOf(@TypeOf(len));
                 for (0..len) |i| {
                     size += try serialize(pointer_info.child, data[i]);
                 }
