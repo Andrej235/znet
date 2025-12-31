@@ -11,11 +11,15 @@ pub fn main() !void {
     defer posix.close(socket);
 
     try posix.connect(socket, &address.any, address.getOsSockLen());
-
-    // const msg: []const u8 = "Hello world!";
-    // try send(msg, socket);
-    // std.Thread.sleep(1_000_000_000);
     try send(@as(u32, 25), socket);
+
+    const socket2 = try posix.socket(address.any.family, posix.SOCK.STREAM, posix.IPPROTO.TCP);
+    defer posix.close(socket2);
+
+    try posix.connect(socket2, &address.any, address.getOsSockLen());
+    try send(@as(u32, 33), socket2);
+
+    std.Thread.sleep(1_000_000_000_000); // todo: fix server crashing when a client disconnects while trying to read request
 }
 
 var storage: [1024]u8 = undefined;

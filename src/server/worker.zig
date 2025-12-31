@@ -39,7 +39,7 @@ pub const Worker = struct {
                     try handler(header.Request, self.allocator, &reader, &writer);
 
                     const response_payload_len = std.mem.readInt(u32, self.response_buffer[6..10], .big);
-                    std.debug.print("handler result: {any}\n", .{self.response_buffer[0 .. response_payload_len + 10]});
+                    std.debug.print("handler result [{} | gen {}]: {any}\n", .{ job.client_id.index, job.client_id.gen, self.response_buffer[0 .. response_payload_len + 10] });
                 },
                 .Response => {
                     return error.UnexpectedResponseHeader;

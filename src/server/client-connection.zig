@@ -1,13 +1,21 @@
 const std = @import("std");
 const posix = std.posix;
+
 const deserializeMessageHeaders = @import("../message-headers/deserialize-message-headers.zig").deserializeMessageHeaders;
+const ConnectionId = @import("connection-id.zig").ConnectionId;
 
 pub const ClientConnection = struct {
     reader: ConnectionReader,
     socket: posix.socket_t,
     address: std.net.Address,
+    id: ConnectionId,
 
-    pub fn init(allocator: std.mem.Allocator, socket: posix.socket_t, address: std.net.Address) !ClientConnection {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        socket: posix.socket_t,
+        address: std.net.Address,
+        id: ConnectionId,
+    ) !ClientConnection {
         const reader = try ConnectionReader.init(allocator, 4096);
         errdefer reader.deinit(allocator);
 
@@ -15,6 +23,7 @@ pub const ClientConnection = struct {
             .reader = reader,
             .socket = socket,
             .address = address,
+            .id = id,
         };
     }
 

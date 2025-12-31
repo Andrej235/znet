@@ -13,6 +13,8 @@ const HandlerFn = @import("../handler-fn/handler-fn.zig").HandlerFn;
 const createHandlerFn = @import("../handler-fn/create-handler-fn.zig").createHandlerFn;
 const deserializeMessageHeader = @import("../message-headers/deserialize-message-headers.zig").deserializeMessageHeader;
 
+const ConnectionId = @import("connection-id.zig").ConnectionId;
+
 pub fn Server(comptime options: ServerOptions) type {
     return struct {
         const Self = @This();
@@ -26,6 +28,15 @@ pub fn Server(comptime options: ServerOptions) type {
 
         // polls[0] is always the listening socket
         polls: []posix.pollfd,
+
+        // stack of free connection indices, LIFO
+        free_indices: []ConnectionId,
+
+        // number of free indices in free_indices
+        free_count: u32,
+
+        // same length as polls[] - 1, maps poll index (client_polls []) to client index (clients [])
+        poll_to_client: []u32,
 
         // list of clients, only client[0..connected] are valid
         clients: []ClientConnection,
@@ -61,10 +72,18 @@ pub fn Server(comptime options: ServerOptions) type {
                 };
             }
 
+            var free_indices = try allocator.alloc(ConnectionId, options.max_clients);
+            for (0..options.max_clients) |i| {
+                free_indices[i] = .{ .index = @intCast(i), .gen = 0 };
+            }
+
             return .{
                 .polls = polls,
                 .clients = clients,
                 .client_polls = polls[1..],
+                .poll_to_client = try allocator.alloc(u32, options.max_clients),
+                .free_indices = free_indices,
+                .free_count = options.max_clients,
                 .connected = 0,
                 .allocator = allocator,
                 .jobs_queue = job_queue,
@@ -106,7 +125,8 @@ pub fn Server(comptime options: ServerOptions) type {
                         continue;
                     }
 
-                    var client = &self.clients[i];
+                    const client_idx = self.poll_to_client[i];
+                    var client = &self.clients[client_idx];
                     if (revents & posix.POLL.IN == posix.POLL.IN) {
                         // this socket is ready to be read, keep reading messages until there are no more
                         while (true) {
@@ -127,7 +147,7 @@ pub fn Server(comptime options: ServerOptions) type {
                             const heap_msg = try self.allocator.alloc(u8, msg.len); // todo: free this somewhere, maybe in worker thread after processing?
                             @memcpy(heap_msg, msg);
 
-                            self.jobs_queue.push(.{ .data = heap_msg });
+                            self.jobs_queue.push(.{ .data = heap_msg, .client_id = client.id });
                         }
                     }
                 }
@@ -145,35 +165,53 @@ pub fn Server(comptime options: ServerOptions) type {
                 };
 
                 std.debug.print("[{f}] connected\n", .{address.in});
-                const client = ClientConnection.init(self.allocator, socket, address) catch |err| {
+                const client_index = self.popIndex();
+
+                const client = ClientConnection.init(self.allocator, socket, address, client_index) catch |err| {
                     posix.close(socket);
                     std.debug.print("failed to initialize client: {}", .{err});
+                    self.pushIndex(client_index);
                     return;
                 };
 
-                self.clients[self.connected] = client;
+                self.clients[client_index.index] = client;
+
                 self.client_polls[self.connected] = .{
                     .fd = socket,
                     .revents = 0,
                     .events = posix.POLL.IN,
                 };
+                self.poll_to_client[self.connected] = client_index.index;
                 self.connected += 1;
             }
         }
 
+        fn pushIndex(self: *Self, index: ConnectionId) void {
+            self.free_indices[self.free_count] = index;
+            self.free_count += 1;
+        }
+
+        fn popIndex(self: *Self) ConnectionId {
+            if (self.free_count == 0) {
+                // this should never happen because we limit the number of clients to max_clients
+                @branchHint(.cold);
+                @panic("no free connection indices");
+            }
+
+            self.free_count -= 1;
+            return self.free_indices[self.free_count];
+        }
+
         fn removeClient(self: *Self, at: usize) void {
-            var client = self.clients[at];
+            const client_idx = self.poll_to_client[at];
+            var client = self.clients[client_idx];
+            self.pushIndex(.{ .index = client_idx, .gen = client.id.gen + 1 });
 
             posix.close(client.socket);
             client.deinit(self.allocator);
 
-            // replace the removed client with the last connected client
-            // technically the client still exists in the array with an invalid socket but since 'connected' is decremented it will be ignored
-            // it will be truly removed when the next client connects and overwrites it
             const last_index = self.connected - 1;
-            self.clients[at] = self.clients[last_index];
             self.client_polls[at] = self.client_polls[last_index];
-
             self.connected = last_index;
         }
 
