@@ -2,8 +2,8 @@ const std = @import("std");
 const posix = std.posix;
 const Serializer = @import("serializer/serializer.zig").Serializer;
 const CountingSerializer = @import("serializer/counting-serializer.zig").Serializer;
-const serializeMessageHeaders = @import("message-headers/serialize-message-header.zig").serializeMessageHeaders;
-const RequestHeaders = @import("message-headers/request-header.zig").RequestHeaders;
+const serializeMessageHeaders = @import("message-headers/serialize-message-headers.zig").serializeMessageHeaders;
+const RequestHeaders = @import("message-headers/request-headers.zig").RequestHeaders;
 
 pub fn main() !void {
     const address = try std.net.Address.parseIp("127.0.0.1", 5882);
@@ -12,10 +12,10 @@ pub fn main() !void {
 
     try posix.connect(socket, &address.any, address.getOsSockLen());
 
-    const msg: []const u8 = "Hello world!";
-    try send(msg, socket);
-    std.Thread.sleep(1_000_000_000);
-    try send(@as(u32, 123), socket);
+    // const msg: []const u8 = "Hello world!";
+    // try send(msg, socket);
+    // std.Thread.sleep(1_000_000_000);
+    try send(@as(u32, 25), socket);
 }
 
 var storage: [1024]u8 = undefined;

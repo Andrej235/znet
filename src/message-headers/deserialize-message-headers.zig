@@ -1,7 +1,7 @@
 const std = @import("std");
-const MessageHeader = @import("message-header.zig").MessageHeader;
-const RequestHeader = @import("request-header.zig").RequestHeaders;
-const ResponseHeader = @import("response-header.zig").ResponseHeader;
+const MessageHeader = @import("message-headers.zig").MessageHeader;
+const RequestHeader = @import("request-headers.zig").RequestHeaders;
+const ResponseHeader = @import("response-headers.zig").ResponseHeader;
 const app_version = @import("../app-version.zig").app_version;
 
 pub fn deserializeMessageHeaders(reader: *std.Io.Reader) DeserializeMessageHeaderErrors!MessageHeader {
