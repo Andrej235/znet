@@ -18,7 +18,7 @@ const ConnectionId = @import("connection-id.zig").ConnectionId;
 pub fn Server(comptime options: ServerOptions) type {
     return struct {
         const Self = @This();
-        const call_tables = create_call_table(options);
+        const call_tables = createCallTable(options);
 
         // creates polls and client slices, and is passed to Client.init and handlers
         allocator: std.mem.Allocator,
@@ -288,7 +288,7 @@ pub fn Server(comptime options: ServerOptions) type {
     };
 }
 
-pub fn create_call_table(comptime options: ServerOptions) []const []const HandlerFn {
+pub fn createCallTable(comptime options: ServerOptions) []const []const HandlerFn {
     comptime {
         var call_table: []const []const HandlerFn = &.{};
         for (options.contracts) |contract| {

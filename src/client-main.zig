@@ -7,24 +7,29 @@ const serializeMessageHeaders = @import("message-headers/serialize-message-heade
 const deserializeMessageHeaders = @import("message-headers/deserialize-message-headers.zig").deserializeMessageHeaders;
 const RequestHeaders = @import("message-headers/request-headers.zig").RequestHeaders;
 
+const Client = @import("client/client.zig").Client;
+const TestContract = @import("server-main.zig").TestContract;
+
 pub fn main() !void {
+    var client = Client(.{ .server_contracts = &.{TestContract} }).init();
     const address = try std.net.Address.parseIp("127.0.0.1", 5882);
-    const socket = try posix.socket(
-        address.any.family,
-        posix.SOCK.STREAM,
-        posix.IPPROTO.TCP,
-    );
-    defer posix.close(socket);
+    try client.connect(address);
 
-    try posix.connect(socket, &address.any, address.getOsSockLen());
+    _ = client.contracts.Test.testFunction(.{10});
 
-    while (true) {
-        try send(@as(u32, 25), socket);
-        const msg = try readMessage(socket);
-        std.debug.print("received: {any}\n", .{msg});
+    // const a = @typeInfo(@TypeOf(client.contracts));
+    // inline for (a.@"struct".fields) |f| {
+    //     std.debug.print("{}\n", .{f.name});
+    // }
+    // _ = client.contracts.Test.testFunction(.{10});
 
-        std.Thread.sleep(1000);
-    }
+    // while (true) {
+    //     try send(@as(u32, 25), socket);
+    //     const msg = try readMessage(socket);
+    //     std.debug.print("received: {any}\n", .{msg});
+
+    //     std.Thread.sleep(1000);
+    // }
 }
 
 var send_buffer: [1024]u8 = undefined;
