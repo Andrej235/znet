@@ -4,6 +4,7 @@ const posix = std.posix;
 const Allocator = std.mem.Allocator;
 const RequestHeaders = @import("message-headers/request-header.zig").RequestHeaders;
 const deserializeMessageHeaders = @import("message-headers/deserialize-message-header.zig").deserializeMessageHeaders;
+const Queue = @import("utils/mpmc-queue.zig").Queue;
 
 const log = std.log.scoped(.tcp_demo);
 
@@ -36,6 +37,8 @@ const Server = struct {
     // listening socket, and we don't ever touch that.
     client_polls: []posix.pollfd,
 
+    jobs_queue: *Queue(Job),
+
     fn init(allocator: Allocator, max_clients: usize) !Server {
         // + 1 for the listening socket
         const polls = try allocator.alloc(posix.pollfd, max_clients + 1);
@@ -44,12 +47,26 @@ const Server = struct {
         const clients = try allocator.alloc(ClientConnection, max_clients);
         errdefer allocator.free(clients);
 
+        const jobs_buf = try allocator.alloc(Job, 128); //todo: make configurable
+        errdefer allocator.free(jobs_buf);
+
+        const job_queue = try allocator.create(Queue(Job));
+        job_queue.* = try Queue(Job).init(jobs_buf);
+
+        for (0..8) |i| {
+            _ = std.Thread.spawn(.{}, workerMain, .{job_queue}) catch |err| {
+                log.err("failed to spawn worker thread {}: {}", .{ i, err });
+                return err;
+            };
+        }
+
         return .{
             .polls = polls,
             .clients = clients,
             .client_polls = polls[1..],
             .connected = 0,
             .allocator = allocator,
+            .jobs_queue = job_queue,
         };
     }
 
@@ -108,7 +125,14 @@ const Server = struct {
                             break;
                         };
 
+                        // const heap_msg = try self.allocator.alloc(u8, msg.len);
+                        // @memcpy(heap_msg, msg);
+
                         std.debug.print("got: {any}\n", .{msg});
+                        const heap_msg = try self.allocator.alloc(u8, msg.len); // todo: free this somewhere, maybe in worker thread after processing?
+                        @memcpy(heap_msg, msg);
+
+                        self.jobs_queue.push(.{ .data = heap_msg });
                     }
                 }
             }
@@ -256,3 +280,16 @@ const ConnectionReader = struct {
         return msg;
     }
 };
+
+const Job = struct {
+    data: []const u8,
+};
+
+fn workerMain(
+    job_queue: *Queue(Job),
+) void {
+    while (true) {
+        const job = job_queue.pop();
+        std.debug.print("worker thread, picked up a job: {any}\n", .{job.data});
+    }
+}
