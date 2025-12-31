@@ -157,6 +157,7 @@ pub fn Server(comptime options: ServerOptions) type {
                         var client = &self.clients[client_idx];
 
                         // this socket is ready to be read, keep reading messages until there are no more
+                        // todo: implement round robin to avoid one client/request blocking the entire i/o loop
                         while (true) {
                             const msg = client.readMessage() catch {
                                 // removeClient will swap the last client into position i, do not increment i
@@ -173,10 +174,13 @@ pub fn Server(comptime options: ServerOptions) type {
 
                             self.jobs_queue.push(.{ .data = heap_msg, .client_id = client.id });
                         }
+                    } else {
+                        std.debug.print("Client ready for out\n", .{});
+                        continue;
                     }
                 }
 
-                // responses
+                // send responses to clients
                 if (self.polls[1].revents != 0) {
                     // wakeup socket is ready, read the eventfd to clear it
                     var buf: [8]u8 = undefined;
@@ -191,7 +195,16 @@ pub fn Server(comptime options: ServerOptions) type {
                         if (client.id.gen != job_result.client_id.gen)
                             continue; // client has disconnected and a new client has taken its place, drop the response
 
-                        std.debug.print("---> response to {} (gen {}): {any}\n", .{ job_result.client_id.index, job_result.client_id.gen, job_result.data });
+                        // todo: implement round robin or similar to avoid one client starving others, maybe change polling to watch out for POLLOUT on clients with pending responses
+                        var sent: usize = 0;
+                        while (sent < job_result.data.len) {
+                            sent += posix.write(client.socket, job_result.data[sent..]) catch |err| switch (err) {
+                                error.NotOpenForWriting => break,
+                                else => return err,
+                            };
+                        }
+
+                        std.debug.print("---> response sent to {} (gen {}): {any}\n", .{ job_result.client_id.index, job_result.client_id.gen, job_result.data });
                     }
                 }
             }
