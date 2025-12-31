@@ -3,16 +3,40 @@ const posix = @import("std").posix;
 
 const ClientOptions = @import("client-options.zig").ClientOptions;
 
+const serializeHeaders = @import("../message-headers/serialize-message-headers.zig").serializeMessageHeaders;
+const deserializeMessageHeaders = @import("../message-headers/deserialize-message-headers.zig").deserializeMessageHeaders;
+const Serializer = @import("../serializer/serializer.zig").Serializer;
+const CountingSerializer = @import("../serializer/counting-serializer.zig").Serializer;
+const Deserializer = @import("../serializer/deserializer.zig").Deserializer;
+
+const app_version: u8 = @import("../app-version.zig").app_version;
+
 pub fn Client(comptime options: ClientOptions) type {
     return struct {
         const Self = @This();
 
-        contracts: ContractsWrapper(options),
+        contracts: ContractsWrapper(Self, options),
+        allocator: std.mem.Allocator,
+
+        send_buffer: []u8,
+        receive_buffer: []u8,
+        read_pos: usize = 0,
+        reader: std.io.Reader,
 
         socket: posix.socket_t = undefined,
 
-        pub fn init() Self {
-            return createClient(options);
+        pub fn init(allocator: std.mem.Allocator) !Self {
+            const send_buffer = try allocator.alloc(u8, 1024);
+            const receive_buffer = try allocator.alloc(u8, 1024);
+
+            return Self{
+                .contracts = createContracts(Self, options),
+                .allocator = allocator,
+
+                .send_buffer = send_buffer,
+                .receive_buffer = receive_buffer,
+                .reader = std.io.Reader.fixed(receive_buffer),
+            };
         }
 
         pub fn connect(self: *Self, address: std.net.Address) !void {
@@ -28,10 +52,115 @@ pub fn Client(comptime options: ClientOptions) type {
         pub fn disconnect(_: Self) void {
             std.debug.print("disconnecting... \n", .{});
         }
+
+        pub fn call(self: *Self, comptime contract_id: u16, comptime method_id: u16, args: anytype) anyerror!IdsToReturnType(options, contract_id, method_id) {
+            const payload_len = try CountingSerializer.serialize(@TypeOf(args), args);
+
+            var writer: std.Io.Writer = .fixed(self.send_buffer);
+
+            try serializeHeaders(&writer, .{
+                .Request = .{
+                    .version = app_version,
+                    .contract_id = contract_id,
+                    .method_id = method_id,
+                    .msg_type = .Request,
+                    .request_id = 123,
+                    .payload_len = payload_len,
+                },
+            });
+
+            try Serializer.serialize(@TypeOf(args), &writer, args);
+
+            const total_len = payload_len + 14; // header size
+            try writeAll(self.socket, self.send_buffer[0..total_len]);
+
+            const response = try self.readMessage(self.socket);
+            var reader = std.io.Reader.fixed(response);
+
+            _ = try deserializeMessageHeaders(&reader);
+            var deserializer = Deserializer.init(self.allocator);
+            const data = try deserializer.deserialize(&reader, IdsToReturnType(options, contract_id, method_id));
+            std.debug.print("{any}\n", .{data});
+
+            return data;
+        }
+
+        fn writeAll(socket: posix.socket_t, data: []const u8) !void {
+            var sent: usize = 0;
+            while (sent < data.len) {
+                sent += try posix.write(socket, data[sent..]);
+            }
+        }
+
+        fn readMessage(self: *Self, socket: posix.socket_t) ![]u8 {
+            while (true) {
+                // loop until we have a full message to process
+                if (try self.bufferedMessage()) |msg|
+                    return msg;
+
+                // read more data from the socket, fills up the buffer from pos to the end
+                const n = try posix.read(socket, self.receive_buffer[self.read_pos..]);
+                if (n == 0) // no more data, connection closed or EOF
+                    return error.Closed;
+
+                self.read_pos += n;
+            }
+        }
+
+        fn bufferedMessage(self: *Self) !?[]u8 {
+            if (self.read_pos < 10) {
+                // not enough data to read the header
+                return null;
+            }
+
+            const header = try deserializeMessageHeaders(&self.reader);
+            const payload_len = header.Response.payload_len;
+
+            const message_len = payload_len + 10;
+
+            if (self.read_pos < message_len) {
+                // not enough data to read the full message
+                return null;
+            }
+
+            // copy out the full message before shifting the buffer
+            const msg = self.receive_buffer[0..message_len];
+
+            // shift remaining data to the front of the buffer
+            @memmove(self.receive_buffer[0 .. self.read_pos - message_len], self.receive_buffer[message_len..self.read_pos]);
+            self.read_pos -= message_len;
+            self.reader.seek = 0;
+
+            return msg;
+        }
     };
 }
 
-fn WrapContractType(comptime Contract: type) type {
+fn IdsToReturnType(comptime options: ClientOptions, comptime contract_id: u16, comptime method_id: u16) type {
+    const Contract = options.server_contracts[contract_id];
+
+    const contract_info = @typeInfo(Contract);
+    switch (contract_info) {
+        .@"struct" => |struct_info| {
+            inline for (struct_info.decls, 0..) |decl, i| {
+                const method = @field(Contract, decl.name);
+                const methodType = @TypeOf(method);
+                if (@typeInfo(methodType) != .@"fn")
+                    i -= 1;
+
+                if (i == method_id) {
+                    const fn_info = @typeInfo(methodType).@"fn";
+                    return fn_info.return_type orelse void;
+                }
+            }
+
+            @compileError("Invalid method_id");
+        },
+        else => @compileError("Expected struct type for contract"),
+    }
+}
+
+fn WrapContractType(comptime TClient: type, comptime Contract: type) type {
     const type_info = @typeInfo(Contract);
     switch (type_info) {
         .@"struct" => |struct_info| {
@@ -43,8 +172,8 @@ fn WrapContractType(comptime Contract: type) type {
                 if (@typeInfo(methodType) == .@"fn") {
                     newFields[i] = std.builtin.Type.StructField{
                         .name = decl.name,
-                        .type = WrapContractMethodType(method),
-                        .alignment = @alignOf(WrapContractMethodType(method)),
+                        .type = WrapContractMethodType(TClient, method),
+                        .alignment = @alignOf(WrapContractMethodType(TClient, method)),
                         .is_comptime = false,
                         .default_value_ptr = null,
                     };
@@ -65,15 +194,15 @@ fn WrapContractType(comptime Contract: type) type {
     }
 }
 
-fn wrapContract(comptime Contract: type) WrapContractType(Contract) {
-    const WrappedType = WrapContractType(Contract);
+fn wrapContract(comptime TClient: type, comptime Contract: type, comptime contract_id: u16) WrapContractType(TClient, Contract) {
+    const WrappedType = WrapContractType(TClient, Contract);
     var wrapped_instance: WrappedType = undefined;
 
-    inline for (@typeInfo(Contract).@"struct".decls) |decl| {
+    inline for (@typeInfo(Contract).@"struct".decls, 0..) |decl, method_id| {
         const method = @field(Contract, decl.name);
         switch (@typeInfo(@TypeOf(method))) {
             .@"fn" => {
-                const wrapped_method = WrapContractMethod(method);
+                const wrapped_method = wrapContractMethod(TClient, method, contract_id, method_id);
                 @field(wrapped_instance, decl.name) = wrapped_method;
             },
             else => {},
@@ -83,7 +212,7 @@ fn wrapContract(comptime Contract: type) WrapContractType(Contract) {
     return wrapped_instance;
 }
 
-fn WrapContractMethodType(comptime method: anytype) type {
+fn WrapContractMethodType(comptime TClient: type, comptime method: anytype) type {
     const type_info = @typeInfo(@TypeOf(method));
     const fn_info = switch (type_info) {
         .@"fn" => |@"fn"| @"fn",
@@ -117,21 +246,38 @@ fn WrapContractMethodType(comptime method: anytype) type {
         },
     });
 
-    return *const fn (argument) return_type;
+    return *const fn (client: *TClient, args: argument) anyerror!return_type;
 }
 
-fn WrapContractMethod(comptime method: anytype) WrapContractMethodType(method) {
-    const new_fn_info = @typeInfo(@typeInfo(WrapContractMethodType(method)).pointer.child).@"fn";
+fn wrapContractMethod(comptime TClient: type, comptime method: anytype, comptime contract_id: u16, comptime method_id: u16) WrapContractMethodType(TClient, method) {
+    const new_fn_info = @typeInfo(@typeInfo(WrapContractMethodType(TClient, method)).pointer.child).@"fn";
 
     return struct {
-        fn invoke(args: new_fn_info.params[0].type.?) (new_fn_info.return_type orelse void) {
-            std.debug.print("---> Contract method wrapper says: \"Hello World!\"\n", .{});
-            return @call(.auto, method, args); // todo: replace with actual remote call
+        fn invoke(client: *TClient, args: new_fn_info.params[1].type.?) (new_fn_info.return_type orelse void) {
+            return try client.call(contract_id, method_id, args); // todo: handle expected errors
+
+            // const payload_len = try CountingSerializer.serialize(@TypeOf(args), input_writer, args);
+
+            // try serializeHeaders(input_writer, .{
+            //     .Request = .{
+            //         .version = app_version,
+            //         .contract_id = contract_id,
+            //         .method_id = method_id,
+            //         .msg_type = .Request,
+            //         .request_id = 123,
+            //         .payload_len = payload_len,
+            //     },
+            // });
+
+            // try Serializer.serialize(@TypeOf(args), input_writer, args);
+
+            // std.debug.print("---> Contract method wrapper says: \"Hello World!\"\n", .{});
+            // return @call(.auto, method, args); // todo: replace with actual remote call
         }
     }.invoke;
 }
 
-fn ContractsWrapper(comptime options: ClientOptions) type {
+fn ContractsWrapper(comptime TClient: type, comptime options: ClientOptions) type {
     var contract_wrapper_fields: [options.server_contracts.len]std.builtin.Type.StructField = undefined;
     for (options.server_contracts, 0..) |Contract, idx| {
         const full_type_name = @typeName(Contract);
@@ -149,8 +295,8 @@ fn ContractsWrapper(comptime options: ClientOptions) type {
 
         contract_wrapper_fields[idx] = std.builtin.Type.StructField{
             .name = base_name,
-            .type = WrapContractType(Contract),
-            .alignment = @alignOf(WrapContractType(Contract)),
+            .type = WrapContractType(TClient, Contract),
+            .alignment = @alignOf(WrapContractType(TClient, Contract)),
             .is_comptime = false,
             .default_value_ptr = null,
         };
@@ -167,20 +313,14 @@ fn ContractsWrapper(comptime options: ClientOptions) type {
     });
 }
 
-fn createClient(comptime options: ClientOptions) Client(options) {
-    var client: Client(options) = undefined;
-    client.contracts = createContracts(options);
-    return client;
-}
-
-fn createContracts(comptime options: ClientOptions) ContractsWrapper(options) {
-    const Contracts = ContractsWrapper(options);
+fn createContracts(comptime TClient: type, comptime options: ClientOptions) ContractsWrapper(TClient, options) {
+    const Contracts = ContractsWrapper(TClient, options);
 
     var contracts_instance: Contracts = undefined;
 
     inline for (@typeInfo(Contracts).@"struct".fields, 0..) |field, idx| {
         const Contract = options.server_contracts[idx];
-        const wrapped_contract = wrapContract(Contract);
+        const wrapped_contract = wrapContract(TClient, Contract, idx);
         @field(contracts_instance, field.name) = wrapped_contract;
     }
 

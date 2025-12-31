@@ -11,11 +11,12 @@ const Client = @import("client/client.zig").Client;
 const TestContract = @import("server-main.zig").TestContract;
 
 pub fn main() !void {
-    var client = Client(.{ .server_contracts = &.{TestContract} }).init();
+    var client = try Client(.{ .server_contracts = &.{TestContract} }).init(std.heap.page_allocator);
     const address = try std.net.Address.parseIp("127.0.0.1", 5882);
     try client.connect(address);
 
-    _ = client.contracts.Test.testFunction(.{10});
+    const result = try client.contracts.Test.testFunction(&client, .{10});
+    std.debug.print("from main: {}\n", .{result});
 
     // const a = @typeInfo(@TypeOf(client.contracts));
     // inline for (a.@"struct".fields) |f| {
