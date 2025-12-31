@@ -16,7 +16,7 @@ pub fn main() !void {
 
 const TestContract = struct {
     pub fn testFunction(x: i32) i32 {
-        std.debug.print("---> testFunction: {}\n", .{x});
+        // std.debug.print("---> testFunction: {}\n", .{x});
         return 5 * x;
     }
 };

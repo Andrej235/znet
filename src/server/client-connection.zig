@@ -33,7 +33,7 @@ pub const ClientConnection = struct {
 
     pub fn readMessage(self: *ClientConnection) !?[]const u8 {
         return self.reader.readMessage(self.socket) catch |err| switch (err) {
-            error.WouldBlock => return null,
+            error.WouldBlock, error.NotOpenForReading  => return null,
             error.Closed => {
                 std.debug.print("[{f}] disconnected\n", .{self.address.in});
                 return error.Closed;

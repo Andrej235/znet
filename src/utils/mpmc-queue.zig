@@ -47,5 +47,21 @@ pub fn Queue(comptime T: type) type {
             self.cond.signal();
             return job;
         }
+
+        pub fn tryPop(self: *Self) ?T {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+
+            if (self.count == 0) {
+                return null;
+            }
+
+            const job = self.buf[self.head];
+            self.head = (self.head + 1) % self.buf.len;
+            self.count -= 1;
+
+            self.cond.signal();
+            return job;
+        }
     };
 }

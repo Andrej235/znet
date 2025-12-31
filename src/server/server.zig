@@ -6,7 +6,7 @@ const ServerOptions = @import("server-options.zig").ServerOptions;
 const ClientConnection = @import("client-connection.zig").ClientConnection;
 const Job = @import("job.zig").Job;
 const Worker = @import("worker.zig").Worker;
-
+const JobResult = @import("job-result.zig").JobResult;
 const Queue = @import("../utils/mpmc-queue.zig").Queue;
 
 const HandlerFn = @import("../handler-fn/handler-fn.zig").HandlerFn;
@@ -26,7 +26,7 @@ pub fn Server(comptime options: ServerOptions) type {
         // number connected clients
         connected: usize,
 
-        // polls[0] is always the listening socket
+        // polls[0] is always the listening socket and polls[1] is always the wakeup socket used by worker threads to notify the reactor thread of completed jobs
         polls: []posix.pollfd,
 
         // stack of free connection indices, LIFO
@@ -35,22 +35,25 @@ pub fn Server(comptime options: ServerOptions) type {
         // number of free indices in free_indices
         free_count: u32,
 
-        // same length as polls[] - 1, maps poll index (client_polls []) to client index (clients [])
+        // same length as polls[] - 2, maps poll index (client_polls []) to client index (clients [])
         poll_to_client: []u32,
 
-        // list of clients, only client[0..connected] are valid
+        // list of clients, only those with indices in poll_to_client[] are connected
         clients: []ClientConnection,
 
-        // This is always polls[1..] and it's used to so that we can manipulate
+        // This is always polls[2..] and it's used to so that we can manipulate
         // clients and client_polls together. Necessary because polls[0] is the
         // listening socket, and we don't ever touch that.
         client_polls: []posix.pollfd,
 
+        wakeup_fd: posix.fd_t,
+
         jobs_queue: *Queue(Job),
+        job_results_queue: *Queue(JobResult),
 
         pub fn init(allocator: std.mem.Allocator) !Self {
-            // + 1 for the listening socket
-            const polls = try allocator.alloc(posix.pollfd, options.max_clients + 1);
+            // + 2 for the listening socket and the wakeup socket
+            const polls = try allocator.alloc(posix.pollfd, options.max_clients + 2);
             errdefer allocator.free(polls);
 
             const clients = try allocator.alloc(ClientConnection, options.max_clients);
@@ -62,9 +65,23 @@ pub fn Server(comptime options: ServerOptions) type {
             const job_queue = try allocator.create(Queue(Job));
             job_queue.* = try Queue(Job).init(jobs_buf);
 
+            const job_results_buf = try allocator.alloc(JobResult, 128); //todo: make configurable
+            errdefer allocator.free(job_results_buf);
+
+            const job_results_queue = try allocator.create(Queue(JobResult));
+            job_results_queue.* = try Queue(JobResult).init(job_results_buf);
+
+            const wakeup_fd = try posix.eventfd(0, posix.SOCK.NONBLOCK);
+
             for (0..8) |i| {
                 const worker = try allocator.create(Worker);
-                worker.* = try Worker.init(job_queue, call_tables, allocator);
+                worker.* = try Worker.init(
+                    job_queue,
+                    job_results_queue,
+                    call_tables,
+                    wakeup_fd,
+                    allocator,
+                );
 
                 _ = std.Thread.spawn(.{}, Worker.run, .{worker}) catch |err| {
                     std.debug.print("failed to spawn worker thread {}: {}", .{ i, err });
@@ -80,13 +97,15 @@ pub fn Server(comptime options: ServerOptions) type {
             return .{
                 .polls = polls,
                 .clients = clients,
-                .client_polls = polls[1..],
+                .client_polls = polls[2..],
                 .poll_to_client = try allocator.alloc(u32, options.max_clients),
                 .free_indices = free_indices,
                 .free_count = options.max_clients,
                 .connected = 0,
                 .allocator = allocator,
                 .jobs_queue = job_queue,
+                .job_results_queue = job_results_queue,
+                .wakeup_fd = wakeup_fd,
             };
         }
 
@@ -107,15 +126,23 @@ pub fn Server(comptime options: ServerOptions) type {
                 .events = posix.POLL.IN,
             };
 
-            while (true) {
-                // +1 is for the listening socket, -1 timeout means wait indefinitely
-                _ = try posix.poll(self.polls[0 .. self.connected + 1], -1);
+            self.polls[1] = .{
+                .fd = self.wakeup_fd,
+                .revents = 0,
+                .events = posix.POLL.IN,
+            };
 
+            while (true) {
+                // +2 is for the listening socket and the wakeup socket, -1 timeout means wait indefinitely
+                _ = try posix.poll(self.polls[0 .. self.connected + 2], -1);
+
+                // new connections
                 if (self.polls[0].revents != 0) {
                     // listening socket is ready, accept new connections
                     self.accept(listener) catch |err| std.debug.print("failed to accept: {}", .{err});
                 }
 
+                // read requests from clients
                 var i: usize = 0;
                 while (i < self.connected) {
                     const revents = self.client_polls[i].revents;
@@ -125,9 +152,10 @@ pub fn Server(comptime options: ServerOptions) type {
                         continue;
                     }
 
-                    const client_idx = self.poll_to_client[i];
-                    var client = &self.clients[client_idx];
                     if (revents & posix.POLL.IN == posix.POLL.IN) {
+                        const client_idx = self.poll_to_client[i];
+                        var client = &self.clients[client_idx];
+
                         // this socket is ready to be read, keep reading messages until there are no more
                         while (true) {
                             const msg = client.readMessage() catch {
@@ -140,15 +168,30 @@ pub fn Server(comptime options: ServerOptions) type {
                                 break;
                             };
 
-                            // const heap_msg = try self.allocator.alloc(u8, msg.len);
-                            // @memcpy(heap_msg, msg);
-
-                            std.debug.print("got: {any}\n", .{msg});
                             const heap_msg = try self.allocator.alloc(u8, msg.len); // todo: free this somewhere, maybe in worker thread after processing?
                             @memcpy(heap_msg, msg);
 
                             self.jobs_queue.push(.{ .data = heap_msg, .client_id = client.id });
                         }
+                    }
+                }
+
+                // responses
+                if (self.polls[1].revents != 0) {
+                    // wakeup socket is ready, read the eventfd to clear it
+                    var buf: [8]u8 = undefined;
+                    _ = try posix.read(self.wakeup_fd, &buf);
+
+                    // process all available job results
+                    while (self.job_results_queue.tryPop()) |job_result| {
+                        defer self.allocator.free(job_result.data);
+
+                        const client_idx = job_result.client_id.index;
+                        const client = &self.clients[client_idx];
+                        if (client.id.gen != job_result.client_id.gen)
+                            continue; // client has disconnected and a new client has taken its place, drop the response
+
+                        std.debug.print("---> response to {} (gen {}): {any}\n", .{ job_result.client_id.index, job_result.client_id.gen, job_result.data });
                     }
                 }
             }
@@ -164,24 +207,24 @@ pub fn Server(comptime options: ServerOptions) type {
                     else => return err,
                 };
 
-                std.debug.print("[{f}] connected\n", .{address.in});
-                const client_index = self.popIndex();
+                const client_id = self.popIndex();
+                std.debug.print("[{f}] connected as {} (gen {})\n", .{ address.in, client_id.index, client_id.gen });
 
-                const client = ClientConnection.init(self.allocator, socket, address, client_index) catch |err| {
+                const client = ClientConnection.init(self.allocator, socket, address, client_id) catch |err| {
                     posix.close(socket);
                     std.debug.print("failed to initialize client: {}", .{err});
-                    self.pushIndex(client_index);
+                    self.pushIndex(client_id);
                     return;
                 };
 
-                self.clients[client_index.index] = client;
+                self.clients[client_id.index] = client;
 
                 self.client_polls[self.connected] = .{
                     .fd = socket,
                     .revents = 0,
                     .events = posix.POLL.IN,
                 };
-                self.poll_to_client[self.connected] = client_index.index;
+                self.poll_to_client[self.connected] = client_id.index;
                 self.connected += 1;
             }
         }
@@ -212,6 +255,7 @@ pub fn Server(comptime options: ServerOptions) type {
 
             const last_index = self.connected - 1;
             self.client_polls[at] = self.client_polls[last_index];
+            self.poll_to_client[at] = self.poll_to_client[last_index];
             self.connected = last_index;
         }
 
