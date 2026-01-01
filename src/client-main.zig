@@ -16,7 +16,9 @@ pub fn main() !void {
     try client.connect(address);
 
     const result = try client.contracts.Test.echoString(client, .{"Hello, world!"});
-    std.debug.print("from main: {s}\n", .{result});
+    std.debug.print("from main: {s}\n", .{@typeName(@TypeOf(result))});
+    const a = try result.await();
+    std.debug.print("{s}\n", .{a});
 
     // keep the program alive to allow background network thread to operate, todo: get rid of this
     std.Thread.sleep(100000000000);

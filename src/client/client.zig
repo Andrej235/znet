@@ -3,8 +3,10 @@ const posix = @import("std").posix;
 
 const ClientOptions = @import("client-options.zig").ClientOptions;
 
+const MessageHeaders = @import("../message-headers/message-headers.zig").MessageHeaders;
 const serializeHeaders = @import("../message-headers/serialize-message-headers.zig").serializeMessageHeaders;
 const deserializeMessageHeaders = @import("../message-headers/deserialize-message-headers.zig").deserializeMessageHeaders;
+
 const Serializer = @import("../serializer/serializer.zig").Serializer;
 const CountingSerializer = @import("../serializer/counting-serializer.zig").Serializer;
 const Deserializer = @import("../serializer/deserializer.zig").Deserializer;
@@ -13,6 +15,7 @@ const ContractsWrapper = @import("server-contracts-wrapper.zig").ContractsWrappe
 const createContracts = @import("server-contracts-wrapper.zig").createContracts;
 
 const Queue = @import("../utils/mpmc-queue.zig").Queue;
+const Promise = @import("../promise/promise.zig").Promise;
 const OutboundMessage = @import("outbound-message.zig").OutboundMessage;
 
 const app_version: u8 = @import("../app-version.zig").app_version;
@@ -35,6 +38,8 @@ pub fn Client(comptime options: ClientOptions) type {
 
         outbound_queue: *Queue(OutboundMessage),
         outgoing_wakeup_fd: posix.fd_t,
+
+        current_request_id: u32 = 0,
 
         pub fn init(allocator: std.mem.Allocator) !*Self {
             const send_buffer = try allocator.alloc(u8, 1024);
@@ -79,34 +84,53 @@ pub fn Client(comptime options: ClientOptions) type {
             std.debug.print("disconnecting... \n", .{});
         }
 
-        pub fn call(self: *Self, comptime contract_id: u16, comptime method_id: u16, args: anytype) anyerror!IdsToReturnType(options, contract_id, method_id) {
-            const payload_len = try CountingSerializer.serialize(@TypeOf(args), args);
+        pub fn call(self: *Self, comptime contract_id: u16, comptime method_id: u16, args: anytype) anyerror!*IdsToReturnType(options, contract_id, method_id) {
+            const request_id = self.generateRequestId();
+            const TPromise = IdsToReturnType(options, contract_id, method_id);
+            const promise = try self.allocator.create(TPromise);
+            promise.* = TPromise{};
 
-            var writer: std.Io.Writer = .fixed(self.send_buffer);
+            const SerializeWrapper = struct {
+                pub fn serialize(message: OutboundMessage, writer: *std.io.Writer) anyerror!MessageHeaders {
+                    const message_args: *@TypeOf(args) = @ptrCast(@alignCast(message.args));
 
-            try serializeHeaders(&writer, .{
-                .Request = .{
-                    .version = app_version,
-                    .contract_id = contract_id,
-                    .method_id = method_id,
-                    .msg_type = .Request,
-                    .request_id = 123,
-                    .payload_len = payload_len,
-                },
+                    const payload_len = try CountingSerializer.serialize(@TypeOf(message_args), message_args);
+                    const headers = MessageHeaders{
+                        .Request = .{
+                            .version = app_version,
+                            .contract_id = contract_id,
+                            .method_id = method_id,
+                            .msg_type = .Request,
+                            .request_id = message.request_id,
+                            .payload_len = payload_len,
+                        },
+                    };
+                    try serializeHeaders(writer, headers);
+
+                    try Serializer.serialize(@TypeOf(message_args), writer, message_args);
+                    return headers;
+                }
+            };
+
+            const heap_args = try self.allocator.create(@TypeOf(args));
+            heap_args.* = args;
+
+            self.outbound_queue.push(.{
+                .request_id = request_id,
+                .promise = promise,
+                .serialize = SerializeWrapper.serialize,
+                .args = heap_args,
             });
 
-            try Serializer.serialize(@TypeOf(args), &writer, args);
+            // notify the network thread that a new outbound message is available
+            _ = try std.posix.write(self.outgoing_wakeup_fd, std.mem.asBytes(&@as(u64, 1)));
 
-            const total_len = payload_len + 14; // header size
-            try writeAll(self.socket, self.send_buffer[0..total_len]);
+            return promise;
+        }
 
-            const response = try self.readMessage(self.socket);
-            var reader = std.io.Reader.fixed(response);
-
-            _ = try deserializeMessageHeaders(&reader);
-            var deserializer = Deserializer.init(self.allocator);
-            const data = try deserializer.deserialize(&reader, IdsToReturnType(options, contract_id, method_id));
-            return data;
+        fn generateRequestId(self: *Self) u32 {
+            self.current_request_id += 1;
+            return self.current_request_id;
         }
 
         fn writeAll(socket: posix.socket_t, data: []const u8) !void {
@@ -177,7 +201,7 @@ pub fn Client(comptime options: ClientOptions) type {
                 // process outbound messages
                 while (self.outbound_queue.tryPop()) |out_msg| {
                     var writer: std.io.Writer = .fixed(self.send_buffer);
-                    const headers = try out_msg.serialize(&writer);
+                    const headers = try out_msg.serialize(out_msg, &writer);
                     switch (headers) {
                         .Request => |req_headers| {
                             const total_len = req_headers.payload_len + 14; // header size = 14
@@ -191,7 +215,8 @@ pub fn Client(comptime options: ClientOptions) type {
 
                 // process inbound messages
                 if (self.polls[1].revents & posix.POLL.IN != posix.POLL.IN) {
-                    std.debug.print("Got some data\n", .{});
+                    const message = try self.readMessage(self.socket);
+                    std.debug.print("{any}\n", .{message});
                 }
             }
         }
@@ -212,7 +237,7 @@ fn IdsToReturnType(comptime options: ClientOptions, comptime contract_id: u16, c
 
                 if (i == method_id) {
                     const fn_info = @typeInfo(methodType).@"fn";
-                    return fn_info.return_type orelse void;
+                    return Promise(fn_info.return_type orelse void);
                 }
             }
 

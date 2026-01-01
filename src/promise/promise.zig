@@ -16,6 +16,10 @@ pub fn Promise(comptime T: type) type {
         result: T = undefined,
 
         pub fn await(self: *Self) !T {
+            if (self.state == .fulfilled) {
+                return self.result;
+            }
+
             self.mutex.lock();
             defer self.mutex.unlock();
 
@@ -23,10 +27,7 @@ pub fn Promise(comptime T: type) type {
                 self.cond.wait(&self.mutex);
             }
 
-            return switch (self.result) {
-                .ok => |value| value,
-                .err => |err| err,
-            };
+            return self.result;
         }
 
         pub fn resolve(self: *Self, value: T) void {
@@ -35,7 +36,7 @@ pub fn Promise(comptime T: type) type {
 
             if (self.state != .pending) return;
 
-            self.result = .{ .ok = value };
+            self.result = value;
             self.state = .fulfilled;
 
             self.cond.signal();
