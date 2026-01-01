@@ -17,6 +17,10 @@ pub fn main() !void {
 pub const TestContract = struct {
     pub fn testFunction(x: i32) i32 {
         // std.debug.print("---> testFunction: {}\n", .{x});
-        return 5 * x;
+        return x;
+    }
+
+    pub fn echoString(s: []const u8) []const u8 {
+        return s;
     }
 };

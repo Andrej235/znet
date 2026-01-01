@@ -1,5 +1,5 @@
 const std = @import("std");
-const MessageHeader = @import("message-headers.zig").MessageHeader;
+const MessageHeader = @import("message-headers.zig").MessageHeaders;
 const RequestHeader = @import("request-headers.zig").RequestHeaders;
 const ResponseHeader = @import("response-headers.zig").ResponseHeader;
 const app_version = @import("../app-version.zig").app_version;
