@@ -16,7 +16,10 @@ const createContracts = @import("server-contracts-wrapper.zig").createContracts;
 
 const Queue = @import("../utils/mpmc-queue.zig").Queue;
 const Promise = @import("../promise/promise.zig").Promise;
+
 const OutboundMessage = @import("outbound-message.zig").OutboundMessage;
+const InboundMessage = @import("inbound-message.zig").InboundMessage;
+const PendingRequest = @import("pending-request.zig").PendingRequest;
 
 const app_version: u8 = @import("../app-version.zig").app_version;
 
@@ -32,12 +35,22 @@ pub fn Client(comptime options: ClientOptions) type {
         read_pos: usize = 0,
         reader: std.io.Reader,
 
+        deserialize: Deserializer,
+
+        pending_requests_map: std.AutoHashMap(u32, PendingRequest),
+
         socket: posix.socket_t = undefined,
-        // 0 is outgoing queue wakeup, 1 is incoming data from server
-        polls: []posix.pollfd,
+
+        // 0 is outbound queue wakeup, 1 is incoming data from server
+        network_thread_polls: []posix.pollfd,
+        // 0 is inbound queu wakeup
+        worker_thread_polls: []posix.pollfd,
 
         outbound_queue: *Queue(OutboundMessage),
-        outgoing_wakeup_fd: posix.fd_t,
+        outbound_wakeup_fd: posix.fd_t,
+
+        inbound_queue: *Queue(InboundMessage),
+        inbound_wakeup_fd: posix.fd_t,
 
         current_request_id: u32 = 0,
 
@@ -49,8 +62,18 @@ pub fn Client(comptime options: ClientOptions) type {
             const outbound_queue = try allocator.create(Queue(OutboundMessage));
             outbound_queue.* = try Queue(OutboundMessage).init(outbound_buffer);
 
-            const polls = try allocator.alloc(posix.pollfd, 2);
-            const outgoing_wakeup_fd = try posix.eventfd(0, posix.SOCK.NONBLOCK);
+            const inbound_buffer = try allocator.alloc(InboundMessage, 128);
+            const inbound_queue = try allocator.create(Queue(InboundMessage));
+            inbound_queue.* = try Queue(InboundMessage).init(inbound_buffer);
+
+            const network_thread_polls = try allocator.alloc(posix.pollfd, 2);
+            const worker_thread_polls = try allocator.alloc(posix.pollfd, 1);
+
+            const outbound_wakeup_fd = try posix.eventfd(0, posix.SOCK.NONBLOCK);
+            const inbound_wakeup_fd = try posix.eventfd(0, posix.SOCK.NONBLOCK);
+
+            var pending_requests_map = std.AutoHashMap(u32, PendingRequest).init(allocator);
+            try pending_requests_map.ensureTotalCapacity(128);
 
             const self = try allocator.create(Self);
             self.* = Self{
@@ -61,34 +84,80 @@ pub fn Client(comptime options: ClientOptions) type {
                 .receive_buffer = receive_buffer,
                 .reader = std.io.Reader.fixed(receive_buffer),
 
+                .deserialize = Deserializer{
+                    .allocator = allocator,
+                },
+
                 .outbound_queue = outbound_queue,
-                .polls = polls,
-                .outgoing_wakeup_fd = outgoing_wakeup_fd,
+                .outbound_wakeup_fd = outbound_wakeup_fd,
+
+                .inbound_queue = inbound_queue,
+                .inbound_wakeup_fd = inbound_wakeup_fd,
+
+                .pending_requests_map = pending_requests_map,
+
+                .network_thread_polls = network_thread_polls,
+                .worker_thread_polls = worker_thread_polls,
             };
 
-            _ = try std.Thread.spawn(.{}, networkThread, .{self});
             return self;
         }
 
         pub fn connect(self: *Self, address: std.net.Address) !void {
-            self.socket = try posix.socket(
-                address.any.family,
-                posix.SOCK.STREAM,
-                posix.IPPROTO.TCP,
-            );
+            _ = try std.Thread.spawn(.{}, networkThread, .{ self, address });
 
-            try posix.connect(self.socket, &address.any, address.getOsSockLen());
+            // const buff: []u8 = try self.allocator.alloc(u8, 18);
+            // var w = std.io.Writer.fixed(buff);
+            // try serializeHeaders(&w, .{
+            //     .Request = .{
+            //         .contract_id = 0,
+            //         .method_id = 0,
+            //         .msg_type = .Request,
+            //         .payload_len = 4,
+            //         .request_id = 0,
+            //         .version = 1,
+            //     },
+            // });
+            // try w.writeInt(u32, 3, .big);
+            // try writeAll(self.socket, buff[0..18]);
         }
 
-        pub fn disconnect(_: Self) void {
-            std.debug.print("disconnecting... \n", .{});
+        pub fn disconnect(self: *Self) !void {
+            posix.close(self.socket);
         }
 
-        pub fn call(self: *Self, comptime contract_id: u16, comptime method_id: u16, args: anytype) anyerror!*IdsToReturnType(options, contract_id, method_id) {
+        pub fn call(self: *Self, comptime contract_id: u16, comptime method_id: u16, args: anytype) anyerror!*Promise(IdsToReturnType(options, contract_id, method_id)) {
             const request_id = self.generateRequestId();
-            const TPromise = IdsToReturnType(options, contract_id, method_id);
+            const TPromise = Promise(IdsToReturnType(options, contract_id, method_id));
             const promise = try self.allocator.create(TPromise);
             promise.* = TPromise{};
+
+            const DeserilizeWrapper = struct {
+                pub fn resolve(deserializer: *Deserializer, reader: *std.io.Reader, request_promise: *anyopaque) anyerror!void {
+                    const headers = try deserializeMessageHeaders(reader);
+
+                    switch (headers) {
+                        .Request => {
+                            return error.UnexpectedRequestInResponse;
+                        },
+                        .Response => |resp_header| {
+                            if (resp_header.version != app_version) {
+                                return error.VersionMismatch;
+                            }
+
+                            const result = try deserializer.deserialize(reader, IdsToReturnType(options, contract_id, method_id));
+
+                            const message_promise: *TPromise = @ptrCast(@alignCast(request_promise));
+                            message_promise.resolve(result);
+                        },
+                    }
+                }
+            };
+
+            try self.pending_requests_map.put(request_id, .{
+                .promise = promise,
+                .resolve = DeserilizeWrapper.resolve,
+            });
 
             const SerializeWrapper = struct {
                 pub fn serialize(message: OutboundMessage, writer: *std.io.Writer) anyerror!MessageHeaders {
@@ -123,7 +192,7 @@ pub fn Client(comptime options: ClientOptions) type {
             });
 
             // notify the network thread that a new outbound message is available
-            _ = try std.posix.write(self.outgoing_wakeup_fd, std.mem.asBytes(&@as(u64, 1)));
+            _ = try std.posix.write(self.outbound_wakeup_fd, std.mem.asBytes(&@as(u64, 1)));
 
             return promise;
         }
@@ -182,41 +251,96 @@ pub fn Client(comptime options: ClientOptions) type {
             return msg;
         }
 
-        fn networkThread(self: *Self) !void {
-            self.polls[0] = .{
-                .fd = self.outgoing_wakeup_fd,
+        fn networkThread(self: *Self, address: std.net.Address) !void {
+            self.socket = try posix.socket(
+                address.any.family,
+                posix.SOCK.STREAM,
+                posix.IPPROTO.TCP,
+            );
+
+            try posix.connect(self.socket, &address.any, address.getOsSockLen());
+
+            self.network_thread_polls[0] = .{
+                .fd = self.outbound_wakeup_fd,
                 .events = posix.POLL.IN,
                 .revents = 0,
             };
 
-            self.polls[1] = .{
+            self.network_thread_polls[1] = .{
                 .fd = self.socket,
+                .events = posix.POLL.IN | posix.POLL.OUT,
+                .revents = 0,
+            };
+
+            _ = try std.Thread.spawn(.{}, workerThread, .{self});
+
+            while (true) {
+                _ = try posix.poll(self.network_thread_polls, -1);
+
+                // process outbound messages
+                if (self.network_thread_polls[0].revents != 0) {
+                    while (self.outbound_queue.tryPop()) |out_msg| {
+                        var writer: std.io.Writer = .fixed(self.send_buffer);
+                        const headers = try out_msg.serialize(out_msg, &writer);
+                        switch (headers) {
+                            .Request => |req_headers| {
+                                const total_len = req_headers.payload_len + 14; // header size = 14
+                                try writeAll(self.socket, self.send_buffer[0..total_len]);
+                            },
+                            .Response => {
+                                std.debug.print("Tried to read response in outbound messages, client\n", .{});
+                            },
+                        }
+                    }
+
+                    // clear the wakeup event
+                    var buf: u64 = 0;
+                    _ = try std.posix.read(self.outbound_wakeup_fd, std.mem.asBytes(&buf));
+                }
+
+                // process inbound messages
+                inbound: {
+                    if (self.network_thread_polls[1].revents & posix.POLL.IN != posix.POLL.IN) {
+                        const message = self.readMessage(self.socket) catch |err| switch (err) {
+                            error.WouldBlock, error.NotOpenForReading => break :inbound,
+                            else => return err,
+                        };
+                        self.inbound_queue.push(.{
+                            .request_id = std.mem.readInt(u32, message[2..6], .big),
+                            .payload = message,
+                        });
+
+                        // notify the worker thread that a new inbound message is available
+                        _ = try std.posix.write(self.inbound_wakeup_fd, std.mem.asBytes(&@as(u64, 1)));
+                    }
+                }
+            }
+        }
+
+        fn workerThread(self: *Self) !void {
+            self.worker_thread_polls[0] = .{
+                .fd = self.inbound_wakeup_fd,
                 .events = posix.POLL.IN,
                 .revents = 0,
             };
 
             while (true) {
-                _ = try posix.poll(self.polls, -1);
-
-                // process outbound messages
-                while (self.outbound_queue.tryPop()) |out_msg| {
-                    var writer: std.io.Writer = .fixed(self.send_buffer);
-                    const headers = try out_msg.serialize(out_msg, &writer);
-                    switch (headers) {
-                        .Request => |req_headers| {
-                            const total_len = req_headers.payload_len + 14; // header size = 14
-                            try writeAll(self.socket, self.send_buffer[0..total_len]);
-                        },
-                        .Response => {
-                            std.debug.print("Tried to read response in outbound messages, client\n", .{});
-                        },
-                    }
-                }
+                _ = try posix.poll(self.worker_thread_polls, -1);
 
                 // process inbound messages
-                if (self.polls[1].revents & posix.POLL.IN != posix.POLL.IN) {
-                    const message = try self.readMessage(self.socket);
-                    std.debug.print("{any}\n", .{message});
+                if (self.worker_thread_polls[0].revents != 0) {
+                    while (self.inbound_queue.tryPop()) |in_msg| {
+                        if (self.pending_requests_map.get(in_msg.request_id)) |pending_request| {
+                            var reader: std.io.Reader = .fixed(in_msg.payload);
+                            try pending_request.resolve(&self.deserialize, &reader, pending_request.promise);
+                        } else {
+                            std.debug.print("No pending request found for request_id: {d}\n", .{in_msg.request_id});
+                        }
+                    }
+
+                    // clear the wakeup event
+                    var buf: u64 = 0;
+                    _ = try std.posix.read(self.inbound_wakeup_fd, std.mem.asBytes(&buf));
                 }
             }
         }
@@ -237,7 +361,7 @@ fn IdsToReturnType(comptime options: ClientOptions, comptime contract_id: u16, c
 
                 if (i == method_id) {
                     const fn_info = @typeInfo(methodType).@"fn";
-                    return Promise(fn_info.return_type orelse void);
+                    return fn_info.return_type orelse void;
                 }
             }
 

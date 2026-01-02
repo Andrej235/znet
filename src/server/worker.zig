@@ -39,14 +39,15 @@ pub const Worker = struct {
             const job = self.job_queue.pop();
             var reader: std.Io.Reader = .fixed(job.data);
 
-            const header = try deserializeMessageHeaders(&reader);
+            const headers = try deserializeMessageHeaders(&reader);
+            std.debug.print("responding to {}\n", .{headers.Request.request_id});
 
-            switch (header) {
+            switch (headers) {
                 .Request => |req_header| {
                     const handler = self.call_table[req_header.contract_id][req_header.method_id];
 
                     var writer: std.Io.Writer = .fixed(self.response_buffer);
-                    try handler(header.Request, self.allocator, &reader, &writer);
+                    try handler(headers.Request, self.allocator, &reader, &writer);
 
                     const response_payload_len = std.mem.readInt(u32, self.response_buffer[6..10], .big);
                     const response_data = try self.allocator.alloc(u8, response_payload_len + 10);

@@ -11,7 +11,6 @@ const Queue = @import("../utils/mpmc-queue.zig").Queue;
 
 const HandlerFn = @import("../handler-fn/handler-fn.zig").HandlerFn;
 const createHandlerFn = @import("../handler-fn/create-handler-fn.zig").createHandlerFn;
-const deserializeMessageHeader = @import("../message-headers/deserialize-message-headers.zig").deserializeMessageHeader;
 
 const ConnectionId = @import("connection-id.zig").ConnectionId;
 
@@ -270,20 +269,6 @@ pub fn Server(comptime options: ServerOptions) type {
             self.client_polls[at] = self.client_polls[last_index];
             self.poll_to_client[at] = self.poll_to_client[last_index];
             self.connected = last_index;
-        }
-
-        pub fn call(self: *const Self, reader: *std.Io.Reader, writer: *std.Io.Writer) !void {
-            const header = try deserializeMessageHeader(reader);
-
-            switch (header) {
-                .Request => |req_header| {
-                    const handler = call_tables[req_header.contract_id][req_header.method_id];
-                    try handler(header.Request, self.allocator, reader, writer);
-                },
-                .Response => {
-                    return error.UnexpectedResponseHeader;
-                },
-            }
         }
     };
 }
