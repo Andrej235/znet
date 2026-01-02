@@ -47,8 +47,8 @@ pub fn Server(comptime options: ServerOptions) type {
 
         wakeup_fd: posix.fd_t,
 
-        jobs_queue: *Queue(Job),
-        job_results_queue: *Queue(JobResult),
+        job_queue: *Queue(Job),
+        job_result_queue: *Queue(JobResult),
 
         pub fn init(allocator: std.mem.Allocator) !Self {
             // + 2 for the listening socket and the wakeup socket
@@ -63,12 +63,13 @@ pub fn Server(comptime options: ServerOptions) type {
 
             const job_queue = try allocator.create(Queue(Job));
             job_queue.* = try Queue(Job).init(jobs_buf);
+            errdefer allocator.destroy(job_queue);
 
             const job_results_buf = try allocator.alloc(JobResult, 128); //todo: make configurable
             errdefer allocator.free(job_results_buf);
 
-            const job_results_queue = try allocator.create(Queue(JobResult));
-            job_results_queue.* = try Queue(JobResult).init(job_results_buf);
+            const job_result_queue = try allocator.create(Queue(JobResult));
+            job_result_queue.* = try Queue(JobResult).init(job_results_buf);
 
             const wakeup_fd = try posix.eventfd(0, posix.SOCK.NONBLOCK);
 
@@ -76,7 +77,7 @@ pub fn Server(comptime options: ServerOptions) type {
                 const worker = try allocator.create(Worker);
                 worker.* = try Worker.init(
                     job_queue,
-                    job_results_queue,
+                    job_result_queue,
                     call_tables,
                     wakeup_fd,
                     allocator,
@@ -89,21 +90,25 @@ pub fn Server(comptime options: ServerOptions) type {
             }
 
             var free_indices = try allocator.alloc(ConnectionId, options.max_clients);
+            errdefer allocator.free(free_indices);
             for (0..options.max_clients) |i| {
                 free_indices[i] = .{ .index = @intCast(i), .gen = 0 };
             }
+
+            const poll_to_client = try allocator.alloc(u32, options.max_clients);
+            errdefer allocator.free(poll_to_client);
 
             return .{
                 .polls = polls,
                 .clients = clients,
                 .client_polls = polls[2..],
-                .poll_to_client = try allocator.alloc(u32, options.max_clients),
+                .poll_to_client = poll_to_client,
                 .free_indices = free_indices,
                 .free_count = options.max_clients,
                 .connected = 0,
                 .allocator = allocator,
-                .jobs_queue = job_queue,
-                .job_results_queue = job_results_queue,
+                .job_queue = job_queue,
+                .job_result_queue = job_result_queue,
                 .wakeup_fd = wakeup_fd,
             };
         }
@@ -168,10 +173,11 @@ pub fn Server(comptime options: ServerOptions) type {
                                 break;
                             };
 
-                            const heap_msg = try self.allocator.alloc(u8, msg.len); // todo: free this somewhere, maybe in worker thread after processing?
+                            // freed in worker thread after processing
+                            const heap_msg = try self.allocator.alloc(u8, msg.len);
                             @memcpy(heap_msg, msg);
 
-                            self.jobs_queue.push(.{ .data = heap_msg, .client_id = client.id });
+                            self.job_queue.push(.{ .data = heap_msg, .client_id = client.id });
                         }
                     } else {
                         std.debug.print("Client ready for out\n", .{});
@@ -186,7 +192,7 @@ pub fn Server(comptime options: ServerOptions) type {
                     _ = try posix.read(self.wakeup_fd, &buf);
 
                     // process all available job results
-                    while (self.job_results_queue.tryPop()) |job_result| {
+                    while (self.job_result_queue.tryPop()) |job_result| {
                         defer self.allocator.free(job_result.data);
 
                         const client_idx = job_result.client_id.index;

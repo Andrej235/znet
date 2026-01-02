@@ -1,7 +1,7 @@
 const std = @import("std");
 const SerializationErrors = @import("errors.zig").CountingSerializationErrors;
 
-// todo, optimize for arrays and slices of static types like u8, i32, etc
+// todo: optimize for arrays and slices of static types like u8, i32, etc
 
 pub const Serializer = struct {
     pub fn serialize(comptime T: type, data: T) SerializationErrors!u32 {
@@ -83,7 +83,6 @@ pub const Serializer = struct {
                 @compileError("C pointers are not supported, consider using a slice instead");
             },
             .slice => {
-                // todo: optimize for strings, use writeAll
                 const len = data.len;
                 var size: u32 = @sizeOf(@TypeOf(len));
                 for (0..len) |i| {

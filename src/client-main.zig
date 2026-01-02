@@ -15,11 +15,10 @@ pub fn main() !void {
     const address = try std.net.Address.parseIp("127.0.0.1", 5882);
     try client.connect(address);
 
-    const result = try client.contracts.Test.echoString(client, .{"Hello, world!"});
+    const result: []const u8 = (try client.contracts.Test.echoString(client, .{"Hello, world!"})).await();
 
-    const a = try result.await();
-    std.debug.print("{s}", .{a});
-    try client.disconnect();
+    std.debug.print("{s}\n", .{result});
+    try client.deinit();
 
     // keep the program alive to allow background network thread to operate, todo: get rid of this
     std.Thread.sleep(100000000000);

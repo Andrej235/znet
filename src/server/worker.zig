@@ -40,7 +40,6 @@ pub const Worker = struct {
             var reader: std.Io.Reader = .fixed(job.data);
 
             const headers = try deserializeMessageHeaders(&reader);
-            std.debug.print("responding to {}\n", .{headers.Request.request_id});
 
             switch (headers) {
                 .Request => |req_header| {
@@ -58,10 +57,12 @@ pub const Worker = struct {
                         .data = response_data,
                     };
                     self.job_result_queue.push(job_result);
-                    // Note: response_data will be freed by the server after sending
 
+                    // response_data will be freed by the server after sending
                     // notify the reactor thread that a new job result is available
                     _ = try std.posix.write(self.wakeup_fd, std.mem.asBytes(&@as(u64, 1)));
+
+                    self.allocator.free(job.data);
                 },
                 .Response => {
                     return error.UnexpectedResponseHeader;

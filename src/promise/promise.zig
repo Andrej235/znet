@@ -15,7 +15,27 @@ pub fn Promise(comptime T: type) type {
         state: State = .pending,
         result: T = undefined,
 
-        pub fn await(self: *Self) !T {
+        allocator: std.mem.Allocator,
+
+        pub fn init(allocator: std.mem.Allocator) !*Self {
+            const self = try allocator.create(Self);
+            self.* = Self{
+                .mutex = std.Thread.Mutex{},
+                .cond = std.Thread.Condition{},
+                .state = .pending,
+                .result = undefined,
+                .allocator = allocator,
+            };
+
+            return self;
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.cond.signal();
+            self.allocator.destroy(self);
+        }
+
+        pub fn await(self: *Self) T {
             if (self.state == .fulfilled) {
                 return self.result;
             }

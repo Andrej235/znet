@@ -46,9 +46,11 @@ pub fn Client(comptime options: ClientOptions) type {
         // 0 is inbound queu wakeup
         worker_thread_polls: []posix.pollfd,
 
+        outbound_buffer: []OutboundMessage,
         outbound_queue: *Queue(OutboundMessage),
         outbound_wakeup_fd: posix.fd_t,
 
+        inbound_buffer: []InboundMessage,
         inbound_queue: *Queue(InboundMessage),
         inbound_wakeup_fd: posix.fd_t,
 
@@ -88,9 +90,11 @@ pub fn Client(comptime options: ClientOptions) type {
                     .allocator = allocator,
                 },
 
+                .outbound_buffer = outbound_buffer,
                 .outbound_queue = outbound_queue,
                 .outbound_wakeup_fd = outbound_wakeup_fd,
 
+                .inbound_buffer = inbound_buffer,
                 .inbound_queue = inbound_queue,
                 .inbound_wakeup_fd = inbound_wakeup_fd,
 
@@ -103,23 +107,24 @@ pub fn Client(comptime options: ClientOptions) type {
             return self;
         }
 
+        pub fn deinit(self: *Self) !void {
+            self.allocator.free(self.send_buffer);
+            self.allocator.free(self.receive_buffer);
+
+            self.allocator.free(self.outbound_buffer);
+            self.allocator.destroy(self.outbound_queue);
+            self.allocator.free(self.inbound_buffer);
+            self.allocator.destroy(self.inbound_queue);
+
+            self.allocator.free(self.network_thread_polls);
+            self.allocator.free(self.worker_thread_polls);
+
+            self.pending_requests_map.deinit();
+            self.allocator.destroy(self);
+        }
+
         pub fn connect(self: *Self, address: std.net.Address) !void {
             _ = try std.Thread.spawn(.{}, networkThread, .{ self, address });
-
-            // const buff: []u8 = try self.allocator.alloc(u8, 18);
-            // var w = std.io.Writer.fixed(buff);
-            // try serializeHeaders(&w, .{
-            //     .Request = .{
-            //         .contract_id = 0,
-            //         .method_id = 0,
-            //         .msg_type = .Request,
-            //         .payload_len = 4,
-            //         .request_id = 0,
-            //         .version = 1,
-            //     },
-            // });
-            // try w.writeInt(u32, 3, .big);
-            // try writeAll(self.socket, buff[0..18]);
         }
 
         pub fn disconnect(self: *Self) !void {
@@ -129,8 +134,8 @@ pub fn Client(comptime options: ClientOptions) type {
         pub fn call(self: *Self, comptime contract_id: u16, comptime method_id: u16, args: anytype) anyerror!*Promise(IdsToReturnType(options, contract_id, method_id)) {
             const request_id = self.generateRequestId();
             const TPromise = Promise(IdsToReturnType(options, contract_id, method_id));
-            const promise = try self.allocator.create(TPromise);
-            promise.* = TPromise{};
+            // allocated in init, must deallocated by consumer
+            const promise = try TPromise.init(self.allocator);
 
             const DeserilizeWrapper = struct {
                 pub fn resolve(deserializer: *Deserializer, reader: *std.io.Reader, request_promise: *anyopaque) anyerror!void {
@@ -162,6 +167,7 @@ pub fn Client(comptime options: ClientOptions) type {
             const SerializeWrapper = struct {
                 pub fn serialize(message: OutboundMessage, writer: *std.io.Writer) anyerror!MessageHeaders {
                     const message_args: *@TypeOf(args) = @ptrCast(@alignCast(message.args));
+                    defer message.allocator.destroy(message_args);
 
                     const payload_len = try CountingSerializer.serialize(@TypeOf(message_args), message_args);
                     const headers = MessageHeaders{
@@ -177,16 +183,19 @@ pub fn Client(comptime options: ClientOptions) type {
                     try serializeHeaders(writer, headers);
 
                     try Serializer.serialize(@TypeOf(message_args), writer, message_args);
+
                     return headers;
                 }
             };
 
+            // freed in network thread after sending by SerializeWrapper.serialize
             const heap_args = try self.allocator.create(@TypeOf(args));
             heap_args.* = args;
 
             self.outbound_queue.push(.{
                 .request_id = request_id,
                 .promise = promise,
+                .allocator = self.allocator,
                 .serialize = SerializeWrapper.serialize,
                 .args = heap_args,
             });
@@ -207,6 +216,14 @@ pub fn Client(comptime options: ClientOptions) type {
             while (sent < data.len) {
                 sent += try posix.write(socket, data[sent..]);
             }
+        }
+
+        fn safeReadMessage(self: *Self, socket: posix.socket_t) !?[]u8 {
+            const msg = self.readMessage(socket) catch |err| switch (err) {
+                error.WouldBlock, error.NotOpenForReading => return null,
+                else => return err,
+            };
+            return msg;
         }
 
         fn readMessage(self: *Self, socket: posix.socket_t) ![]u8 {
@@ -299,12 +316,8 @@ pub fn Client(comptime options: ClientOptions) type {
                 }
 
                 // process inbound messages
-                inbound: {
-                    if (self.network_thread_polls[1].revents & posix.POLL.IN != posix.POLL.IN) {
-                        const message = self.readMessage(self.socket) catch |err| switch (err) {
-                            error.WouldBlock, error.NotOpenForReading => break :inbound,
-                            else => return err,
-                        };
+                if (self.network_thread_polls[1].revents & posix.POLL.IN == posix.POLL.IN) {
+                    while (try self.safeReadMessage(self.socket)) |message| {
                         self.inbound_queue.push(.{
                             .request_id = std.mem.readInt(u32, message[2..6], .big),
                             .payload = message,
@@ -333,6 +346,8 @@ pub fn Client(comptime options: ClientOptions) type {
                         if (self.pending_requests_map.get(in_msg.request_id)) |pending_request| {
                             var reader: std.io.Reader = .fixed(in_msg.payload);
                             try pending_request.resolve(&self.deserialize, &reader, pending_request.promise);
+
+                            _ = self.pending_requests_map.remove(in_msg.request_id);
                         } else {
                             std.debug.print("No pending request found for request_id: {d}\n", .{in_msg.request_id});
                         }
