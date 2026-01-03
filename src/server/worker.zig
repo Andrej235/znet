@@ -69,6 +69,9 @@ pub const Worker = struct {
                 .Response => {
                     return error.UnexpectedResponseHeader;
                 },
+                .Broadcast => {
+                    return error.UnexpectedBroadcastHeader;
+                },
             }
         }
     }

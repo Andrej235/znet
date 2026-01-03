@@ -32,6 +32,16 @@ pub fn deserializeMessageHeaders(reader: *std.Io.Reader) DeserializeMessageHeade
             };
             return .{ .Response = header };
         },
+        2 => {
+            const header: @import("broadcast-headers.zig").BroadcastHeaders = .{
+                .version = version,
+                .message_type = .Broadcast,
+                .contract_id = reader.takeInt(u16, .big) catch return DeserializeMessageHeaderErrors.FailedToReadField,
+                .method_id = reader.takeInt(u16, .big) catch return DeserializeMessageHeaderErrors.FailedToReadField,
+                .payload_len = reader.takeInt(u32, .big) catch return DeserializeMessageHeaderErrors.FailedToReadField,
+            };
+            return .{ .Broadcast = header };
+        },
         else => return DeserializeMessageHeaderErrors.InvalidMessageType,
     };
 }

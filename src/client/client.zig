@@ -125,6 +125,7 @@ pub fn Client(comptime options: ClientOptions) type {
         }
 
         pub fn connect(self: *Self, address: std.net.Address) !void {
+            // networkThread will spawn the worker thread, connect the socket and create all polls
             _ = try std.Thread.spawn(.{}, networkThread, .{ self, address });
         }
 
@@ -146,6 +147,9 @@ pub fn Client(comptime options: ClientOptions) type {
                     switch (headers) {
                         .Request => {
                             return error.UnexpectedRequestInResponse;
+                        },
+                        .Broadcast => {
+                            return error.UnexpectedBroadcastInResponse;
                         },
                         .Response => |resp_header| {
                             if (resp_header.version != app_version) {
@@ -321,6 +325,9 @@ pub fn Client(comptime options: ClientOptions) type {
                             },
                             .Response => {
                                 std.debug.print("Tried to read response in outbound messages, client\n", .{});
+                            },
+                            .Broadcast => {
+                                std.debug.print("Tried to read broadcast in outbound messages, client\n", .{});
                             },
                         }
                     }

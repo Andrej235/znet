@@ -17,5 +17,12 @@ pub fn serializeMessageHeaders(writer: *std.Io.Writer, header: MessageHeader) an
             try writer.writeInt(u32, res_header.request_id, .big);
             try writer.writeInt(u32, res_header.payload_len, .big);
         },
+        .Broadcast => |bcast_header| {
+            try writer.writeInt(u8, bcast_header.version, .big);
+            try writer.writeInt(u8, 2, .big); // MessageType.Broadcast
+            try writer.writeInt(u16, bcast_header.contract_id, .big);
+            try writer.writeInt(u16, bcast_header.method_id, .big);
+            try writer.writeInt(u32, bcast_header.payload_len, .big);
+        },
     }
 }
