@@ -58,14 +58,14 @@ pub fn Client(comptime options: ClientOptions) type {
         current_request_id: u32 = 0,
 
         pub fn init(allocator: std.mem.Allocator) !*Self {
-            const send_buffer = try allocator.alloc(u8, 1024);
-            const receive_buffer = try allocator.alloc(u8, 1024);
+            const send_buffer = try allocator.alloc(u8, options.write_buffer_size);
+            const receive_buffer = try allocator.alloc(u8, options.read_buffer_size);
 
-            const outbound_buffer = try allocator.alloc(OutboundMessage, 128);
+            const outbound_buffer = try allocator.alloc(OutboundMessage, options.max_outbound_messages);
             const outbound_queue = try allocator.create(Queue(OutboundMessage));
             outbound_queue.* = try Queue(OutboundMessage).init(outbound_buffer);
 
-            const inbound_buffer = try allocator.alloc(InboundMessage, 128);
+            const inbound_buffer = try allocator.alloc(InboundMessage, options.max_inbound_messages);
             const inbound_queue = try allocator.create(Queue(InboundMessage));
             inbound_queue.* = try Queue(InboundMessage).init(inbound_buffer);
 
@@ -76,7 +76,7 @@ pub fn Client(comptime options: ClientOptions) type {
             const inbound_wakeup_fd = try posix.eventfd(0, posix.SOCK.NONBLOCK);
 
             var pending_requests_map = std.AutoHashMap(u32, PendingRequest).init(allocator);
-            try pending_requests_map.ensureTotalCapacity(128);
+            try pending_requests_map.ensureTotalCapacity(options.max_pending_requests);
 
             const self = try allocator.create(Self);
             self.* = Self{

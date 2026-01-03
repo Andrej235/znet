@@ -11,12 +11,13 @@ pub const ClientConnection = struct {
     id: ConnectionId,
 
     pub fn init(
+        comptime read_buffer_size: usize,
         allocator: std.mem.Allocator,
         socket: posix.socket_t,
         address: std.net.Address,
         id: ConnectionId,
     ) !ClientConnection {
-        const reader = try ConnectionReader.init(allocator, 4096);
+        const reader = try ConnectionReader.init(allocator, read_buffer_size);
         errdefer reader.deinit(allocator);
 
         return .{
@@ -33,7 +34,7 @@ pub const ClientConnection = struct {
 
     pub fn readMessage(self: *ClientConnection) !?[]const u8 {
         return self.reader.readMessage(self.socket) catch |err| switch (err) {
-            error.WouldBlock, error.NotOpenForReading  => return null,
+            error.WouldBlock, error.NotOpenForReading => return null,
             error.Closed => {
                 std.debug.print("[{f}] disconnected\n", .{self.address.in});
                 return error.Closed;

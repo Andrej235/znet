@@ -17,6 +17,7 @@ pub const Worker = struct {
     response_buffer: []u8,
 
     pub fn init(
+        comptime response_buffer_size: usize,
         job_queue: *Queue(Job),
         job_result_queue: *Queue(JobResult),
         call_table: []const []const HandlerFn,
@@ -26,11 +27,12 @@ pub const Worker = struct {
         return .{
             .job_queue = job_queue,
             .job_result_queue = job_result_queue,
-            .wakeup_fd = wakeup_fd,
 
             .call_table = call_table,
+            .wakeup_fd = wakeup_fd,
+
             .allocator = allocator,
-            .response_buffer = try allocator.alloc(u8, 1024),
+            .response_buffer = try allocator.alloc(u8, response_buffer_size),
         };
     }
 

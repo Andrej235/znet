@@ -58,14 +58,14 @@ pub fn Server(comptime options: ServerOptions) type {
             const clients = try allocator.alloc(ClientConnection, options.max_clients);
             errdefer allocator.free(clients);
 
-            const jobs_buf = try allocator.alloc(Job, 128); //todo: make configurable
+            const jobs_buf = try allocator.alloc(Job, options.max_jobs_in_queue);
             errdefer allocator.free(jobs_buf);
 
             const job_queue = try allocator.create(Queue(Job));
             job_queue.* = try Queue(Job).init(jobs_buf);
             errdefer allocator.destroy(job_queue);
 
-            const job_results_buf = try allocator.alloc(JobResult, 128); //todo: make configurable
+            const job_results_buf = try allocator.alloc(JobResult, options.max_jobs_in_queue);
             errdefer allocator.free(job_results_buf);
 
             const job_result_queue = try allocator.create(Queue(JobResult));
@@ -73,9 +73,10 @@ pub fn Server(comptime options: ServerOptions) type {
 
             const wakeup_fd = try posix.eventfd(0, posix.SOCK.NONBLOCK);
 
-            for (0..8) |i| {
+            for (0..options.worker_threads) |i| {
                 const worker = try allocator.create(Worker);
                 worker.* = try Worker.init(
+                    options.job_result_buffer_size,
                     job_queue,
                     job_result_queue,
                     call_tables,
@@ -228,7 +229,7 @@ pub fn Server(comptime options: ServerOptions) type {
                 const client_id = self.popIndex();
                 std.debug.print("[{f}] connected as {} (gen {})\n", .{ address.in, client_id.index, client_id.gen });
 
-                const client = ClientConnection.init(self.allocator, socket, address, client_id) catch |err| {
+                const client = ClientConnection.init(options.client_read_buffer_size, self.allocator, socket, address, client_id) catch |err| {
                     posix.close(socket);
                     std.debug.print("failed to initialize client: {}", .{err});
                     self.pushIndex(client_id);
