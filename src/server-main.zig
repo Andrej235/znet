@@ -16,11 +16,21 @@ pub fn main() !void {
 
 pub const TestContract = struct {
     pub fn testFunction(x: i32) i32 {
-        // std.debug.print("---> testFunction: {}\n", .{x});
         return x;
     }
 
     pub fn echoString(s: []const u8) []const u8 {
         return s;
     }
+
+    pub fn add(a: i32) AddErrors!i32 {
+        if (a > 5)
+            return error.ValOver5;
+
+        return a;
+    }
+};
+
+pub const AddErrors = error{
+    ValOver5,
 };

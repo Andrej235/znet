@@ -10,6 +10,7 @@ const deserializeMessageHeaders = @import("../message-headers/deserialize-messag
 const Serializer = @import("../serializer/serializer.zig").Serializer;
 const CountingSerializer = @import("../serializer/counting-serializer.zig").Serializer;
 const Deserializer = @import("../serializer/deserializer.zig").Deserializer;
+const DeserializationErrors = @import("../serializer/errors.zig").DeserializationErrors;
 
 const ContractsWrapper = @import("server-contracts-wrapper.zig").ContractsWrapper;
 const createContracts = @import("server-contracts-wrapper.zig").createContracts;
@@ -133,7 +134,8 @@ pub fn Client(comptime options: ClientOptions) type {
 
         pub fn call(self: *Self, comptime contract_id: u16, comptime method_id: u16, args: anytype) anyerror!*Promise(IdsToReturnType(options, contract_id, method_id)) {
             const request_id = self.generateRequestId();
-            const TPromise = Promise(IdsToReturnType(options, contract_id, method_id));
+            const TResponse = IdsToReturnType(options, contract_id, method_id);
+            const TPromise = Promise(TResponse);
             // allocated in init, must deallocated by consumer
             const promise = try TPromise.init(self.allocator);
 
@@ -150,7 +152,20 @@ pub fn Client(comptime options: ClientOptions) type {
                                 return error.VersionMismatch;
                             }
 
-                            const result = try deserializer.deserialize(reader, IdsToReturnType(options, contract_id, method_id));
+                            const result = if (@typeInfo(TResponse) == .error_union) deserializer.deserialize(reader, TResponse) catch |err| switch (err) {
+                                DeserializationErrors.AllocationFailed,
+                                DeserializationErrors.BooleanDeserializationFailed,
+                                DeserializationErrors.EndOfStream,
+                                DeserializationErrors.IntegerDeserializationFailed,
+                                DeserializationErrors.InvalidBooleanValue,
+                                DeserializationErrors.InvalidUnionTag,
+                                DeserializationErrors.OutOfMemory,
+                                DeserializationErrors.UnexpectedEof,
+                                => {
+                                    return error.DeserializationFailed;
+                                },
+                                else => @as(@typeInfo(TResponse).error_union.error_set, @errorCast(err)),
+                            } else deserializer.deserialize(reader, TResponse) catch return error.DeserializationFailed;
 
                             const message_promise: *TPromise = @ptrCast(@alignCast(request_promise));
                             message_promise.resolve(result);
@@ -345,7 +360,9 @@ pub fn Client(comptime options: ClientOptions) type {
                     while (self.inbound_queue.tryPop()) |in_msg| {
                         if (self.pending_requests_map.get(in_msg.request_id)) |pending_request| {
                             var reader: std.io.Reader = .fixed(in_msg.payload);
-                            try pending_request.resolve(&self.deserialize, &reader, pending_request.promise);
+                            pending_request.resolve(&self.deserialize, &reader, pending_request.promise) catch |err| {
+                                std.debug.print("Error resolving request_id {d}: {}\n", .{ in_msg.request_id, err });
+                            };
 
                             _ = self.pending_requests_map.remove(in_msg.request_id);
                         } else {
