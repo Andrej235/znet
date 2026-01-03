@@ -9,8 +9,8 @@ const Worker = @import("worker.zig").Worker;
 const JobResult = @import("job-result.zig").JobResult;
 const Queue = @import("../utils/mpmc-queue.zig").Queue;
 
-const HandlerFn = @import("../handler-fn/handler-fn.zig").HandlerFn;
-const createHandlerFn = @import("../handler-fn/create-handler-fn.zig").createHandlerFn;
+const HandlerFn = @import("handler-fn/handler-fn.zig").HandlerFn;
+const createHandlerFn = @import("handler-fn/create-handler-fn.zig").createHandlerFn;
 
 const ConnectionId = @import("connection-id.zig").ConnectionId;
 

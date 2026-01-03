@@ -4,7 +4,7 @@ const Queue = @import("../utils/mpmc-queue.zig").Queue;
 const Job = @import("job.zig").Job;
 const JobResult = @import("job-result.zig").JobResult;
 
-const HandlerFn = @import("../handler-fn/handler-fn.zig").HandlerFn;
+const HandlerFn = @import("handler-fn/handler-fn.zig").HandlerFn;
 const deserializeMessageHeaders = @import("../message-headers/deserialize-message-headers.zig").deserializeMessageHeaders;
 
 pub const Worker = struct {

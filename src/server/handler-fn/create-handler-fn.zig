@@ -1,10 +1,10 @@
 const std = @import("std");
 
-const RequestHeaders = @import("../message-headers/request-headers.zig").RequestHeaders;
-const serializeMessageHeader = @import("../message-headers/serialize-message-headers.zig").serializeMessageHeaders;
-const Deserializer = @import("../serializer/deserializer.zig").Deserializer;
-const Serializer = @import("../serializer/serializer.zig").Serializer;
-const CountingSerializer = @import("../serializer/counting-serializer.zig").Serializer;
+const RequestHeaders = @import("../../message-headers/request-headers.zig").RequestHeaders;
+const serializeMessageHeader = @import("../../message-headers/serialize-message-headers.zig").serializeMessageHeaders;
+const Deserializer = @import("../../serializer/deserializer.zig").Deserializer;
+const Serializer = @import("../../serializer/serializer.zig").Serializer;
+const CountingSerializer = @import("../../serializer/counting-serializer.zig").Serializer;
 const HandlerFn = @import("handler-fn.zig").HandlerFn;
 
 pub fn createHandlerFn(comptime fn_impl: anytype) HandlerFn {
