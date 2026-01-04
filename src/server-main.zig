@@ -29,6 +29,9 @@ pub const TestContract = struct {
 
         return a;
     }
+
+    // context switching / todo: replace the wrapped contracts object with a fetch(Contract.function, args), could completely omit the required client parameter as it could be a decl with self param
+
 };
 
 pub const AddErrors = error{

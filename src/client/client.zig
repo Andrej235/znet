@@ -225,6 +225,165 @@ pub fn Client(comptime options: ClientOptions) type {
             return promise;
         }
 
+        pub fn fetch(self: *Self, method: anytype, args: MethodTupleArg(method)) anyerror!AsyncMethodReturnType(method) {
+            const ids = comptime getMethodId(method);
+            const contract_id: u16 = ids.contract_id;
+            const method_id: u16 = ids.method_id;
+
+            const request_id = self.generateRequestId();
+            const TResponse = IdsToReturnType(options, contract_id, method_id);
+            const TPromise = Promise(TResponse);
+            // allocated in init, must deallocated by consumer
+            const promise = try TPromise.init(self.allocator);
+
+            const DeserilizeWrapper = struct {
+                pub fn resolve(deserializer: *Deserializer, reader: *std.io.Reader, request_promise: *anyopaque) anyerror!void {
+                    const headers = try deserializeMessageHeaders(reader);
+
+                    switch (headers) {
+                        .Request => {
+                            return error.UnexpectedRequestInResponse;
+                        },
+                        .Broadcast => {
+                            return error.UnexpectedBroadcastInResponse;
+                        },
+                        .Response => |resp_header| {
+                            if (resp_header.version != app_version) {
+                                return error.VersionMismatch;
+                            }
+
+                            const result = if (@typeInfo(TResponse) == .error_union) deserializer.deserialize(reader, TResponse) catch |err| switch (err) {
+                                DeserializationErrors.AllocationFailed,
+                                DeserializationErrors.BooleanDeserializationFailed,
+                                DeserializationErrors.EndOfStream,
+                                DeserializationErrors.IntegerDeserializationFailed,
+                                DeserializationErrors.InvalidBooleanValue,
+                                DeserializationErrors.InvalidUnionTag,
+                                DeserializationErrors.OutOfMemory,
+                                DeserializationErrors.UnexpectedEof,
+                                => {
+                                    return error.DeserializationFailed;
+                                },
+                                else => @as(@typeInfo(TResponse).error_union.error_set, @errorCast(err)),
+                            } else deserializer.deserialize(reader, TResponse) catch return error.DeserializationFailed;
+
+                            const message_promise: *TPromise = @ptrCast(@alignCast(request_promise));
+                            message_promise.resolve(result);
+                        },
+                    }
+                }
+            };
+
+            try self.pending_requests_map.put(request_id, .{
+                .promise = promise,
+                .resolve = DeserilizeWrapper.resolve,
+            });
+
+            const SerializeWrapper = struct {
+                pub fn serialize(message: OutboundMessage, writer: *std.io.Writer) anyerror!MessageHeaders {
+                    const message_args: *@TypeOf(args) = @ptrCast(@alignCast(message.args));
+                    defer message.allocator.destroy(message_args);
+
+                    const payload_len = try CountingSerializer.serialize(@TypeOf(message_args), message_args);
+                    const headers = MessageHeaders{
+                        .Request = .{
+                            .version = app_version,
+                            .contract_id = contract_id,
+                            .method_id = method_id,
+                            .msg_type = .Request,
+                            .request_id = message.request_id,
+                            .payload_len = payload_len,
+                        },
+                    };
+                    try serializeHeaders(writer, headers);
+
+                    try Serializer.serialize(@TypeOf(message_args), writer, message_args);
+
+                    return headers;
+                }
+            };
+
+            // freed in network thread after sending by SerializeWrapper.serialize
+            const heap_args = try self.allocator.create(@TypeOf(args));
+            heap_args.* = args;
+
+            self.outbound_queue.push(.{
+                .request_id = request_id,
+                .promise = promise,
+                .allocator = self.allocator,
+                .serialize = SerializeWrapper.serialize,
+                .args = heap_args,
+            });
+
+            // notify the network thread that a new outbound message is available
+            _ = try std.posix.write(self.outbound_wakeup_fd, std.mem.asBytes(&@as(u64, 1)));
+
+            return promise;
+        }
+
+        fn getMethodId(comptime method: anytype) struct { contract_id: u16, method_id: u16 } {
+            inline for (options.server_contracts, 0..) |TContract, contract_id| {
+                inline for (@typeInfo(TContract).@"struct".decls, 0..) |decl, method_id| {
+                    const m = @field(TContract, decl.name);
+                    if (@TypeOf(m) == @TypeOf(method) and m == method) {
+                        return .{ .contract_id = contract_id, .method_id = method_id }; // todo: hardcoded contract id
+                    }
+                }
+            }
+
+            @compileError("Method not found in any of the registered contracts");
+        }
+
+        fn MethodTupleArg(comptime method: anytype) type {
+            const type_info = @typeInfo(@TypeOf(method));
+            const fn_info = switch (type_info) {
+                .@"fn" => |@"fn"| @"fn",
+                .pointer => |ptr_info| switch (@typeInfo(ptr_info.child)) {
+                    .@"fn" => |fn_info| fn_info,
+                    else => @compileError("MethodTupleArg only supports function types"),
+                },
+                else => @compileError("MethodTupleArg only supports function types"),
+            };
+
+            var arg_fields: [fn_info.params.len]std.builtin.Type.StructField = undefined;
+            inline for (fn_info.params, 0..) |param, idx| {
+                arg_fields[idx] = std.builtin.Type.StructField{
+                    .name = std.fmt.comptimePrint("{}", .{idx}),
+                    .type = param.type.?,
+                    .alignment = @alignOf(param.type.?),
+                    .is_comptime = false,
+                    .default_value_ptr = null,
+                };
+            }
+
+            const argument = @Type(.{
+                .@"struct" = .{
+                    .is_tuple = true,
+                    .backing_integer = null,
+                    .layout = .auto,
+                    .decls = &.{},
+                    .fields = &arg_fields,
+                },
+            });
+
+            return argument;
+        }
+
+        fn AsyncMethodReturnType(comptime method: anytype) type {
+            const type_info = @typeInfo(@TypeOf(method));
+            const fn_info = switch (type_info) {
+                .@"fn" => |@"fn"| @"fn",
+                .pointer => |ptr_info| switch (@typeInfo(ptr_info.child)) {
+                    .@"fn" => |fn_info| fn_info,
+                    else => @compileError("AsyncMethodReturnType only supports function types"),
+                },
+                else => @compileError("AsyncMethodReturnType only supports function types"),
+            };
+
+            const ReturnType = *Promise(fn_info.return_type orelse void);
+            return ReturnType;
+        }
+
         fn generateRequestId(self: *Self) u32 {
             self.current_request_id += 1;
             return self.current_request_id;

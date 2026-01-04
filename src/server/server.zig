@@ -283,16 +283,16 @@ pub fn Server(comptime options: ServerOptions) type {
 pub fn createCallTable(comptime options: ServerOptions) []const []const HandlerFn {
     comptime {
         var call_table: []const []const HandlerFn = &.{};
-        for (options.contracts) |contract| {
+        for (options.contracts) |TContract| {
             var handlers: []const HandlerFn = &.{};
 
-            const info = @typeInfo(contract);
+            const info = @typeInfo(TContract);
             if (info != .@"struct") continue;
             const decls = info.@"struct".decls;
 
             for (decls) |decl| {
                 const fn_name = decl.name;
-                const fn_impl = @field(contract, fn_name);
+                const fn_impl = @field(TContract, fn_name);
 
                 if (@typeInfo(@TypeOf(fn_impl)) != .@"fn") continue;
                 handlers = handlers ++ @as([]const HandlerFn, &.{createHandlerFn(fn_impl)});
