@@ -98,10 +98,7 @@ pub const Serializer = struct {
     }
 
     inline fn serializeErrorUnion(data: anytype, comptime error_union_info: std.builtin.Type.ErrorUnion) SerializationErrors!u32 {
-        const safe_data = data catch |err| {
-            return 1 + @typeInfo(@TypeOf(@intFromError(err))).int.bits / 8;
-        };
-
+        const safe_data = data catch return 3; // 1 byte for bool + 2 bytes for u16 error code
         return try serialize(error_union_info.payload, safe_data) + 1;
     }
 

@@ -6,6 +6,7 @@ pub const SerializationErrors = error{
     InvalidUnionTag,
     NoSpaceLeft,
     IntegerSerializationFailed,
+    InvalidErrorUnionValue,
 };
 
 pub const DeserializationErrors = error{
@@ -17,4 +18,5 @@ pub const DeserializationErrors = error{
     InvalidBooleanValue,
     IntegerDeserializationFailed,
     BooleanDeserializationFailed,
+    InvalidErrorUnionValue,
 };

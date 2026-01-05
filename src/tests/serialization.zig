@@ -482,19 +482,16 @@ test "error unions s/d" {
         ErrorSetB.MadeUpErrorB,
         roundTrip(ErrorSetB!u32, ErrorSetB.MadeUpErrorB),
     );
-    try testing.expectEqual(
-        error.MadeUpErrorB,
-        roundTrip(anyerror!u32, error.MadeUpErrorB),
-    );
 
     try testing.expectEqual(
-        ErrorSetA.MadeUpError2,
-        roundTrip(ErrorSetA!BigStruct, ErrorSetA.MadeUpError2),
+        ErrorSetA.MadeUpError1,
+        roundTrip(ErrorSetA!BigStruct, ErrorSetA.MadeUpError1),
     );
     try testing.expectEqual(
         error.MadeUpError2,
-        roundTrip(anyerror!BigStruct, error.MadeUpError2),
+        roundTrip(ErrorSetA!BigStruct, error.MadeUpError2),
     );
+
     try testing.expectEqualDeep(
         BigStruct{
             .test_struct = TestStruct{ .a = 42, .b = "The answer", .c = Vector{ .x = 0.0, .y = 1.1, .z = 2.2 } },

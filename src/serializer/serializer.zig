@@ -102,14 +102,47 @@ pub const Serializer = struct {
     }
 
     inline fn serializeErrorUnion(writer: *std.Io.Writer, data: anytype, comptime error_union_info: std.builtin.Type.ErrorUnion) SerializationErrors!void {
+        const set_info = @typeInfo(error_union_info.error_set).error_set;
+
         const safe_data = data catch |err| {
-            try serializeBool(writer, true);
-            try serializeInt(writer, @intFromError(err), @typeInfo(@TypeOf(@intFromError(err))).int);
-            return;
+            if (set_info) |errors| {
+                const err_value = try errorToInt(error_union_info.error_set, errors, err);
+
+                try serializeBool(writer, true);
+                try serializeInt(writer, err_value, @typeInfo(u16).int);
+                return;
+            }
+
+            @compileError("Inferred error sets are not supported");
         };
 
         try serializeBool(writer, false);
         try serialize(error_union_info.payload, writer, safe_data);
+    }
+
+    inline fn errorToInt(comptime TErrorsType: type, comptime errors: []const std.builtin.Type.Error, err: anyerror) SerializationErrors!u16 {
+        const names = comptime blk: {
+            var tmp: [errors.len][]const u8 = undefined;
+            for (errors, 0..) |e, i|
+                tmp[i] = e.name;
+
+            std.mem.sort([]const u8, &tmp, {}, struct {
+                pub fn cmp(_: void, a: []const u8, b: []const u8) bool {
+                    return std.mem.lessThan(u8, a, b);
+                }
+            }.cmp);
+
+            break :blk tmp;
+        };
+
+        inline for (names, 0..) |curr, idx| {
+            const instance = @field(TErrorsType, curr);
+            if (err == instance) {
+                return idx;
+            }
+        }
+
+        return SerializationErrors.InvalidErrorUnionValue;
     }
 
     inline fn serializeBool(writer: *std.Io.Writer, data: bool) SerializationErrors!void {
@@ -118,7 +151,7 @@ pub const Serializer = struct {
     }
 
     inline fn serializeInt(writer: *std.Io.Writer, data: anytype, comptime int_info: std.builtin.Type.Int) SerializationErrors!void {
-        const bit_size_with_padding = (int_info.bits + 7) / 8 * 8;
+        const bit_size_with_padding = comptime (int_info.bits + 7) / 8 * 8;
 
         // early return to avoid unnecessary casts
         if (int_info.bits == bit_size_with_padding) {

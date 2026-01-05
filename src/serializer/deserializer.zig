@@ -146,15 +146,47 @@ pub const Deserializer = struct {
 
         const is_error = try self.deserializeBool(reader);
         if (is_error) {
-            const TInt = u16;
-            const int_value = try self.deserializeInt(reader, TInt);
-            const err = @errorFromInt(int_value);
-            std.debug.print("{}, {}\n", .{err, int_value});
-            return @errorCast(err);
+            const int_value = try self.deserializeInt(reader, u16);
+            return intToError(info.error_set, int_value, T);
         } else {
             const payload = try self.deserialize(reader, info.payload);
             return payload;
         }
+    }
+
+    inline fn intToError(comptime TErrorsType: type, error_value: u16, comptime T: type) DeserializationResult(T) {
+        const error_set_info = @typeInfo(TErrorsType).error_set;
+        if (error_set_info == null) {
+            @compileError("Inferred error sets are not supported");
+        }
+        const errors = error_set_info.?;
+
+        const names = comptime blk: {
+            var tmp: [errors.len][]const u8 = undefined;
+            for (errors, 0..) |e, i|
+                tmp[i] = e.name;
+
+            std.mem.sort([]const u8, &tmp, {}, struct {
+                pub fn cmp(_: void, a: []const u8, b: []const u8) bool {
+                    return std.mem.lessThan(u8, a, b);
+                }
+            }.cmp);
+
+            break :blk tmp;
+        };
+
+        if (error_value >= names.len) {
+            return DeserializationErrors.InvalidErrorUnionValue;
+        }
+
+        inline for (names, 0..) |curr, idx| {
+            const instance = @field(TErrorsType, curr);
+            if (idx == error_value) {
+                return instance;
+            }
+        }
+
+        return DeserializationErrors.InvalidErrorUnionValue;
     }
 
     inline fn deserializeBool(_: *Deserializer, reader: *std.Io.Reader) DeserializationErrors!bool {
