@@ -149,6 +149,7 @@ pub const Deserializer = struct {
             const TInt = u16;
             const int_value = try self.deserializeInt(reader, TInt);
             const err = @errorFromInt(int_value);
+            std.debug.print("{}, {}\n", .{err, int_value});
             return @errorCast(err);
         } else {
             const payload = try self.deserialize(reader, info.payload);

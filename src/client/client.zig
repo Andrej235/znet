@@ -12,9 +12,6 @@ const CountingSerializer = @import("../serializer/counting-serializer.zig").Seri
 const Deserializer = @import("../serializer/deserializer.zig").Deserializer;
 const DeserializationErrors = @import("../serializer/errors.zig").DeserializationErrors;
 
-const ContractsWrapper = @import("server-contracts-wrapper.zig").ContractsWrapper;
-const createContracts = @import("server-contracts-wrapper.zig").createContracts;
-
 const Queue = @import("../utils/mpmc-queue.zig").Queue;
 const Promise = @import("../promise/promise.zig").Promise;
 
@@ -28,7 +25,6 @@ pub fn Client(comptime options: ClientOptions) type {
     return struct {
         const Self = @This();
 
-        contracts: ContractsWrapper(Self, options),
         allocator: std.mem.Allocator,
 
         send_buffer: []u8,
@@ -80,7 +76,6 @@ pub fn Client(comptime options: ClientOptions) type {
 
             const self = try allocator.create(Self);
             self.* = Self{
-                .contracts = createContracts(Self, options),
                 .allocator = allocator,
 
                 .send_buffer = send_buffer,
@@ -133,105 +128,13 @@ pub fn Client(comptime options: ClientOptions) type {
             posix.close(self.socket);
         }
 
-        pub fn call(self: *Self, comptime contract_id: u16, comptime method_id: u16, args: anytype) anyerror!*Promise(IdsToReturnType(options, contract_id, method_id)) {
-            const request_id = self.generateRequestId();
-            const TResponse = IdsToReturnType(options, contract_id, method_id);
-            const TPromise = Promise(TResponse);
-            // allocated in init, must deallocated by consumer
-            const promise = try TPromise.init(self.allocator);
-
-            const DeserilizeWrapper = struct {
-                pub fn resolve(deserializer: *Deserializer, reader: *std.io.Reader, request_promise: *anyopaque) anyerror!void {
-                    const headers = try deserializeMessageHeaders(reader);
-
-                    switch (headers) {
-                        .Request => {
-                            return error.UnexpectedRequestInResponse;
-                        },
-                        .Broadcast => {
-                            return error.UnexpectedBroadcastInResponse;
-                        },
-                        .Response => |resp_header| {
-                            if (resp_header.version != app_version) {
-                                return error.VersionMismatch;
-                            }
-
-                            const result = if (@typeInfo(TResponse) == .error_union) deserializer.deserialize(reader, TResponse) catch |err| switch (err) {
-                                DeserializationErrors.AllocationFailed,
-                                DeserializationErrors.BooleanDeserializationFailed,
-                                DeserializationErrors.EndOfStream,
-                                DeserializationErrors.IntegerDeserializationFailed,
-                                DeserializationErrors.InvalidBooleanValue,
-                                DeserializationErrors.InvalidUnionTag,
-                                DeserializationErrors.OutOfMemory,
-                                DeserializationErrors.UnexpectedEof,
-                                => {
-                                    return error.DeserializationFailed;
-                                },
-                                else => @as(@typeInfo(TResponse).error_union.error_set, @errorCast(err)),
-                            } else deserializer.deserialize(reader, TResponse) catch return error.DeserializationFailed;
-
-                            const message_promise: *TPromise = @ptrCast(@alignCast(request_promise));
-                            message_promise.resolve(result);
-                        },
-                    }
-                }
-            };
-
-            try self.pending_requests_map.put(request_id, .{
-                .promise = promise,
-                .resolve = DeserilizeWrapper.resolve,
-            });
-
-            const SerializeWrapper = struct {
-                pub fn serialize(message: OutboundMessage, writer: *std.io.Writer) anyerror!MessageHeaders {
-                    const message_args: *@TypeOf(args) = @ptrCast(@alignCast(message.args));
-                    defer message.allocator.destroy(message_args);
-
-                    const payload_len = try CountingSerializer.serialize(@TypeOf(message_args), message_args);
-                    const headers = MessageHeaders{
-                        .Request = .{
-                            .version = app_version,
-                            .contract_id = contract_id,
-                            .method_id = method_id,
-                            .msg_type = .Request,
-                            .request_id = message.request_id,
-                            .payload_len = payload_len,
-                        },
-                    };
-                    try serializeHeaders(writer, headers);
-
-                    try Serializer.serialize(@TypeOf(message_args), writer, message_args);
-
-                    return headers;
-                }
-            };
-
-            // freed in network thread after sending by SerializeWrapper.serialize
-            const heap_args = try self.allocator.create(@TypeOf(args));
-            heap_args.* = args;
-
-            self.outbound_queue.push(.{
-                .request_id = request_id,
-                .promise = promise,
-                .allocator = self.allocator,
-                .serialize = SerializeWrapper.serialize,
-                .args = heap_args,
-            });
-
-            // notify the network thread that a new outbound message is available
-            _ = try std.posix.write(self.outbound_wakeup_fd, std.mem.asBytes(&@as(u64, 1)));
-
-            return promise;
-        }
-
-        pub fn fetch(self: *Self, method: anytype, args: MethodTupleArg(method)) anyerror!AsyncMethodReturnType(method) {
+        pub fn fetch(self: *Self, method: anytype, args: MethodTupleArg(method)) anyerror!*Promise(MethodReturnType(method)) {
             const ids = comptime getMethodId(method);
             const contract_id: u16 = ids.contract_id;
             const method_id: u16 = ids.method_id;
 
             const request_id = self.generateRequestId();
-            const TResponse = IdsToReturnType(options, contract_id, method_id);
+            const TResponse = MethodReturnType(method);
             const TPromise = Promise(TResponse);
             // allocated in init, must deallocated by consumer
             const promise = try TPromise.init(self.allocator);
@@ -369,7 +272,7 @@ pub fn Client(comptime options: ClientOptions) type {
             return argument;
         }
 
-        fn AsyncMethodReturnType(comptime method: anytype) type {
+        fn MethodReturnType(comptime method: anytype) type {
             const type_info = @typeInfo(@TypeOf(method));
             const fn_info = switch (type_info) {
                 .@"fn" => |@"fn"| @"fn",
@@ -380,7 +283,7 @@ pub fn Client(comptime options: ClientOptions) type {
                 else => @compileError("AsyncMethodReturnType only supports function types"),
             };
 
-            const ReturnType = *Promise(fn_info.return_type orelse void);
+            const ReturnType = fn_info.return_type orelse void;
             return ReturnType;
         }
 
@@ -543,28 +446,4 @@ pub fn Client(comptime options: ClientOptions) type {
             }
         }
     };
-}
-
-fn IdsToReturnType(comptime options: ClientOptions, comptime contract_id: u16, comptime method_id: u16) type {
-    const Contract = options.server_contracts[contract_id];
-
-    const contract_info = @typeInfo(Contract);
-    switch (contract_info) {
-        .@"struct" => |struct_info| {
-            inline for (struct_info.decls, 0..) |decl, i| {
-                const method = @field(Contract, decl.name);
-                const methodType = @TypeOf(method);
-                if (@typeInfo(methodType) != .@"fn")
-                    i -= 1;
-
-                if (i == method_id) {
-                    const fn_info = @typeInfo(methodType).@"fn";
-                    return fn_info.return_type orelse void;
-                }
-            }
-
-            @compileError("Invalid method_id");
-        },
-        else => @compileError("Expected struct type for contract"),
-    }
 }
