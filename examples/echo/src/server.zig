@@ -1,5 +1,6 @@
 const std = @import("std");
 const znet = @import("znet");
+const role = @import("znet/role").role;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -11,7 +12,7 @@ pub fn main() !void {
     }).init(allocator);
 
     const address = try std.net.Address.parseIp("127.0.0.1", 5882);
-    std.debug.print("{}\n", .{znet.role});
+    std.debug.print("{}\n", .{role});
 
     try server.run(address);
 }

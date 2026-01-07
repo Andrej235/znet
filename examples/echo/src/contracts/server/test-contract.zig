@@ -1,0 +1,1 @@
+pub const TestContract = struct {};

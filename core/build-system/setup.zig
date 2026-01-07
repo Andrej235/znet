@@ -16,7 +16,7 @@ pub fn setupZnet(b: *std.Build, options: BuildOptions) !void {
     const client_exe = b.addExecutable(.{
         .name = options.exe_name.client,
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/client.zig"),
+            .root_source_file = b.path(options.client_main),
             .target = options.target,
             .optimize = options.optimize,
         }),
@@ -32,6 +32,8 @@ pub fn setupZnet(b: *std.Build, options: BuildOptions) !void {
     const client_options = b.addOptions();
     client_options.addOption(Role, "role", .client);
     client_exe.root_module.addOptions("znet/role", client_options);
+
+    client_exe.root_module.addIncludePath(b.path("src"));
     //#endregion
 
     //#region server exe
@@ -39,7 +41,7 @@ pub fn setupZnet(b: *std.Build, options: BuildOptions) !void {
     const server_exe = b.addExecutable(.{
         .name = options.exe_name.server,
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/server.zig"),
+            .root_source_file = b.path(options.server_main),
             .target = options.target,
             .optimize = options.optimize,
         }),
@@ -55,6 +57,32 @@ pub fn setupZnet(b: *std.Build, options: BuildOptions) !void {
     const server_options = b.addOptions();
     server_options.addOption(Role, "role", .server);
     server_exe.root_module.addOptions("znet/role", server_options);
+
+    server_exe.root_module.addIncludePath(b.path("src"));
+    //#endregion
+
+    //#region codegen
+    const contracts = try @import("explore-contracts.zig").ExploreContracts();
+    const codegen_module = b.createModule(
+        .{
+            .root_source_file = b.path("./.zig-cache/znet/test.zig"),
+            .target = options.target,
+            .optimize = options.optimize,
+        },
+    );
+
+    for (contracts) |contract| {
+        codegen_module.addImport(
+            contract.name,
+            b.addModule(contract.name, .{
+                .root_source_file = b.path(contract.import_path),
+            }),
+        );
+    }
+
+    client_exe.root_module.addImport("generated", codegen_module);
+    server_exe.root_module.addImport("generated", codegen_module);
+
     //#endregion
 }
 
