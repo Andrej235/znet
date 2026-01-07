@@ -65,24 +65,29 @@ pub fn setupZnet(b: *std.Build, options: BuildOptions) !void {
     const contracts = try @import("explore-contracts.zig").ExploreContracts();
     const codegen_module = b.createModule(
         .{
-            .root_source_file = b.path("./.zig-cache/znet/test.zig"),
+            .root_source_file = b.path("./.zig-cache/znet/znet_contract_registry.zig"),
             .target = options.target,
             .optimize = options.optimize,
         },
     );
 
     for (contracts) |contract| {
+        const name = contract.module_name;
+        const mod = b.addModule(name, .{
+            .root_source_file = b.path(contract.import_path),
+        });
+
         codegen_module.addImport(
-            contract.name,
-            b.addModule(contract.name, .{
-                .root_source_file = b.path(contract.import_path),
-            }),
+            name,
+            mod,
         );
+
+        client_exe.root_module.addImport(name, mod);
+        server_exe.root_module.addImport(name, mod);
     }
 
-    client_exe.root_module.addImport("generated", codegen_module);
-    server_exe.root_module.addImport("generated", codegen_module);
-
+    // znet requires codegen to be imported as "znet_contract_registry"
+    znet_module.addImport("znet_contract_registry", codegen_module);
     //#endregion
 }
 
@@ -90,3 +95,41 @@ const Role = enum(u8) {
     client,
     server,
 };
+
+pub fn pascalToSnakeLower(
+    allocator: std.mem.Allocator,
+    input: []const u8,
+) ![]u8 {
+    var out = std.ArrayList(u8){};
+    errdefer out.deinit(allocator);
+
+    if (input.len == 0) return out.toOwnedSlice(allocator);
+
+    for (input, 0..) |c, i| {
+        const is_upper = c >= 'A' and c <= 'Z';
+        const is_lower = c >= 'a' and c <= 'z';
+        const is_digit = c >= '0' and c <= '9';
+
+        if (i > 0 and is_upper) {
+            const prev = input[i - 1];
+            const prev_is_lower = prev >= 'a' and prev <= 'z';
+            const prev_is_digit = prev >= '0' and prev <= '9';
+
+            // Insert underscore on word boundary
+            if (prev_is_lower or prev_is_digit) {
+                try out.append(allocator, '_');
+            }
+        }
+
+        if (is_upper) {
+            try out.append(allocator, c + 32); // to lowercase
+        } else if (is_lower or is_digit) {
+            try out.append(allocator, c);
+        } else {
+            // optional: keep other chars as-is or error
+            try out.append(allocator, c);
+        }
+    }
+
+    return out.toOwnedSlice(allocator);
+}

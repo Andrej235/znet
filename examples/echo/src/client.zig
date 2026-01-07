@@ -1,10 +1,9 @@
 const std = @import("std");
 const znet = @import("znet");
-const TestContract = @import("server.zig").TestContract;
-const generated = @import("generated");
+const TestContract = @import("server/test-contract").TestContract;
 
 pub fn main() !void {
-    var client = try znet.Client(.{ .server_contracts = &.{TestContract} }).init(std.heap.page_allocator);
+    var client = try znet.Client.init(std.heap.page_allocator, .{});
     const address = try std.net.Address.parseIp("127.0.0.1", 5882);
     try client.connect(address);
 

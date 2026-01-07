@@ -11,7 +11,7 @@ pub const ClientConnection = struct {
     id: ConnectionId,
 
     pub fn init(
-        comptime read_buffer_size: usize,
+        read_buffer_size: usize,
         allocator: std.mem.Allocator,
         socket: posix.socket_t,
         address: std.net.Address,

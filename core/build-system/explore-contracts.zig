@@ -4,7 +4,7 @@ pub fn ExploreContracts() ![]Contract {
     var cache_dir = try getCacheDir();
     defer cache_dir.close();
 
-    var file = try cache_dir.createFile("test.zig", .{});
+    var file = try cache_dir.createFile("znet_contract_registry.zig", .{});
     defer file.close();
 
     const buffer = try std.heap.page_allocator.alloc(u8, 1024);
@@ -20,22 +20,28 @@ pub fn ExploreContracts() ![]Contract {
     if (client_dir) |*dir| {
         // todo: implement
         defer @constCast(dir).close();
-        _ = try iterateDir(dir.*, &client_contracts, "src/contracts/client");
+        _ = try iterateDir(dir.*, &client_contracts, "contracts/client", .client);
     }
 
     var server_contracts = std.ArrayList(Contract){};
     if (server_dir) |*dir| {
         defer @constCast(dir).close();
-        try iterateDir(dir.*, &server_contracts, "src/contracts/server");
+        try iterateDir(dir.*, &server_contracts, "contracts/server", .server);
 
         try writer.writeAll(
-            \\pub const ServerContracts = .{
+            \\pub const server_contracts: []const type = &.{
             \\
         );
 
+        // todo: sort contracts by name to ensure stable output before writing
         for (server_contracts.items) |item| {
-            std.debug.print("{s}, {s}\n", .{ item.import_path, item.name });
-            try writer.writeAll(try std.fmt.allocPrint(std.heap.page_allocator, "\t@import(\"{s}\").{s},\n", .{ item.name, item.name }));
+            try writer.writeAll(
+                try std.fmt.allocPrint(
+                    std.heap.page_allocator,
+                    "\t@import(\"{s}\").{s},\n",
+                    .{ item.module_name, item.contract_name },
+                ),
+            );
         }
 
         try writer.writeAll(
@@ -54,10 +60,16 @@ pub fn ExploreContracts() ![]Contract {
 
 const Contract = struct {
     import_path: []const u8,
-    name: []const u8,
+    contract_name: []const u8,
+    module_name: []const u8,
+
+    const Kind = enum {
+        client,
+        server,
+    };
 };
 
-fn iterateDir(dir: std.fs.Dir, contracts: *std.ArrayList(Contract), current_path: []const u8) !void {
+fn iterateDir(dir: std.fs.Dir, contracts: *std.ArrayList(Contract), current_path: []const u8, contract_kind: Contract.Kind) !void {
     var it = dir.iterate();
     while (try it.next()) |entry| {
         if (entry.kind == .file) {
@@ -69,19 +81,28 @@ fn iterateDir(dir: std.fs.Dir, contracts: *std.ArrayList(Contract), current_path
                     "{s}/{s}",
                     .{ current_path, entry.name },
                 ),
-                .name = try kebabToPascalCase(
+                .contract_name = try kebabToPascalCase(
                     std.heap.page_allocator,
                     entry.name[0 .. entry.name.len - 4], // remove .zig
                 ),
+                .module_name = try std.fmt.allocPrint(std.heap.page_allocator, "{s}/{s}", .{
+                    if (contract_kind == .client) "client" else "server",
+                    entry.name[0 .. entry.name.len - 4], // remove .zig
+                }),
             });
         } else if (entry.kind == .directory) {
             var sub_dir = try dir.openDir(entry.name, .{ .iterate = true });
             defer sub_dir.close();
-            try iterateDir(sub_dir, contracts, try std.fmt.allocPrint(
-                std.heap.page_allocator,
-                "{s}/{s}",
-                .{ current_path, entry.name },
-            ));
+            try iterateDir(
+                sub_dir,
+                contracts,
+                try std.fmt.allocPrint(
+                    std.heap.page_allocator,
+                    "{s}/{s}",
+                    .{ current_path, entry.name },
+                ),
+                contract_kind,
+            );
         }
     }
 }
@@ -129,7 +150,7 @@ fn getContractDirectories() !struct {
     client: ?std.fs.Dir,
     server: ?std.fs.Dir,
 } {
-    var contracts_dir = std.fs.cwd().openDir("./src/contracts", .{}) catch |err| {
+    var contracts_dir = std.fs.cwd().openDir("./contracts", .{}) catch |err| {
         if (err == error.FileNotFound)
             return .{ .client = null, .server = null };
 
