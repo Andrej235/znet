@@ -1,16 +1,18 @@
 const std = @import("std");
-const Server = @import("server/server.zig").Server;
+const znet = @import("znet");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    var server = try Server(.{
+    var server = try znet.Server(.{
         .contracts = &.{TestContract},
         .max_clients = 2048,
     }).init(allocator);
 
     const address = try std.net.Address.parseIp("127.0.0.1", 5882);
+    std.debug.print("{}\n", .{znet.role});
+
     try server.run(address);
 }
 

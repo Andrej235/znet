@@ -3,4 +3,4 @@ pub const Role = enum {
     server,
 };
 
-pub var running_as: Role = .client;
+pub const role: Role = undefined;

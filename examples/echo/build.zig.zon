@@ -1,0 +1,16 @@
+.{
+    .name = .echo,
+    .version = "0.0.1",
+    .fingerprint = 0x170430323eccfbc5,
+    .minimum_zig_version = "0.15.2",
+    .dependencies = .{
+        .znet = .{
+            .path = "../../core",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
