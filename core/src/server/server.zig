@@ -24,7 +24,7 @@ pub const Server = struct {
     // creates polls and client slices, and is passed to Client.init and handlers
     allocator: std.mem.Allocator,
 
-    // number connected clients
+    // number of connected clients
     connected: usize,
 
     // polls[0] is always the listening socket and polls[1] is always the wakeup socket used by worker threads to notify the reactor thread of completed jobs
@@ -53,7 +53,7 @@ pub const Server = struct {
     job_result_queue: *Queue(JobResult),
     broadcast_job_queue: *Queue(BroadcastJob),
 
-    pub fn init(allocator: std.mem.Allocator, comptime options: ServerOptions) !Server {
+    pub fn init(allocator: std.mem.Allocator, comptime options: ServerOptions) !*Server {
         // + 2 for the listening socket and the wakeup socket
         const polls = try allocator.alloc(posix.pollfd, options.max_clients + 2);
         errdefer allocator.free(polls);
@@ -93,7 +93,8 @@ pub const Server = struct {
         const poll_to_client = try allocator.alloc(u32, options.max_clients);
         errdefer allocator.free(poll_to_client);
 
-        var self: Server = .{
+        const self: *Server = try allocator.create(Server);
+        self.* = .{
             .options = options,
             .allocator = allocator,
 
@@ -114,7 +115,7 @@ pub const Server = struct {
 
         for (0..options.worker_threads) |i| {
             const worker = try allocator.create(Worker);
-            worker.* = try Worker.init(options.job_result_buffer_size, &self);
+            worker.* = try Worker.init(options.job_result_buffer_size, self);
 
             _ = std.Thread.spawn(.{}, Worker.run, .{worker}) catch |err| {
                 std.debug.print("failed to spawn worker thread {}: {}", .{ i, err });

@@ -62,7 +62,7 @@ pub fn createHandlerFn(comptime fn_impl: anytype) HandlerFn {
                     .clients = .{
                         .allocator = allocator,
                         .client_connections = server.clients,
-                        .connected_clients = server.poll_to_client,
+                        .connected_clients = server.poll_to_client[0..server.connected],
                         .broadcast_job_queue = server.broadcast_job_queue,
                         .sender_id = initiated_by_connection_id,
                     },

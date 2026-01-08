@@ -3,7 +3,8 @@ const znet = @import("znet");
 
 pub const TestContract = struct {
     pub fn add(ctx: *znet.Context, a: i32) AddErrors!i32 {
-        std.debug.print("{any}\n", .{ctx.clients.sender_id});
+        var s = ctx.clients.others() catch return error.FailedToNotify;
+        s.broadcast() catch {};
 
         if (a > 5)
             return error.ValOver5;
@@ -14,4 +15,5 @@ pub const TestContract = struct {
 
 pub const AddErrors = error{
     ValOver5,
+    FailedToNotify,
 };
