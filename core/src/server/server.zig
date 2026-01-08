@@ -4,10 +4,12 @@ const net = std.net;
 
 const ServerOptions = @import("server-options.zig").ServerOptions;
 const ClientConnection = @import("client-connection.zig").ClientConnection;
-const Job = @import("job.zig").Job;
 const Worker = @import("worker.zig").Worker;
-const JobResult = @import("job-result.zig").JobResult;
+
 const Queue = @import("../utils/mpmc-queue.zig").Queue;
+const Job = @import("job.zig").Job;
+const JobResult = @import("job-result.zig").JobResult;
+const BroadcastJob = @import("broadcast-job.zig").BroadcastJob;
 
 const HandlerFn = @import("handler-fn/handler-fn.zig").HandlerFn;
 const createHandlerFn = @import("handler-fn/create-handler-fn.zig").createHandlerFn;
@@ -50,6 +52,7 @@ pub const Server = struct {
 
     job_queue: *Queue(Job),
     job_result_queue: *Queue(JobResult),
+    broadcast_job_queue: *Queue(BroadcastJob),
 
     pub fn init(allocator: std.mem.Allocator, comptime options: ServerOptions) !Self {
         // + 2 for the listening socket and the wakeup socket
@@ -71,6 +74,14 @@ pub const Server = struct {
 
         const job_result_queue = try allocator.create(Queue(JobResult));
         job_result_queue.* = try Queue(JobResult).init(job_results_buf);
+        errdefer allocator.destroy(job_result_queue);
+
+        const broadcast_jobs_buf = try allocator.alloc(BroadcastJob, options.max_broadcast_jobs_in_queue);
+        errdefer allocator.free(broadcast_jobs_buf);
+
+        const broadcast_job_queue = try allocator.create(Queue(BroadcastJob));
+        broadcast_job_queue.* = try Queue(BroadcastJob).init(broadcast_jobs_buf);
+        errdefer allocator.destroy(broadcast_job_queue);
 
         const wakeup_fd = try posix.eventfd(0, posix.SOCK.NONBLOCK);
 
@@ -101,18 +112,22 @@ pub const Server = struct {
         errdefer allocator.free(poll_to_client);
 
         return .{
-            .polls = polls,
+            .options = options,
+            .allocator = allocator,
+
             .clients = clients,
             .client_polls = polls[2..],
             .poll_to_client = poll_to_client,
             .free_indices = free_indices,
             .free_count = options.max_clients,
             .connected = 0,
-            .allocator = allocator,
+
             .job_queue = job_queue,
             .job_result_queue = job_result_queue,
+            .broadcast_job_queue = broadcast_job_queue,
+
+            .polls = polls,
             .wakeup_fd = wakeup_fd,
-            .options = options,
         };
     }
 

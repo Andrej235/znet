@@ -40,6 +40,7 @@ pub fn createHandlerFn(comptime fn_impl: anytype) HandlerFn {
             });
 
             var deserializer = Deserializer.init(allocator);
+            // todo: free params after @call
             const params = try deserializer.deserialize(input_reader, TInput);
             const res = @call(.always_inline, fn_impl, params);
 
