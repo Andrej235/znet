@@ -17,8 +17,7 @@ const createHandlerFn = @import("handler-fn/create-handler-fn.zig").createHandle
 const ConnectionId = @import("connection-id.zig").ConnectionId;
 
 pub const Server = struct {
-    const Self = @This();
-    const call_tables = createCallTable();
+    pub const call_table = createCallTable();
 
     options: ServerOptions,
 
@@ -54,7 +53,7 @@ pub const Server = struct {
     job_result_queue: *Queue(JobResult),
     broadcast_job_queue: *Queue(BroadcastJob),
 
-    pub fn init(allocator: std.mem.Allocator, comptime options: ServerOptions) !Self {
+    pub fn init(allocator: std.mem.Allocator, comptime options: ServerOptions) !Server {
         // + 2 for the listening socket and the wakeup socket
         const polls = try allocator.alloc(posix.pollfd, options.max_clients + 2);
         errdefer allocator.free(polls);
@@ -85,23 +84,6 @@ pub const Server = struct {
 
         const wakeup_fd = try posix.eventfd(0, posix.SOCK.NONBLOCK);
 
-        for (0..options.worker_threads) |i| {
-            const worker = try allocator.create(Worker);
-            worker.* = try Worker.init(
-                options.job_result_buffer_size,
-                job_queue,
-                job_result_queue,
-                call_tables,
-                wakeup_fd,
-                allocator,
-            );
-
-            _ = std.Thread.spawn(.{}, Worker.run, .{worker}) catch |err| {
-                std.debug.print("failed to spawn worker thread {}: {}", .{ i, err });
-                return err;
-            };
-        }
-
         var free_indices = try allocator.alloc(ConnectionId, options.max_clients);
         errdefer allocator.free(free_indices);
         for (0..options.max_clients) |i| {
@@ -111,7 +93,7 @@ pub const Server = struct {
         const poll_to_client = try allocator.alloc(u32, options.max_clients);
         errdefer allocator.free(poll_to_client);
 
-        return .{
+        var self: Server = .{
             .options = options,
             .allocator = allocator,
 
@@ -129,9 +111,21 @@ pub const Server = struct {
             .polls = polls,
             .wakeup_fd = wakeup_fd,
         };
+
+        for (0..options.worker_threads) |i| {
+            const worker = try allocator.create(Worker);
+            worker.* = try Worker.init(options.job_result_buffer_size, &self);
+
+            _ = std.Thread.spawn(.{}, Worker.run, .{worker}) catch |err| {
+                std.debug.print("failed to spawn worker thread {}: {}", .{ i, err });
+                return err;
+            };
+        }
+
+        return self;
     }
 
-    pub fn run(self: *Self, address: std.net.Address) !noreturn {
+    pub fn run(self: *Server, address: std.net.Address) !noreturn {
         const socket_type: u32 = posix.SOCK.STREAM | posix.SOCK.NONBLOCK;
         const protocol = posix.IPPROTO.TCP;
         const listener = try posix.socket(address.any.family, socket_type, protocol);
@@ -233,7 +227,7 @@ pub const Server = struct {
         }
     }
 
-    fn accept(self: *Self, listener: posix.socket_t) !void {
+    fn accept(self: *Server, listener: posix.socket_t) !void {
         // the while loop will keep accepting connections until the first time posix.accept tries to block in order to wait for a new connection, i.e. there are no more pending connections
         while (true) {
             var address: net.Address = undefined;
@@ -265,12 +259,12 @@ pub const Server = struct {
         }
     }
 
-    fn pushIndex(self: *Self, index: ConnectionId) void {
+    fn pushIndex(self: *Server, index: ConnectionId) void {
         self.free_indices[self.free_count] = index;
         self.free_count += 1;
     }
 
-    fn popIndex(self: *Self) ConnectionId {
+    fn popIndex(self: *Server) ConnectionId {
         if (self.free_count == 0) {
             // this should never happen because we limit the number of clients to max_clients
             @branchHint(.cold);
@@ -281,7 +275,7 @@ pub const Server = struct {
         return self.free_indices[self.free_count];
     }
 
-    fn removeClient(self: *Self, at: usize) void {
+    fn removeClient(self: *Server, at: usize) void {
         const client_idx = self.poll_to_client[at];
         var client = self.clients[client_idx];
         self.pushIndex(.{ .index = client_idx, .gen = client.id.gen + 1 });

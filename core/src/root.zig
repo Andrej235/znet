@@ -4,9 +4,6 @@ pub const Deserializer = @import("serializer/deserializer.zig").Deserializer;
 pub const Client = @import("client/client.zig").Client;
 pub const Server = @import("server/server.zig").Server;
 
-pub const HandlerFn = @import("server/handler-fn/handler-fn.zig").HandlerFn;
-pub const createHandlerFn = @import("server/handler-fn/create-handler-fn.zig").createHandlerFn;
-
 pub const MessageHeaders = @import("message-headers/message-headers.zig").MessageHeaders;
 pub const RequestHeaders = @import("message-headers/request-headers.zig").RequestHeaders;
 pub const ResponseHeaders = @import("message-headers/response-headers.zig").ResponseHeaders;
@@ -15,10 +12,4 @@ pub const serializeMessageHeaders = @import("message-headers/serialize-message-h
 pub const MessageType = @import("message-headers/message-type.zig").MessageType;
 pub const app_version: u8 = @import("app-version.zig").app_version;
 
-const std = @import("std");
-pub fn hello() void {
-    std.debug.print("Hello, zNet!\n", .{});
-}
-
-// pub const role = @import("znet/role").role;
-// pub const Role = @import("znet/role").Role;
+pub const Context = @import("server/context/context.zig").Context;

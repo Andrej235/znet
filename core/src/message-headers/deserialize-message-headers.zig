@@ -1,10 +1,10 @@
 const std = @import("std");
-const MessageHeader = @import("message-headers.zig").MessageHeaders;
-const RequestHeader = @import("request-headers.zig").RequestHeaders;
-const ResponseHeader = @import("response-headers.zig").ResponseHeaders;
+const MessageHeaders = @import("message-headers.zig").MessageHeaders;
+const RequestHeaders = @import("request-headers.zig").RequestHeaders;
+const ResponseHeaders = @import("response-headers.zig").ResponseHeaders;
 const app_version = @import("../app-version.zig").app_version;
 
-pub fn deserializeMessageHeaders(reader: *std.Io.Reader) DeserializeMessageHeaderErrors!MessageHeader {
+pub fn deserializeMessageHeaders(reader: *std.Io.Reader) DeserializeMessageHeaderErrors!MessageHeaders {
     const version = reader.takeInt(u8, .big) catch return DeserializeMessageHeaderErrors.FailedToReadField;
     if (version != app_version) {
         return DeserializeMessageHeaderErrors.InvalidMessageHeaderVersion;
@@ -13,7 +13,7 @@ pub fn deserializeMessageHeaders(reader: *std.Io.Reader) DeserializeMessageHeade
     const msg_type = reader.takeInt(u8, .big) catch return DeserializeMessageHeaderErrors.FailedToReadField;
     return switch (msg_type) {
         0 => {
-            const header: RequestHeader = .{
+            const header: RequestHeaders = .{
                 .version = version,
                 .msg_type = .Request,
                 .request_id = reader.takeInt(u32, .big) catch return DeserializeMessageHeaderErrors.FailedToReadField,
@@ -24,7 +24,7 @@ pub fn deserializeMessageHeaders(reader: *std.Io.Reader) DeserializeMessageHeade
             return .{ .Request = header };
         },
         1 => {
-            const header: ResponseHeader = .{
+            const header: ResponseHeaders = .{
                 .version = version,
                 .msg_type = .Response,
                 .request_id = reader.takeInt(u32, .big) catch return DeserializeMessageHeaderErrors.FailedToReadField,

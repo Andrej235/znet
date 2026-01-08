@@ -82,6 +82,7 @@ pub fn setupZnet(b: *std.Build, options: BuildOptions) !void {
             mod,
         );
 
+        mod.addImport("znet", znet_module);
         client_exe.root_module.addImport(name, mod);
         server_exe.root_module.addImport(name, mod);
     }

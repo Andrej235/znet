@@ -4,7 +4,7 @@ const ClientConnection = @import("../client-connection.zig").ClientConnection;
 const BroadcastJob = @import("../broadcast-job.zig").BroadcastJob;
 const Queue = @import("../../utils/mpmc-queue.zig").Queue;
 
-const Clients = struct {
+pub const Clients = struct {
     allocator: std.mem.Allocator,
     client_connections: []const ClientConnection,
     connected_clients: []const u32,

@@ -7,32 +7,30 @@ const JobResult = @import("job-result.zig").JobResult;
 const HandlerFn = @import("handler-fn/handler-fn.zig").HandlerFn;
 const deserializeMessageHeaders = @import("../message-headers/deserialize-message-headers.zig").deserializeMessageHeaders;
 
+const Server = @import("server.zig").Server;
+
 pub const Worker = struct {
+    server: *Server,
+    allocator: std.mem.Allocator,
+
     job_queue: *Queue(Job),
     job_result_queue: *Queue(JobResult),
     wakeup_fd: std.posix.fd_t,
 
     call_table: []const []const HandlerFn,
-    allocator: std.mem.Allocator,
     response_buffer: []u8,
 
-    pub fn init(
-        comptime response_buffer_size: usize,
-        job_queue: *Queue(Job),
-        job_result_queue: *Queue(JobResult),
-        call_table: []const []const HandlerFn,
-        wakeup_fd: std.posix.fd_t,
-        allocator: std.mem.Allocator,
-    ) !Worker {
+    pub fn init(comptime response_buffer_size: usize, server: *Server) !Worker {
         return .{
-            .job_queue = job_queue,
-            .job_result_queue = job_result_queue,
+            .server = server,
+            .allocator = server.allocator,
 
-            .call_table = call_table,
-            .wakeup_fd = wakeup_fd,
+            .job_queue = server.job_queue,
+            .job_result_queue = server.job_result_queue,
+            .wakeup_fd = server.wakeup_fd,
 
-            .allocator = allocator,
-            .response_buffer = try allocator.alloc(u8, response_buffer_size),
+            .call_table = Server.call_table,
+            .response_buffer = try server.allocator.alloc(u8, response_buffer_size),
         };
     }
 
@@ -48,7 +46,14 @@ pub const Worker = struct {
                     const handler = self.call_table[req_header.contract_id][req_header.method_id];
 
                     var writer: std.Io.Writer = .fixed(self.response_buffer);
-                    try handler(headers.Request, self.allocator, &reader, &writer);
+                    try handler(
+                        self.server,
+                        job.client_id.index,
+                        headers.Request,
+                        self.allocator,
+                        &reader,
+                        &writer,
+                    );
 
                     const response_payload_len = std.mem.readInt(u32, self.response_buffer[6..10], .big);
                     const response_data = try self.allocator.alloc(u8, response_payload_len + 10);

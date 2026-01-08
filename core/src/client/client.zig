@@ -7,6 +7,8 @@ const MessageHeaders = @import("../message-headers/message-headers.zig").Message
 const serializeHeaders = @import("../message-headers/serialize-message-headers.zig").serializeMessageHeaders;
 const deserializeMessageHeaders = @import("../message-headers/deserialize-message-headers.zig").deserializeMessageHeaders;
 
+const ServerContext = @import("../server/context/context.zig").Context;
+
 const Serializer = @import("../serializer/serializer.zig").Serializer;
 const CountingSerializer = @import("../serializer/counting-serializer.zig").Serializer;
 const Deserializer = @import("../serializer/deserializer.zig").Deserializer;
@@ -22,8 +24,6 @@ const PendingRequest = @import("pending-request.zig").PendingRequest;
 const app_version: u8 = @import("../app-version.zig").app_version;
 
 pub const Client = struct {
-    const Self = @This();
-
     allocator: std.mem.Allocator,
 
     send_buffer: []u8,
@@ -52,7 +52,7 @@ pub const Client = struct {
 
     current_request_id: u32 = 0,
 
-    pub fn init(allocator: std.mem.Allocator, comptime options: ClientOptions) !*Self {
+    pub fn init(allocator: std.mem.Allocator, comptime options: ClientOptions) !*Client {
         const send_buffer = try allocator.alloc(u8, options.write_buffer_size);
         const receive_buffer = try allocator.alloc(u8, options.read_buffer_size);
 
@@ -73,8 +73,8 @@ pub const Client = struct {
         var pending_requests_map = std.AutoHashMap(u32, PendingRequest).init(allocator);
         try pending_requests_map.ensureTotalCapacity(options.max_pending_requests);
 
-        const self = try allocator.create(Self);
-        self.* = Self{
+        const self = try allocator.create(Client);
+        self.* = Client{
             .allocator = allocator,
 
             .send_buffer = send_buffer,
@@ -102,7 +102,7 @@ pub const Client = struct {
         return self;
     }
 
-    pub fn deinit(self: *Self) !void {
+    pub fn deinit(self: *Client) !void {
         self.allocator.free(self.send_buffer);
         self.allocator.free(self.receive_buffer);
 
@@ -118,16 +118,16 @@ pub const Client = struct {
         self.allocator.destroy(self);
     }
 
-    pub fn connect(self: *Self, address: std.net.Address) !void {
+    pub fn connect(self: *Client, address: std.net.Address) !void {
         // networkThread will spawn the worker thread, connect the socket and create all polls
         _ = try std.Thread.spawn(.{}, networkThread, .{ self, address });
     }
 
-    pub fn disconnect(self: *Self) !void {
+    pub fn disconnect(self: *Client) !void {
         posix.close(self.socket);
     }
 
-    pub fn fetch(self: *Self, method: anytype, args: MethodTupleArg(method)) anyerror!*Promise(MethodReturnType(method)) {
+    pub fn fetch(self: *Client, method: anytype, args: MethodTupleArg(method)) anyerror!*Promise(MethodReturnType(method)) {
         const ids = comptime getMethodId(method);
         const contract_id: u16 = ids.contract_id;
         const method_id: u16 = ids.method_id;
@@ -228,7 +228,7 @@ pub const Client = struct {
             inline for (@typeInfo(TContract).@"struct".decls, 0..) |decl, method_id| {
                 const m = @field(TContract, decl.name);
                 if (@TypeOf(m) == @TypeOf(method) and m == method) {
-                    return .{ .contract_id = contract_id, .method_id = method_id }; // todo: hardcoded contract id
+                    return .{ .contract_id = contract_id, .method_id = method_id };
                 }
             }
         }
@@ -237,38 +237,46 @@ pub const Client = struct {
     }
 
     fn MethodTupleArg(comptime method: anytype) type {
-        const type_info = @typeInfo(@TypeOf(method));
-        const fn_info = switch (type_info) {
-            .@"fn" => |@"fn"| @"fn",
-            .pointer => |ptr_info| switch (@typeInfo(ptr_info.child)) {
-                .@"fn" => |fn_info| fn_info,
-                else => @compileError("MethodTupleArg only supports function types"),
-            },
-            else => @compileError("MethodTupleArg only supports function types"),
-        };
-
-        var arg_fields: [fn_info.params.len]std.builtin.Type.StructField = undefined;
-        inline for (fn_info.params, 0..) |param, idx| {
-            arg_fields[idx] = std.builtin.Type.StructField{
-                .name = std.fmt.comptimePrint("{}", .{idx}),
-                .type = param.type.?,
-                .alignment = @alignOf(param.type.?),
-                .is_comptime = false,
-                .default_value_ptr = null,
-            };
-        }
-
-        const argument = @Type(.{
+        const arg_fields = comptime getParamTupleFields(@TypeOf(method));
+        const argument = comptime @Type(.{
             .@"struct" = .{
                 .is_tuple = true,
                 .backing_integer = null,
                 .layout = .auto,
                 .decls = &.{},
-                .fields = &arg_fields,
+                .fields = arg_fields,
             },
         });
 
         return argument;
+    }
+
+    pub fn getParamTupleFields(comptime TFn: type) []std.builtin.Type.StructField {
+        const fn_info = @typeInfo(TFn);
+        if (fn_info != .@"fn") @compileError("Expected function type");
+
+        if (fn_info.@"fn".params[0].type == ServerContext)
+            @compileError("Context must be injected as a pointer");
+
+        const inject_context: bool = fn_info.@"fn".params[0].type == *ServerContext;
+        const fields_len = if (inject_context) fn_info.@"fn".params.len - 1 else fn_info.@"fn".params.len;
+
+        var fields: [fields_len]std.builtin.Type.StructField = undefined;
+        const params = if (inject_context) fn_info.@"fn".params[1..] else fn_info.@"fn".params;
+
+        for (params, 0..) |param, idx| {
+            if (param.type) |T| {
+                fields[idx] = .{
+                    .name = std.fmt.comptimePrint("{}", .{idx}),
+                    .type = T,
+                    .default_value_ptr = null,
+                    .is_comptime = false,
+                    .alignment = @alignOf(T),
+                };
+            }
+        }
+
+        return &fields;
     }
 
     fn MethodReturnType(comptime method: anytype) type {
@@ -286,7 +294,7 @@ pub const Client = struct {
         return ReturnType;
     }
 
-    fn generateRequestId(self: *Self) u32 {
+    fn generateRequestId(self: *Client) u32 {
         self.current_request_id += 1;
         return self.current_request_id;
     }
@@ -298,7 +306,7 @@ pub const Client = struct {
         }
     }
 
-    fn safeReadMessage(self: *Self, socket: posix.socket_t) !?[]u8 {
+    fn safeReadMessage(self: *Client, socket: posix.socket_t) !?[]u8 {
         const msg = self.readMessage(socket) catch |err| switch (err) {
             error.WouldBlock, error.NotOpenForReading => return null,
             else => return err,
@@ -306,7 +314,7 @@ pub const Client = struct {
         return msg;
     }
 
-    fn readMessage(self: *Self, socket: posix.socket_t) ![]u8 {
+    fn readMessage(self: *Client, socket: posix.socket_t) ![]u8 {
         while (true) {
             // loop until we have a full message to process
             if (try self.bufferedMessage()) |msg|
@@ -321,7 +329,7 @@ pub const Client = struct {
         }
     }
 
-    fn bufferedMessage(self: *Self) !?[]u8 {
+    fn bufferedMessage(self: *Client) !?[]u8 {
         if (self.read_pos < 10) {
             // not enough data to read the header
             return null;
@@ -348,7 +356,7 @@ pub const Client = struct {
         return msg;
     }
 
-    fn networkThread(self: *Self, address: std.net.Address) !void {
+    fn networkThread(self: *Client, address: std.net.Address) !void {
         self.socket = try posix.socket(
             address.any.family,
             posix.SOCK.STREAM,
@@ -413,7 +421,7 @@ pub const Client = struct {
         }
     }
 
-    fn workerThread(self: *Self) !void {
+    fn workerThread(self: *Client) !void {
         self.worker_thread_polls[0] = .{
             .fd = self.inbound_wakeup_fd,
             .events = posix.POLL.IN,
