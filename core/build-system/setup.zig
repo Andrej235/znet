@@ -71,11 +71,13 @@ pub fn setupZnet(b: *std.Build, options: BuildOptions) !void {
         },
     );
 
-    for (contracts) |contract| {
+    const contract_modules: []*std.Build.Module = try std.heap.page_allocator.alloc(*std.Build.Module, contracts.len);
+    for (contracts, 0..) |contract, i| {
         const name = contract.module_name;
         const mod = b.addModule(name, .{
             .root_source_file = b.path(contract.import_path),
         });
+        contract_modules[i] = mod;
 
         codegen_module.addImport(
             name,
@@ -85,6 +87,13 @@ pub fn setupZnet(b: *std.Build, options: BuildOptions) !void {
         mod.addImport("znet", znet_module);
         client_exe.root_module.addImport(name, mod);
         server_exe.root_module.addImport(name, mod);
+    }
+
+    for (contract_modules, 0..) |mod_i, i| {
+        for (contract_modules, 0..) |mod_j, j| {
+            mod_i.addImport(contracts[j].module_name, mod_j);
+            mod_j.addImport(contracts[i].module_name, mod_i);
+        }
     }
 
     // znet requires codegen to be imported as "znet_contract_registry"

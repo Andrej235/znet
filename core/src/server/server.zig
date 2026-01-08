@@ -224,6 +224,20 @@ pub const Server = struct {
 
                     std.debug.print("---> response sent to {} (gen {}): {any}\n", .{ job_result.client_id.index, job_result.client_id.gen, job_result.data });
                 }
+
+                // process all available broadcast jobs
+                while (self.broadcast_job_queue.tryPop()) |broadcast_job| {
+                    var bitset = broadcast_job.bitset;
+
+                    while (bitset.findFirstSet()) |idx| {
+                        bitset.unset(idx);
+
+                        std.debug.print("---> Broadcast ({any}) to {}\n", .{ broadcast_job.message, idx });
+                    }
+
+                    self.allocator.free(broadcast_job.message);
+                    bitset.deinit();
+                }
             }
         }
     }
