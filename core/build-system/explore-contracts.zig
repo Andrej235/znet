@@ -16,22 +16,46 @@ pub fn ExploreContracts() ![]Contract {
     const client_dir = contract_dirs.client;
     const server_dir = contract_dirs.server;
 
+    //#region client contracts
+    try writer.writeAll(
+        \\pub const client_contracts: []const type = &.{
+        \\
+    );
     var client_contracts = std.ArrayList(Contract){};
+
     if (client_dir) |*dir| {
         // todo: implement
         defer @constCast(dir).close();
         _ = try iterateDir(dir.*, &client_contracts, "contracts/client", .client);
-    }
 
+        // todo: sort contracts by name to ensure stable output before writing
+        for (client_contracts.items) |item| {
+            try writer.writeAll(
+                try std.fmt.allocPrint(
+                    std.heap.page_allocator,
+                    "\t@import(\"{s}\").{s},\n",
+                    .{ item.module_name, item.contract_name },
+                ),
+            );
+        }
+    }
+    try writer.writeAll(
+        \\};
+        \\
+    );
+    try writer.flush();
+    //#endregion
+
+    //#region server contracts
+    try writer.writeAll(
+        \\pub const server_contracts: []const type = &.{
+        \\
+    );
     var server_contracts = std.ArrayList(Contract){};
+
     if (server_dir) |*dir| {
         defer @constCast(dir).close();
         try iterateDir(dir.*, &server_contracts, "contracts/server", .server);
-
-        try writer.writeAll(
-            \\pub const server_contracts: []const type = &.{
-            \\
-        );
 
         // todo: sort contracts by name to ensure stable output before writing
         for (server_contracts.items) |item| {
@@ -43,13 +67,13 @@ pub fn ExploreContracts() ![]Contract {
                 ),
             );
         }
-
-        try writer.writeAll(
-            \\};
-            \\
-        );
-        try writer.flush();
     }
+    try writer.writeAll(
+        \\};
+        \\
+    );
+    try writer.flush();
+    //#endregion
 
     const joint_contracts = try std.heap.page_allocator.alloc(Contract, client_contracts.items.len + server_contracts.items.len);
     @memcpy(joint_contracts[0..client_contracts.items.len], client_contracts.items);
