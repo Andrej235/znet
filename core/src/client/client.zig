@@ -4,6 +4,7 @@ const posix = @import("std").posix;
 const ClientOptions = @import("client-options.zig").ClientOptions;
 
 const MessageHeaders = @import("../message-headers/message-headers.zig").MessageHeaders;
+const MessageType = @import("../message-headers/message-type.zig").MessageType;
 const serializeHeaders = @import("../message-headers/serialize-message-headers.zig").serializeMessageHeaders;
 const deserializeMessageHeaders = @import("../message-headers/deserialize-message-headers.zig").deserializeMessageHeaders;
 
@@ -335,8 +336,8 @@ pub const Client = struct {
             return null;
         }
 
-        const header = try deserializeMessageHeaders(&self.reader);
-        const payload_len = header.Response.payload_len;
+        // payload_len is in the same position for both response and broadcast headers
+        const payload_len = std.mem.readInt(u32, self.receive_buffer[6..10], .big);
 
         const message_len = payload_len + 10;
 
@@ -409,10 +410,34 @@ pub const Client = struct {
             // process inbound messages
             if (self.network_thread_polls[1].revents & posix.POLL.IN == posix.POLL.IN) {
                 while (try self.safeReadMessage(self.socket)) |message| {
-                    self.inbound_queue.push(.{
-                        .request_id = std.mem.readInt(u32, message[2..6], .big),
-                        .payload = message,
-                    });
+                    const version = std.mem.readInt(u8, &.{message[0]}, .big);
+                    if (version != app_version) {
+                        std.debug.print("Version mismatch: expected {}, got {}\n", .{ app_version, version });
+                        continue;
+                    }
+
+                    const msg_type: MessageType = @enumFromInt(std.mem.readInt(u8, &.{message[1]}, .big));
+                    switch (msg_type) {
+                        .Request => {
+                            std.debug.print("Tried to read request in inbound messages, client\n", .{});
+                            continue;
+                        },
+                        .Response => {
+                            self.inbound_queue.push(.{
+                                .response = .{
+                                    .request_id = std.mem.readInt(u32, message[2..6], .big),
+                                    .payload = message,
+                                },
+                            });
+                        },
+                        .Broadcast => {
+                            self.inbound_queue.push(.{
+                                .broadcast = .{
+                                    .payload = message,
+                                },
+                            });
+                        },
+                    }
 
                     // notify the worker thread that a new inbound message is available
                     _ = try std.posix.write(self.inbound_wakeup_fd, std.mem.asBytes(&@as(u64, 1)));
@@ -434,15 +459,22 @@ pub const Client = struct {
             // process inbound messages
             if (self.worker_thread_polls[0].revents != 0) {
                 while (self.inbound_queue.tryPop()) |in_msg| {
-                    if (self.pending_requests_map.get(in_msg.request_id)) |pending_request| {
-                        var reader: std.io.Reader = .fixed(in_msg.payload);
-                        pending_request.resolve(&self.deserialize, &reader, pending_request.promise) catch |err| {
-                            std.debug.print("Error resolving request_id {d}: {}\n", .{ in_msg.request_id, err });
-                        };
+                    switch (in_msg) {
+                        .response => |response| {
+                            if (self.pending_requests_map.get(response.request_id)) |pending_request| {
+                                var reader: std.io.Reader = .fixed(response.payload);
+                                pending_request.resolve(&self.deserialize, &reader, pending_request.promise) catch |err| {
+                                    std.debug.print("Error resolving request_id {d}: {}\n", .{ response.request_id, err });
+                                };
 
-                        _ = self.pending_requests_map.remove(in_msg.request_id);
-                    } else {
-                        std.debug.print("No pending request found for request_id: {d}\n", .{in_msg.request_id});
+                                _ = self.pending_requests_map.remove(response.request_id);
+                            } else {
+                                std.debug.print("No pending request found for request_id: {d}\n", .{response.request_id});
+                            }
+                        },
+                        .broadcast => |broadcast| {
+                            std.debug.print("Received broadcast message in client, not implemented ({any})\n", .{broadcast.payload});
+                        },
                     }
                 }
 

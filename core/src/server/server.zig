@@ -227,16 +227,25 @@ pub const Server = struct {
 
                 // process all available broadcast jobs
                 while (self.broadcast_job_queue.tryPop()) |broadcast_job| {
+                    const message = broadcast_job.message;
                     var bitset = broadcast_job.bitset;
+                    defer self.allocator.free(broadcast_job.message);
+                    defer bitset.deinit();
 
                     while (bitset.findFirstSet()) |idx| {
                         bitset.unset(idx);
+                        const client = self.clients[idx];
 
-                        std.debug.print("---> Broadcast ({any}) to {}\n", .{ broadcast_job.message, idx });
+                        var sent: usize = 0;
+                        while (sent < message.len) {
+                            sent += posix.write(client.socket, message[sent..]) catch |err| switch (err) {
+                                error.NotOpenForWriting => break,
+                                else => return err,
+                            };
+                        }
+
+                        std.debug.print("---> Broadcast ({any}) to {}\n", .{ message, idx });
                     }
-
-                    self.allocator.free(broadcast_job.message);
-                    bitset.deinit();
                 }
             }
         }

@@ -10,7 +10,8 @@ pub fn main() !void {
     const result = (try client.fetch(TestContract.add, .{12345})).await();
 
     std.debug.print("{!}\n", .{result});
-    try client.deinit();
+    // _ = (try client.fetch(TestContract.add, .{12345})).await() catch {};
+    // try client.deinit();
 
     // keep the program alive to allow background network thread to operate, todo: get rid of this
     std.Thread.sleep(100000000000);
