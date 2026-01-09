@@ -3,10 +3,7 @@ const znet = @import("znet");
 const role = @import("znet/role").role;
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-
-    var server = try znet.Server.init(allocator, .{
+    var server = try znet.Server.init(std.heap.page_allocator, .{
         .max_clients = 2048,
     });
 

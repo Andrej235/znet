@@ -112,15 +112,43 @@ pub const Client = struct {
         self.allocator.destroy(self.inbound_queue);
 
         self.allocator.free(self.network_thread_polls);
-        self.allocator.free(self.worker_thread_polls);
 
         self.pending_requests_map.deinit();
         self.allocator.destroy(self);
     }
 
     pub fn connect(self: *Client, address: std.net.Address) !void {
-        // networkThread will spawn the worker thread, connect the socket and create all polls
-        _ = try std.Thread.spawn(.{}, networkThread, .{ self, address });
+        self.socket = try posix.socket(
+            address.any.family,
+            posix.SOCK.STREAM | posix.SOCK.NONBLOCK,
+            posix.IPPROTO.TCP,
+        );
+
+        self.outbound_wakeup_fd = try posix.eventfd(0, posix.SOCK.NONBLOCK);
+
+        self.network_thread_polls[0] = .{
+            .fd = self.outbound_wakeup_fd,
+            .events = posix.POLL.IN,
+            .revents = 0,
+        };
+
+        self.network_thread_polls[1] = .{
+            .fd = self.socket,
+            .events = posix.POLL.IN,
+            .revents = 0,
+        };
+
+        _ = try posix.poll(self.network_thread_polls[1..], -1);
+        while (true) {
+            posix.connect(self.socket, &address.any, address.getOsSockLen()) catch |err| switch (err) {
+                error.WouldBlock => continue,
+                else => return err,
+            };
+            break;
+        }
+
+        _ = try std.Thread.spawn(.{}, networkThread, .{self});
+        _ = try std.Thread.spawn(.{}, workerThread, .{self});
     }
 
     pub fn disconnect(self: *Client) !void {
@@ -356,29 +384,7 @@ pub const Client = struct {
         return msg;
     }
 
-    fn networkThread(self: *Client, address: std.net.Address) !void {
-        self.socket = try posix.socket(
-            address.any.family,
-            posix.SOCK.STREAM,
-            posix.IPPROTO.TCP,
-        );
-
-        try posix.connect(self.socket, &address.any, address.getOsSockLen());
-
-        self.network_thread_polls[0] = .{
-            .fd = self.outbound_wakeup_fd,
-            .events = posix.POLL.IN,
-            .revents = 0,
-        };
-
-        self.network_thread_polls[1] = .{
-            .fd = self.socket,
-            .events = posix.POLL.IN | posix.POLL.OUT,
-            .revents = 0,
-        };
-
-        _ = try std.Thread.spawn(.{}, workerThread, .{self});
-
+    fn networkThread(self: *Client) !void {
         while (true) {
             _ = try posix.poll(self.network_thread_polls, -1);
 

@@ -8,10 +8,9 @@ pub fn main() !void {
     try client.connect(address);
 
     const result = (try client.fetch(TestContract.add, .{12345})).await();
-
     std.debug.print("{!}\n", .{result});
-    // _ = (try client.fetch(TestContract.add, .{12345})).await() catch {};
-    // try client.deinit();
+
+    _ = (try client.fetch(TestContract.multiply, .{ 5, 7 })).await();
 
     // keep the program alive to allow background network thread to operate, todo: get rid of this
     std.Thread.sleep(100000000000);
