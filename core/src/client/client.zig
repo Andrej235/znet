@@ -1,5 +1,3 @@
-// TODO: Allow multithreaded clients (multiple worker threads, this allows clients to call fetch from within a broadcast handler)
-
 const std = @import("std");
 const posix = @import("std").posix;
 
@@ -32,6 +30,7 @@ const app_version: u8 = @import("../app-version.zig").app_version;
 pub const Client = struct {
     pub const call_table = createCallTable();
 
+    options: ClientOptions = .{},
     allocator: std.mem.Allocator,
 
     send_buffer: []u8,
@@ -77,6 +76,7 @@ pub const Client = struct {
 
         const self = try allocator.create(Client);
         self.* = Client{
+            .options = options,
             .allocator = allocator,
 
             .send_buffer = send_buffer,
@@ -148,7 +148,10 @@ pub const Client = struct {
         }
 
         _ = try std.Thread.spawn(.{}, networkThread, .{self});
-        _ = try std.Thread.spawn(.{}, workerThread, .{self});
+
+        for (0..self.options.worker_thread_count) |_| {
+            _ = try std.Thread.spawn(.{}, workerThread, .{self});
+        }
     }
 
     pub fn disconnect(self: *Client) !void {

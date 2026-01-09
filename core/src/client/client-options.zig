@@ -4,4 +4,5 @@ pub const ClientOptions = struct {
     write_buffer_size: usize = 4096,
     max_outbound_messages: usize = 128,
     max_inbound_messages: usize = 128,
+    worker_thread_count: usize = 4,
 };
