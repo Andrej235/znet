@@ -22,9 +22,14 @@ const OutboundMessage = @import("outbound-message.zig").OutboundMessage;
 const InboundMessage = @import("inbound-message.zig").InboundMessage;
 const PendingRequest = @import("pending-request.zig").PendingRequest;
 
+const BroadcastHandlerFn = @import("handler-fn/broadcast-handler-fn.zig").BroadcastHandlerFn;
+const createBroadcastHandlerFn = @import("handler-fn/create-broadcast-handler-fn.zig").createBroadcastHandlerFn;
+
 const app_version: u8 = @import("../app-version.zig").app_version;
 
 pub const Client = struct {
+    pub const call_table = createCallTable();
+
     allocator: std.mem.Allocator,
 
     send_buffer: []u8,
@@ -40,16 +45,13 @@ pub const Client = struct {
 
     // 0 is outbound queue wakeup, 1 is incoming data from server
     network_thread_polls: []posix.pollfd,
-    // 0 is inbound queu wakeup
-    worker_thread_polls: []posix.pollfd,
+    outbound_wakeup_fd: posix.fd_t,
 
     outbound_buffer: []OutboundMessage,
     outbound_queue: *Queue(OutboundMessage),
-    outbound_wakeup_fd: posix.fd_t,
 
     inbound_buffer: []InboundMessage,
     inbound_queue: *Queue(InboundMessage),
-    inbound_wakeup_fd: posix.fd_t,
 
     current_request_id: u32 = 0,
 
@@ -66,10 +68,7 @@ pub const Client = struct {
         inbound_queue.* = try Queue(InboundMessage).init(inbound_buffer);
 
         const network_thread_polls = try allocator.alloc(posix.pollfd, 2);
-        const worker_thread_polls = try allocator.alloc(posix.pollfd, 1);
-
         const outbound_wakeup_fd = try posix.eventfd(0, posix.SOCK.NONBLOCK);
-        const inbound_wakeup_fd = try posix.eventfd(0, posix.SOCK.NONBLOCK);
 
         var pending_requests_map = std.AutoHashMap(u32, PendingRequest).init(allocator);
         try pending_requests_map.ensureTotalCapacity(options.max_pending_requests);
@@ -88,16 +87,14 @@ pub const Client = struct {
 
             .outbound_buffer = outbound_buffer,
             .outbound_queue = outbound_queue,
-            .outbound_wakeup_fd = outbound_wakeup_fd,
 
             .inbound_buffer = inbound_buffer,
             .inbound_queue = inbound_queue,
-            .inbound_wakeup_fd = inbound_wakeup_fd,
 
             .pending_requests_map = pending_requests_map,
 
             .network_thread_polls = network_thread_polls,
-            .worker_thread_polls = worker_thread_polls,
+            .outbound_wakeup_fd = outbound_wakeup_fd,
         };
 
         return self;
@@ -136,7 +133,7 @@ pub const Client = struct {
         const request_id = self.generateRequestId();
         const TResponse = MethodReturnType(method);
         const TPromise = Promise(TResponse);
-        // allocated in init, must deallocated by consumer
+        // allocated in init, must be deallocated by consumer
         const promise = try TPromise.init(self.allocator);
 
         const DeserilizeWrapper = struct {
@@ -410,13 +407,13 @@ pub const Client = struct {
             // process inbound messages
             if (self.network_thread_polls[1].revents & posix.POLL.IN == posix.POLL.IN) {
                 while (try self.safeReadMessage(self.socket)) |message| {
-                    const version = std.mem.readInt(u8, &.{message[0]}, .big);
+                    const version = message[0];
                     if (version != app_version) {
                         std.debug.print("Version mismatch: expected {}, got {}\n", .{ app_version, version });
                         continue;
                     }
 
-                    const msg_type: MessageType = @enumFromInt(std.mem.readInt(u8, &.{message[1]}, .big));
+                    const msg_type: MessageType = @enumFromInt(message[1]);
                     switch (msg_type) {
                         .Request => {
                             std.debug.print("Tried to read request in inbound messages, client\n", .{});
@@ -438,50 +435,71 @@ pub const Client = struct {
                             });
                         },
                     }
-
-                    // notify the worker thread that a new inbound message is available
-                    _ = try std.posix.write(self.inbound_wakeup_fd, std.mem.asBytes(&@as(u64, 1)));
                 }
             }
         }
     }
 
     fn workerThread(self: *Client) !void {
-        self.worker_thread_polls[0] = .{
-            .fd = self.inbound_wakeup_fd,
-            .events = posix.POLL.IN,
-            .revents = 0,
-        };
-
         while (true) {
-            _ = try posix.poll(self.worker_thread_polls, -1);
+            const in_msg = self.inbound_queue.pop();
 
-            // process inbound messages
-            if (self.worker_thread_polls[0].revents != 0) {
-                while (self.inbound_queue.tryPop()) |in_msg| {
-                    switch (in_msg) {
-                        .response => |response| {
-                            if (self.pending_requests_map.get(response.request_id)) |pending_request| {
-                                var reader: std.io.Reader = .fixed(response.payload);
-                                pending_request.resolve(&self.deserialize, &reader, pending_request.promise) catch |err| {
-                                    std.debug.print("Error resolving request_id {d}: {}\n", .{ response.request_id, err });
-                                };
+            switch (in_msg) {
+                .response => |response| {
+                    if (self.pending_requests_map.get(response.request_id)) |pending_request| {
+                        var reader: std.io.Reader = .fixed(response.payload);
+                        pending_request.resolve(&self.deserialize, &reader, pending_request.promise) catch |err| {
+                            std.debug.print("Error resolving request_id {d}: {}\n", .{ response.request_id, err });
+                        };
 
-                                _ = self.pending_requests_map.remove(response.request_id);
-                            } else {
-                                std.debug.print("No pending request found for request_id: {d}\n", .{response.request_id});
-                            }
+                        _ = self.pending_requests_map.remove(response.request_id);
+                    } else {
+                        std.debug.print("No pending request found for request_id: {d}\n", .{response.request_id});
+                    }
+                },
+                .broadcast => |broadcast| {
+                    var reader = std.io.Reader.fixed(broadcast.payload);
+                    const headers = try deserializeMessageHeaders(&reader);
+                    switch (headers) {
+                        .Request => {
+                            std.debug.print("Unexpected Request message in broadcast handler\n", .{});
+                            return;
                         },
-                        .broadcast => |broadcast| {
-                            std.debug.print("Received broadcast message in client, not implemented ({any})\n", .{broadcast.payload});
+                        .Response => {
+                            std.debug.print("Unexpected Response message in broadcast handler\n", .{});
+                            return;
+                        },
+                        .Broadcast => |broadcasd_header| {
+                            const handler = call_table[broadcasd_header.contract_id][broadcasd_header.method_id];
+                            try handler(self, self.allocator, &reader);
                         },
                     }
-                }
-
-                // clear the wakeup event
-                var buf: u64 = 0;
-                _ = try std.posix.read(self.inbound_wakeup_fd, std.mem.asBytes(&buf));
+                },
             }
         }
     }
 };
+
+pub fn createCallTable() []const []const BroadcastHandlerFn {
+    comptime {
+        var call_table: []const []const BroadcastHandlerFn = &.{};
+        for (@import("znet_contract_registry").client_contracts) |TContract| {
+            var handlers: []const BroadcastHandlerFn = &.{};
+
+            const info = @typeInfo(TContract);
+            if (info != .@"struct") continue;
+            const decls = info.@"struct".decls;
+
+            for (decls) |decl| {
+                const fn_name = decl.name;
+                const fn_impl = @field(TContract, fn_name);
+
+                if (@typeInfo(@TypeOf(fn_impl)) != .@"fn") continue;
+                handlers = handlers ++ @as([]const BroadcastHandlerFn, &.{createBroadcastHandlerFn(fn_impl)});
+            }
+            call_table = call_table ++ @as([]const []const BroadcastHandlerFn, &.{handlers});
+        }
+
+        return call_table;
+    }
+}
