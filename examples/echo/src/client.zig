@@ -1,30 +1,38 @@
 const std = @import("std");
 const znet = @import("znet");
-const TestContract = @import("server/test-contract").TestContract;
+const EchoContract = @import("server/echo-contract").EchoContract;
 
 pub fn main() !void {
     var client = try znet.Client.init(std.heap.page_allocator, .{});
-    const address = try std.net.Address.parseIp("127.0.0.1", 5882);
+    const address = try std.net.Address.parseIp("127.0.0.1", 5000);
     try client.connect(address);
 
-    const result = (try client.fetch(TestContract.add, .{12345})).await();
-    std.debug.print("{!}\n", .{result});
+    var stdout_buf: [1024]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
+    var writer = &stdout_writer.interface;
 
-    _ = (try client.fetch(TestContract.multiply, .{ 5, 7 })).await();
+    var stdin_buf: [1024]u8 = undefined;
+    var stdin_reader = std.fs.File.stdin().reader(&stdin_buf);
+    var reader = &stdin_reader.interface;
 
-    // keep the program alive to allow background network thread to operate, todo: get rid of this
-    std.Thread.sleep(100000000000);
-}
+    try writer.writeAll("Echo client: type messages and press Enter to send, you will see them echoed back by the server\n> ");
+    try writer.flush();
 
-const ASDContract = struct {
-    pub fn add(a: i32) AddErrors!i32 {
-        if (a > 5)
-            return error.ValOver5;
+    while (try reader.takeDelimiter('\n')) |message| {
+        const promise = try client.fetch(EchoContract.echo, .{message});
+        const echoed_message = promise.await();
 
-        return a;
+        try writer.writeAll("< ");
+        try writer.writeAll(echoed_message);
+        try writer.writeAll("\n> ");
+        try writer.flush();
     }
-};
 
-pub const AddErrors = error{
-    ValOver5,
-};
+    // const result = (try client.fetch(TestContract.add, .{12345})).await();
+    // std.debug.print("{!}\n", .{result});
+
+    // _ = (try client.fetch(TestContract.multiply, .{ 5, 7 })).await();
+
+    // // keep the program alive to allow background network thread to operate, todo: get rid of this
+    // std.Thread.sleep(100000000000);
+}

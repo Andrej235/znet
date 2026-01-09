@@ -481,8 +481,10 @@ pub const Client = struct {
                             return;
                         },
                         .Broadcast => |broadcasd_header| {
-                            const handler = call_table[broadcasd_header.contract_id][broadcasd_header.method_id];
-                            try handler(self, self.allocator, &reader);
+                            if (@import("znet_contract_registry").server_contracts.len == 0) {
+                                const handler = call_table[broadcasd_header.contract_id][broadcasd_header.method_id];
+                                try handler(self, self.allocator, &reader);
+                            }
                         },
                     }
                 },
