@@ -7,6 +7,8 @@ const serializeHeaders = @import("../../message-headers/serialize-message-header
 const Serializer = @import("../../serializer/serializer.zig").Serializer;
 const CountingSerializer = @import("../../serializer/counting-serializer.zig").Serializer;
 
+const Client = @import("../../client//client.zig").Client;
+
 const app_version = @import("../../app-version.zig").app_version;
 
 pub const Audience = struct {
@@ -84,8 +86,16 @@ pub fn getParamTupleFields(comptime TFn: type) []std.builtin.Type.StructField {
     const fn_info = @typeInfo(TFn);
     if (fn_info != .@"fn") @compileError("Expected function type");
 
-    var fields: [fn_info.@"fn".params.len]std.builtin.Type.StructField = undefined;
-    for (fn_info.@"fn".params, 0..) |param, idx| {
+    if (fn_info.@"fn".params[0].type == Client)
+        @compileError("Client must be injected as a pointer");
+
+    const inject_client: bool = fn_info.@"fn".params[0].type == *Client;
+    const fields_len = if (inject_client) fn_info.@"fn".params.len - 1 else fn_info.@"fn".params.len;
+
+    var fields: [fields_len]std.builtin.Type.StructField = undefined;
+    const params = if (inject_client) fn_info.@"fn".params[1..] else fn_info.@"fn".params;
+
+    for (params, 0..) |param, idx| {
         if (param.type) |T| {
             fields[idx] = .{
                 .name = std.fmt.comptimePrint("{}", .{idx}),

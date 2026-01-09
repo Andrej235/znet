@@ -1,3 +1,5 @@
+// TODO: Allow multithreaded clients (multiple worker threads, this allows clients to call fetch from within a broadcast handler)
+
 const std = @import("std");
 const posix = @import("std").posix;
 

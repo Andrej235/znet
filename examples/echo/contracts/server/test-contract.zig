@@ -12,6 +12,10 @@ pub const TestContract = struct {
 
         return a;
     }
+
+    pub fn multiply(a: i32, b: i32) i32 {
+        return a * b;
+    }
 };
 
 pub const AddErrors = error{
