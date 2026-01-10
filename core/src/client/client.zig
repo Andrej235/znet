@@ -481,7 +481,7 @@ pub const Client = struct {
                             return;
                         },
                         .Broadcast => |broadcasd_header| {
-                            if (call_table.len < 0)
+                            if (call_table.len == 0)
                                 return;
 
                             const handler = call_table[broadcasd_header.contract_id][broadcasd_header.method_id];
@@ -495,7 +495,7 @@ pub const Client = struct {
 };
 
 pub fn createCallTable() []const []const BroadcastHandlerFn {
-    comptime {
+    return comptime blk: {
         var call_table: []const []const BroadcastHandlerFn = &.{};
         for (@import("znet_contract_registry").client_contracts) |TContract| {
             var handlers: []const BroadcastHandlerFn = &.{};
@@ -514,6 +514,6 @@ pub fn createCallTable() []const []const BroadcastHandlerFn {
             call_table = call_table ++ @as([]const []const BroadcastHandlerFn, &.{handlers});
         }
 
-        return call_table;
-    }
+        break :blk call_table;
+    };
 }

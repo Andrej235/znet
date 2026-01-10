@@ -126,7 +126,24 @@ pub const Server = struct {
         return self;
     }
 
-    pub fn run(self: *Server, address: std.net.Address) !noreturn {
+    pub fn deinit(self: *Server) !void {
+        posix.close(self.wakeup_fd);
+        self.allocator.destroy(self.job_queue);
+        self.allocator.destroy(self.job_result_queue);
+        self.allocator.destroy(self.broadcast_job_queue);
+        self.allocator.free(self.polls);
+        self.allocator.free(self.clients);
+        self.allocator.free(self.free_indices);
+        self.allocator.free(self.poll_to_client);
+        self.allocator.destroy(self);
+    }
+
+    pub inline fn run(self: *Server, address: std.net.Address) !noreturn {
+        var running = std.atomic.Value(bool).init(true);
+        return self.runUntil(address, &running);
+    }
+
+    pub fn runUntil(self: *Server, address: std.net.Address, running: *std.atomic.Value(bool)) !void {
         const socket_type: u32 = posix.SOCK.STREAM | posix.SOCK.NONBLOCK;
         const protocol = posix.IPPROTO.TCP;
         const listener = try posix.socket(address.any.family, socket_type, protocol);
@@ -149,9 +166,9 @@ pub const Server = struct {
             .events = posix.POLL.IN,
         };
 
-        while (true) {
-            // +2 is for the listening socket and the wakeup socket, -1 timeout means wait indefinitely
-            _ = try posix.poll(self.polls[0 .. self.connected + 2], -1);
+        while (running.load(.acquire)) {
+            // +2 is for the listening socket and the wakeup socket, 1s timeout
+            _ = try posix.poll(self.polls[0 .. self.connected + 2], 1_000); // todo: remove timeout, use eventfd for shutdown signaling
 
             // new connections
             if (self.polls[0].revents != 0) {
@@ -222,7 +239,8 @@ pub const Server = struct {
                         };
                     }
 
-                    std.debug.print("---> response sent to {} (gen {}): {any}\n", .{ job_result.client_id.index, job_result.client_id.gen, job_result.data });
+                    std.debug.print("Responding to: {}/{}\n", .{ job_result.client_id.index, job_result.client_id.gen });
+                    // std.debug.print("---> response sent to {} (gen {}): {any}\n", .{ job_result.client_id.index, job_result.client_id.gen, job_result.data });
                 }
 
                 // process all available broadcast jobs

@@ -24,7 +24,6 @@ pub fn ExploreContracts() ![]Contract {
     var client_contracts = std.ArrayList(Contract){};
 
     if (client_dir) |*dir| {
-        // todo: implement
         defer @constCast(dir).close();
         _ = try iterateDir(dir.*, &client_contracts, "contracts/client", .client);
 

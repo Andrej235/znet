@@ -4,7 +4,7 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    _ = try @import("znet").setup(b, .{
+    _ = try @import("znet").setup(b,.{
         .target = target,
         .optimize = optimize,
     });
