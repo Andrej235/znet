@@ -140,7 +140,9 @@ pub const Server = struct {
 
     pub inline fn run(self: *Server, address: std.net.Address) !noreturn {
         var running = std.atomic.Value(bool).init(true);
-        return self.runUntil(address, &running);
+        try self.runUntil(address, &running);
+
+        @panic("unreachable");
     }
 
     pub fn runUntil(self: *Server, address: std.net.Address, running: *std.atomic.Value(bool)) !void {

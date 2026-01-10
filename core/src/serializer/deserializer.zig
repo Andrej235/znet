@@ -1,4 +1,5 @@
 const std = @import("std");
+
 const DeserializationErrors = @import("errors.zig").DeserializationErrors;
 
 pub const Deserializer = struct {
@@ -243,5 +244,108 @@ pub const Deserializer = struct {
         };
 
         return @enumFromInt(try self.deserializeInt(reader, @Type(.{ .int = int_info_padded })));
+    }
+
+    /// Recursively frees all memory associated with the given data structure
+    ///
+    /// Given data must have been deserialized using this deserializer instance
+    /// or allocated using the same allocator
+    pub fn destroy(self: *Deserializer, data: anytype) !void {
+        const T = @TypeOf(data);
+        const info = @typeInfo(T);
+
+        switch (info) {
+            .@"struct" => |struct_info| try self.destroyStruct(data, struct_info),
+            .@"union" => |union_info| try self.destroyUnion(data, union_info),
+            .array => |array_info| try self.destroyArray(data, array_info),
+            .pointer => |pointer_info| try self.destroyPointer(data, pointer_info),
+            .optional => try self.destroyOptional(data),
+            .error_union => try self.destroyErrorUnion(data),
+            .bool => return,
+            .int => return,
+            .float => return,
+            .@"enum" => return,
+            .comptime_int => @compileError("Comptime integers cannot be serialized directly, consider converting to a regular integer type before serialization"),
+            .comptime_float => @compileError("Comptime floats cannot be serialized directly, consider converting to a regular float type before serialization"),
+            .error_set => @compileError("Direct serialization of error sets is not supported, consider using an error union instead"),
+            .vector => @compileError("Vectors are not a data format, they are a computation type tied to target ABI / SIMD width and thus cannot be serialized directly. Consider converting to an array or slice before serialization"),
+            .frame => @compileError("Frames cannot be serialized"),
+            .@"anyframe" => @compileError("AnyFrames cannot be serialized"),
+            .void => @compileError("Void type cannot be serialized, if you want to serialize nothing, consider using null or an empty struct"),
+            .null => @compileError("Null type cannot be serialized, consider using an optional type instead"),
+            .undefined => @compileError("Undefined represents an uninitialized value and cannot be serialized"),
+            .noreturn => @compileError("Noreturn type cannot be serialized"),
+            .type => @compileError("Types only exist at compile time and cannot be serialized"),
+            .@"fn" => @compileError("Functions cannot be serialized"),
+            .@"opaque" => @compileError("Opaque types cannot be serialized due to lack of type information at compile time"),
+            .enum_literal => @compileError("Enum literals cannot be serialized directly, try using the enum type instead"),
+        }
+    }
+
+    inline fn destroyStruct(self: *Deserializer, data: anytype, comptime struct_info: std.builtin.Type.Struct) DeserializationErrors!void {
+        inline for (struct_info.fields) |field| {
+            const field_value = @field(data, field.name);
+            try self.destroy(field_value);
+        }
+    }
+
+    inline fn destroyUnion(self: *Deserializer, data: anytype, comptime union_info: std.builtin.Type.Union) DeserializationErrors!void {
+        if (union_info.tag_type) |enum_tag_type| {
+            const active = @intFromEnum(data);
+            inline for (union_info.fields, 0..) |field, index| {
+                const current = @typeInfo(enum_tag_type).@"enum".fields[index].value;
+
+                if (active == current) {
+                    const field_value = @field(data, field.name);
+                    try self.destroy(field_value);
+                    return;
+                }
+            }
+        } else {
+            @compileError("Untagged unions are not supported");
+        }
+    }
+
+    inline fn destroyArray(self: *Deserializer, data: anytype, comptime array_info: std.builtin.Type.Array) DeserializationErrors!void {
+        const len = array_info.len;
+
+        inline for (0..len) |i| {
+            const element = data[i];
+            try self.destroy(element);
+        }
+    }
+
+    inline fn destroyPointer(self: *Deserializer, data: anytype, comptime pointer_info: std.builtin.Type.Pointer) DeserializationErrors!void {
+        switch (pointer_info.size) {
+            .one => {
+                const pointed_value = data.*;
+                try self.destroy(pointed_value);
+                self.allocator.destroy(pointed_value);
+            },
+            .many => {
+                @compileError("Many pointers are not supported, consider using a slice instead");
+            },
+            .c => {
+                @compileError("C pointers are not supported, consider using a slice instead");
+            },
+            .slice => {
+                const slice = data;
+                for (slice) |element| {
+                    try self.destroy(element);
+                }
+                self.allocator.free(slice);
+            },
+        }
+    }
+
+    inline fn destroyOptional(self: *Deserializer, data: anytype) DeserializationErrors!void {
+        if (data) |value| {
+            try self.destroy(value);
+        }
+    }
+
+    inline fn destroyErrorUnion(self: *Deserializer, data: anytype) DeserializationErrors!void {
+        const safe_data = data catch return;
+        self.destroy(safe_data);
     }
 };

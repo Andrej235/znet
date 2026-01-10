@@ -49,13 +49,12 @@ pub fn createHandlerFn(comptime fn_impl: anytype) HandlerFn {
             input_reader: *std.Io.Reader,
             output_writer: *std.Io.Writer,
         ) anyerror!void {
-            // todo: free params after @call (deserializer may allocate memory)
             var deserializer = Deserializer.init(allocator);
             const payload: TPayload = try deserializer.deserialize(input_reader, TPayload);
+            // todo: free context after @call
             const params: TParams = blk: {
                 if (!inject_context) break :blk payload;
 
-                // todo: free context after @call
                 const ctx = try allocator.create(Context);
                 ctx.* = Context{
                     .allocator = allocator,
@@ -93,6 +92,9 @@ pub fn createHandlerFn(comptime fn_impl: anytype) HandlerFn {
                 },
             );
             try Serializer.serialize(fn_info.@"fn".return_type.?, output_writer, output);
+
+            // payload MUST be destroyed AFTER output serialization is complete in case pointers from payload are used in output
+            try deserializer.destroy(payload);
         }
     }.handler;
 }

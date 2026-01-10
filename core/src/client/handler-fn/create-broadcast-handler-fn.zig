@@ -38,7 +38,6 @@ pub fn createBroadcastHandlerFn(comptime fn_impl: anytype) BroadcastHandlerFn {
             allocator: std.mem.Allocator,
             input_reader: *std.io.Reader,
         ) anyerror!void {
-            // todo: free params after @call (deserializer may allocate memory)
             var deserializer = Deserializer.init(allocator);
             const payload: TPayload = try deserializer.deserialize(input_reader, TPayload);
             const params: TParams = blk: {
@@ -55,6 +54,7 @@ pub fn createBroadcastHandlerFn(comptime fn_impl: anytype) BroadcastHandlerFn {
             };
 
             try @call(.always_inline, fn_impl, params);
+            try deserializer.destroy(payload);
         }
     }.handler;
 }
