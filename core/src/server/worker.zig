@@ -34,6 +34,10 @@ pub const Worker = struct {
         };
     }
 
+    pub fn deinit(self: *Worker) void {
+        self.allocator.free(self.response_buffer);
+    }
+
     pub fn run(self: *Worker) !noreturn {
         while (true) {
             const job = self.job_queue.pop();

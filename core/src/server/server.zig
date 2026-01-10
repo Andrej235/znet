@@ -20,6 +20,7 @@ pub const Server = struct {
     pub const call_table = createCallTable();
 
     options: ServerOptions,
+    workers: []Worker,
 
     // creates polls and client slices, and is passed to Client.init and handlers
     allocator: std.mem.Allocator,
@@ -93,10 +94,13 @@ pub const Server = struct {
         const poll_to_client = try allocator.alloc(u32, options.max_clients);
         errdefer allocator.free(poll_to_client);
 
+        const workers = try allocator.alloc(Worker, options.worker_threads);
+
         const self: *Server = try allocator.create(Server);
         self.* = .{
             .options = options,
             .allocator = allocator,
+            .workers = workers,
 
             .clients = clients,
             .client_polls = polls[2..],
@@ -114,10 +118,9 @@ pub const Server = struct {
         };
 
         for (0..options.worker_threads) |i| {
-            const worker = try allocator.create(Worker);
-            worker.* = try Worker.init(options.job_result_buffer_size, self);
+            workers[i] = try Worker.init(options.job_result_buffer_size, self);
 
-            _ = std.Thread.spawn(.{}, Worker.run, .{worker}) catch |err| {
+            _ = std.Thread.spawn(.{}, Worker.run, .{&workers[i]}) catch |err| {
                 std.debug.print("failed to spawn worker thread {}: {}", .{ i, err });
                 return err;
             };
@@ -128,13 +131,24 @@ pub const Server = struct {
 
     pub fn deinit(self: *Server) !void {
         posix.close(self.wakeup_fd);
+
+        self.allocator.free(self.job_queue.buf);
         self.allocator.destroy(self.job_queue);
+
+        self.allocator.free(self.job_result_queue.buf);
         self.allocator.destroy(self.job_result_queue);
+
+        self.allocator.free(self.broadcast_job_queue.buf);
         self.allocator.destroy(self.broadcast_job_queue);
+
         self.allocator.free(self.polls);
         self.allocator.free(self.clients);
         self.allocator.free(self.free_indices);
         self.allocator.free(self.poll_to_client);
+
+        for (self.workers) |*w| w.deinit();
+        self.allocator.free(self.workers);
+
         self.allocator.destroy(self);
     }
 
