@@ -38,7 +38,7 @@ pub const Client = struct {
     read_pos: usize = 0,
     reader: std.io.Reader,
 
-    deserialize: Deserializer,
+    deserializer: Deserializer,
 
     pending_requests_map: std.AutoHashMap(u32, PendingRequest),
 
@@ -83,9 +83,7 @@ pub const Client = struct {
             .receive_buffer = receive_buffer,
             .reader = std.io.Reader.fixed(receive_buffer),
 
-            .deserialize = Deserializer{
-                .allocator = allocator,
-            },
+            .deserializer = Deserializer.init(allocator),
 
             .outbound_buffer = outbound_buffer,
             .outbound_queue = outbound_queue,
@@ -102,7 +100,7 @@ pub const Client = struct {
         return self;
     }
 
-    pub fn deinit(self: *Client) !void {
+    pub fn deinit(self: *Client) void {
         self.allocator.free(self.send_buffer);
         self.allocator.free(self.receive_buffer);
 
@@ -167,7 +165,7 @@ pub const Client = struct {
         const TResponse = MethodReturnType(method);
         const TPromise = Promise(TResponse);
         // allocated in init, must be deallocated by consumer
-        const promise = try TPromise.init(self.allocator);
+        const promise = try TPromise.init(self.allocator, &self.deserializer);
 
         const DeserilizeWrapper = struct {
             pub fn resolve(deserializer: *Deserializer, reader: *std.io.Reader, request_promise: *anyopaque) anyerror!void {
@@ -459,7 +457,7 @@ pub const Client = struct {
                 .response => |response| {
                     if (self.pending_requests_map.get(response.request_id)) |pending_request| {
                         var reader: std.io.Reader = .fixed(response.payload);
-                        pending_request.resolve(&self.deserialize, &reader, pending_request.promise) catch |err| {
+                        pending_request.resolve(&self.deserializer, &reader, pending_request.promise) catch |err| {
                             std.debug.print("Error resolving request_id {d}: {}\n", .{ response.request_id, err });
                         };
 

@@ -32,7 +32,7 @@ pub fn listenerThread() !void {
     var reader = &stdin_reader.interface;
 
     while (try reader.takeDelimiter('\n')) |message| {
-        if (std.mem.eql(u8, message, "quit")) {
+        if (std.mem.eql(u8, message, "exit")) {
             running.store(false, .release);
             std.debug.print("Exit\n", .{});
             break;

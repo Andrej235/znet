@@ -1,4 +1,5 @@
 const std = @import("std");
+const Deserializer = @import("../serializer/deserializer.zig").Deserializer;
 
 const State = enum {
     pending,
@@ -16,8 +17,9 @@ pub fn Promise(comptime T: type) type {
         result: T = undefined,
 
         allocator: std.mem.Allocator,
+        deserializer: *Deserializer,
 
-        pub fn init(allocator: std.mem.Allocator) !*Self {
+        pub fn init(allocator: std.mem.Allocator, deserializer: *Deserializer) !*Self {
             const self = try allocator.create(Self);
             self.* = Self{
                 .mutex = std.Thread.Mutex{},
@@ -25,9 +27,15 @@ pub fn Promise(comptime T: type) type {
                 .state = .pending,
                 .result = undefined,
                 .allocator = allocator,
+                .deserializer = deserializer,
             };
 
             return self;
+        }
+
+        pub fn destroyResult(self: *Self) !void {
+            if (self.state != .fulfilled) return error.PromiseNotFulfilled;
+            try self.deserializer.destroy(self.result);
         }
 
         pub fn deinit(self: *Self) void {
