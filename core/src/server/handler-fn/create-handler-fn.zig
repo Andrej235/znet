@@ -51,7 +51,6 @@ pub fn createHandlerFn(comptime fn_impl: anytype) HandlerFn {
         ) anyerror!void {
             var deserializer = Deserializer.init(allocator);
             const payload: TPayload = try deserializer.deserialize(input_reader, TPayload);
-            // todo: free context after @call
             const params: TParams = blk: {
                 if (!inject_context) break :blk payload;
 
@@ -95,6 +94,7 @@ pub fn createHandlerFn(comptime fn_impl: anytype) HandlerFn {
 
             // payload MUST be destroyed AFTER output serialization is complete in case pointers from payload are used in output
             try deserializer.destroy(payload);
+            if (inject_context) allocator.destroy(params.@"0"); // context must be destroyed explicitly to avoid deserializer trying to load in all its fields
         }
     }.handler;
 }
