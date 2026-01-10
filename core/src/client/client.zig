@@ -169,39 +169,23 @@ pub const Client = struct {
 
         const DeserilizeWrapper = struct {
             pub fn resolve(deserializer: *Deserializer, reader: *std.io.Reader, request_promise: *anyopaque) anyerror!void {
-                const headers = try deserializeMessageHeaders(reader);
-
-                switch (headers) {
-                    .Request => {
-                        return error.UnexpectedRequestInResponse;
+                const result = if (@typeInfo(TResponse) == .error_union) deserializer.deserialize(reader, TResponse) catch |err| switch (err) {
+                    DeserializationErrors.AllocationFailed,
+                    DeserializationErrors.BooleanDeserializationFailed,
+                    DeserializationErrors.EndOfStream,
+                    DeserializationErrors.IntegerDeserializationFailed,
+                    DeserializationErrors.InvalidBooleanValue,
+                    DeserializationErrors.InvalidUnionTag,
+                    DeserializationErrors.OutOfMemory,
+                    DeserializationErrors.UnexpectedEof,
+                    => {
+                        return error.DeserializationFailed;
                     },
-                    .Broadcast => {
-                        return error.UnexpectedBroadcastInResponse;
-                    },
-                    .Response => |resp_header| {
-                        if (resp_header.version != app_version) {
-                            return error.VersionMismatch;
-                        }
+                    else => @as(@typeInfo(TResponse).error_union.error_set, @errorCast(err)),
+                } else deserializer.deserialize(reader, TResponse) catch return error.DeserializationFailed;
 
-                        const result = if (@typeInfo(TResponse) == .error_union) deserializer.deserialize(reader, TResponse) catch |err| switch (err) {
-                            DeserializationErrors.AllocationFailed,
-                            DeserializationErrors.BooleanDeserializationFailed,
-                            DeserializationErrors.EndOfStream,
-                            DeserializationErrors.IntegerDeserializationFailed,
-                            DeserializationErrors.InvalidBooleanValue,
-                            DeserializationErrors.InvalidUnionTag,
-                            DeserializationErrors.OutOfMemory,
-                            DeserializationErrors.UnexpectedEof,
-                            => {
-                                return error.DeserializationFailed;
-                            },
-                            else => @as(@typeInfo(TResponse).error_union.error_set, @errorCast(err)),
-                        } else deserializer.deserialize(reader, TResponse) catch return error.DeserializationFailed;
-
-                        const message_promise: *TPromise = @ptrCast(@alignCast(request_promise));
-                        message_promise.resolve(result);
-                    },
-                }
+                const message_promise: *TPromise = @ptrCast(@alignCast(request_promise));
+                message_promise.resolve(result);
             }
         };
 
@@ -416,34 +400,9 @@ pub const Client = struct {
             // process inbound messages
             if (self.network_thread_polls[1].revents & posix.POLL.IN == posix.POLL.IN) {
                 while (try self.safeReadMessage(self.socket)) |message| {
-                    const version = message[0];
-                    if (version != app_version) {
-                        std.debug.print("Version mismatch: expected {}, got {}\n", .{ app_version, version });
-                        continue;
-                    }
-
-                    const msg_type: MessageType = @enumFromInt(message[1]);
-                    switch (msg_type) {
-                        .Request => {
-                            std.debug.print("Tried to read request in inbound messages, client\n", .{});
-                            continue;
-                        },
-                        .Response => {
-                            self.inbound_queue.push(.{
-                                .response = .{
-                                    .request_id = std.mem.readInt(u32, message[2..6], .big),
-                                    .payload = message,
-                                },
-                            });
-                        },
-                        .Broadcast => {
-                            self.inbound_queue.push(.{
-                                .broadcast = .{
-                                    .payload = message,
-                                },
-                            });
-                        },
-                    }
+                    self.inbound_queue.push(.{
+                        .payload = message,
+                    });
                 }
             }
         }
@@ -452,11 +411,16 @@ pub const Client = struct {
     fn workerThread(self: *Client) !void {
         while (true) {
             const in_msg = self.inbound_queue.pop();
+            var reader = std.io.Reader.fixed(in_msg.payload);
+            const headers = try deserializeMessageHeaders(&reader);
 
-            switch (in_msg) {
-                .response => |response| {
+            switch (headers) {
+                .Request => {
+                    std.debug.print("Unexpected Request message found in inbound queue\n", .{});
+                    return;
+                },
+                .Response => |response| {
                     if (self.pending_requests_map.get(response.request_id)) |pending_request| {
-                        var reader: std.io.Reader = .fixed(response.payload);
                         pending_request.resolve(&self.deserializer, &reader, pending_request.promise) catch |err| {
                             std.debug.print("Error resolving request_id {d}: {}\n", .{ response.request_id, err });
                         };
@@ -466,26 +430,11 @@ pub const Client = struct {
                         std.debug.print("No pending request found for request_id: {d}\n", .{response.request_id});
                     }
                 },
-                .broadcast => |broadcast| {
-                    var reader = std.io.Reader.fixed(broadcast.payload);
-                    const headers = try deserializeMessageHeaders(&reader);
-                    switch (headers) {
-                        .Request => {
-                            std.debug.print("Unexpected Request message in broadcast handler\n", .{});
-                            return;
-                        },
-                        .Response => {
-                            std.debug.print("Unexpected Response message in broadcast handler\n", .{});
-                            return;
-                        },
-                        .Broadcast => |broadcasd_header| {
-                            if (call_table.len == 0)
-                                return;
+                .Broadcast => |broadcast| {
+                    comptime if (call_table.len == 0) return;
 
-                            const handler = call_table[broadcasd_header.contract_id][broadcasd_header.method_id];
-                            try handler(self, self.allocator, &reader);
-                        },
-                    }
+                    const handler = call_table[broadcast.contract_id][broadcast.method_id];
+                    try handler(self, self.allocator, &reader);
                 },
             }
         }

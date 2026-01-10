@@ -278,7 +278,7 @@ pub const Server = struct {
                             };
                         }
 
-                        std.debug.print("---> Broadcast ({any}) to {}\n", .{ message, idx });
+                        // std.debug.print("---> Broadcast ({} bytes) to {}\n", .{ message.len, idx });
                     }
                 }
             }

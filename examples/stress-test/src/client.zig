@@ -3,6 +3,26 @@ const znet = @import("znet");
 const EchoContract = @import("server/echo-contract").EchoContract;
 
 pub fn main() !void {
+    const num_workers = 2; // bigger number just doesn't work (server can't handle it? ), todo: fix
+    var threads: [num_workers]std.Thread = undefined;
+
+    // Spawn threads
+    inline for (0..num_workers) |i| {
+        threads[i] = try std.Thread.spawn(.{}, worker, .{});
+    }
+
+    // Wait for all threads to finish
+    inline for (threads) |thread| {
+        thread.join();
+    }
+
+    std.debug.print("All workers finished\n", .{});
+}
+
+const message_size = 4000;
+var message: [message_size]u8 = [1]u8{'A'} ** message_size;
+
+fn worker() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .thread_safe = true }){};
     defer {
         if (gpa.deinit() == .leak) {
@@ -17,14 +37,15 @@ pub fn main() !void {
     try client.connect(address);
 
     for (0..1_000) |_| {
-        var message: [4000]u8 = [1]u8{'A'} ** 4000;
         const promise = try client.fetch(EchoContract.echo, .{&message});
-        _ = promise.await();
+        const res = promise.await();
+
+        if (!std.mem.eql(u8, &message, res))
+            std.debug.print("----- Incorrect response! -----\n", .{});
+
         try promise.destroyResult();
         promise.deinit();
     }
 
     client.deinit();
-
-    std.debug.print("Done.\n", .{});
 }

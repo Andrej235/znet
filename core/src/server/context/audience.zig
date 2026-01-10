@@ -23,7 +23,7 @@ pub const Audience = struct {
         const contract_id: u16 = ids.contract_id;
         const method_id: u16 = ids.method_id;
 
-        const write_buffer = try self.allocator.alloc(u8, 1024); // todo: make this configurable, maybe reuse buffers
+        const write_buffer = try self.allocator.alloc(u8, 4096); // todo: make this configurable, maybe reuse buffers
         defer self.allocator.free(write_buffer);
 
         var writer: std.io.Writer = .fixed(write_buffer);
