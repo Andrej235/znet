@@ -18,5 +18,6 @@ pub const DeserializationErrors = error{
     InvalidBooleanValue,
     IntegerDeserializationFailed,
     BooleanDeserializationFailed,
+    SliceDeserializationFailed,
     InvalidErrorUnionValue,
 };

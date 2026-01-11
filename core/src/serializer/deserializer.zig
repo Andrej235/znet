@@ -88,12 +88,17 @@ pub const Deserializer = struct {
 
     inline fn deserializeArray(self: *Deserializer, reader: *std.Io.Reader, comptime TArray: type) DeserializationErrors!TArray {
         const array_info = @typeInfo(TArray).array;
+        const TChild = array_info.child;
         const len = array_info.len;
         var instance: TArray = undefined;
 
+        if (comptime TChild == u8) {
+            reader.readSliceAll(&instance) catch return DeserializationErrors.SliceDeserializationFailed;
+            return instance;
+        }
+
         for (0..len) |i| {
-            const element = try self.deserialize(reader, array_info.child);
-            instance[i] = element;
+            instance[i] = try self.deserialize(reader, TChild);
         }
         return instance;
     }
@@ -121,6 +126,11 @@ pub const Deserializer = struct {
                     len,
                     sentinel,
                 ) else try self.allocator.alloc(TChild, len);
+
+                if (comptime TChild == u8) {
+                    reader.readSliceAll(buf) catch return DeserializationErrors.SliceDeserializationFailed;
+                    return buf;
+                }
 
                 for (0..len) |i| {
                     buf[i] = try self.deserialize(reader, TChild);
@@ -309,7 +319,7 @@ pub const Deserializer = struct {
     inline fn destroyArray(self: *Deserializer, data: anytype, comptime array_info: std.builtin.Type.Array) DeserializationErrors!void {
         const len = array_info.len;
 
-        inline for (0..len) |i| {
+        for (0..len) |i| {
             const element = data[i];
             try self.destroy(element);
         }
@@ -320,7 +330,7 @@ pub const Deserializer = struct {
             .one => {
                 const pointed_value = data.*;
                 try self.destroy(pointed_value);
-                self.allocator.destroy(pointed_value);
+                self.allocator.destroy(data);
             },
             .many => {
                 @compileError("Many pointers are not supported, consider using a slice instead");
