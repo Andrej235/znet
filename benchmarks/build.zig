@@ -24,7 +24,7 @@ pub fn build(b: *std.Build) !void {
 
     while (try it.next()) |entry| {
         if (entry.kind != .file) continue;
-        if (!std.mem.endsWith(u8, entry.name, "bench.zig")) continue;
+        const suffix_pos = std.mem.indexOf(u8, entry.name, "_bench.zig") orelse continue;
 
         const path = b.pathJoin(&.{ "src", entry.name });
 
@@ -41,5 +41,11 @@ pub fn build(b: *std.Build) !void {
         bench_exe.root_module.addImport("znet", znet_module);
         bench_exe.root_module.addImport("zbench", zbench_module);
         bench_step.dependOn(&b.addRunArtifact(bench_exe).step);
+
+        const step = b.step(
+            entry.name[0..suffix_pos],
+            "Run benchmark",
+        );
+        step.dependOn(&b.addRunArtifact(bench_exe).step);
     }
 }

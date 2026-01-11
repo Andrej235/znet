@@ -91,7 +91,7 @@ pub const Deserializer = struct {
         const len = array_info.len;
         var instance: TArray = undefined;
 
-        inline for (0..len) |i| {
+        for (0..len) |i| {
             const element = try self.deserialize(reader, array_info.child);
             instance[i] = element;
         }

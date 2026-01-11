@@ -63,7 +63,12 @@ pub const Serializer = struct {
 
     inline fn serializeArray(writer: *std.Io.Writer, data: anytype, comptime array_info: std.builtin.Type.Array) SerializationErrors!void {
         const len = array_info.len;
-        inline for (0..len) |i| {
+        if (comptime array_info.child == u8) {
+            writer.writeAll(&data) catch return error.IntegerSerializationFailed;
+            return;
+        }
+
+        for (0..len) |i| {
             const element = data[i];
             try serialize(array_info.child, writer, element);
         }
@@ -82,9 +87,14 @@ pub const Serializer = struct {
                 @compileError("C pointers are not supported, consider using a slice instead");
             },
             .slice => {
-                // todo: optimize for strings, use writeAll
                 const len = data.len;
                 writer.writeInt(@TypeOf(len), len, .big) catch return error.IntegerSerializationFailed;
+
+                if (comptime pointer_info.child == u8) {
+                    writer.writeAll(data) catch return error.IntegerSerializationFailed;
+                    return;
+                }
+
                 for (0..len) |i| {
                     const element = data[i];
                     try serialize(pointer_info.child, writer, element);

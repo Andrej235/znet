@@ -174,6 +174,12 @@ test "array s/d" {
         roundTripInfer([5]i32{ 1, 2, 3, 4, 5 }),
     );
 
+    const big_array: [1024]u8 = [_]u8{0} ** 1024;
+    try testing.expectEqualDeep(
+        big_array,
+        roundTripInfer(big_array),
+    );
+
     try testing.expectEqualDeep(
         [_]Vector{
             .{ .x = 1.1, .y = 2.2, .z = 3.3 },

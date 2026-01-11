@@ -1,8 +1,6 @@
 const std = @import("std");
 const SerializationErrors = @import("errors.zig").CountingSerializationErrors;
 
-// todo: optimize for arrays and slices of static types like u8, i32, etc
-
 pub const Serializer = struct {
     pub fn serialize(comptime T: type, data: T) SerializationErrors!u32 {
         const info = @typeInfo(T);
