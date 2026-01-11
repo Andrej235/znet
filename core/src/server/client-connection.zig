@@ -1,6 +1,7 @@
 const std = @import("std");
 const posix = std.posix;
 
+const MessageHeadersByteSize = @import("../message-headers/message-headers.zig").HeadersByteSize;
 const deserializeMessageHeaders = @import("../message-headers/deserialize-message-headers.zig").deserializeMessageHeaders;
 const ConnectionId = @import("connection-id.zig").ConnectionId;
 
@@ -47,8 +48,6 @@ pub const ClientConnection = struct {
     }
 };
 
-const header_size = 14;
-
 const ConnectionReader = struct {
     buffer: []u8,
     reader: std.Io.Reader,
@@ -83,7 +82,7 @@ const ConnectionReader = struct {
     }
 
     fn bufferedMessage(self: *ConnectionReader) !?[]u8 {
-        if (self.pos < header_size) {
+        if (self.pos < MessageHeadersByteSize.Request) {
             // not enough data to read the header
             return null;
         }
@@ -91,7 +90,7 @@ const ConnectionReader = struct {
         const header = try deserializeMessageHeaders(&self.reader);
         const payload_len = header.Request.payload_len;
 
-        const message_len = payload_len + header_size;
+        const message_len = payload_len + MessageHeadersByteSize.Request;
 
         if (self.pos < message_len) {
             // not enough data to read the full message

@@ -16,6 +16,7 @@ pub fn deserializeMessageHeaders(reader: *std.Io.Reader) DeserializeMessageHeade
             const header: RequestHeaders = .{
                 .version = version,
                 .msg_type = .Request,
+                .flags = reader.takeInt(u16, .big) catch return DeserializeMessageHeaderErrors.FailedToReadField,
                 .request_id = reader.takeInt(u32, .big) catch return DeserializeMessageHeaderErrors.FailedToReadField,
                 .contract_id = reader.takeInt(u16, .big) catch return DeserializeMessageHeaderErrors.FailedToReadField,
                 .method_id = reader.takeInt(u16, .big) catch return DeserializeMessageHeaderErrors.FailedToReadField,
@@ -27,6 +28,7 @@ pub fn deserializeMessageHeaders(reader: *std.Io.Reader) DeserializeMessageHeade
             const header: ResponseHeaders = .{
                 .version = version,
                 .msg_type = .Response,
+                .flags = reader.takeInt(u16, .big) catch return DeserializeMessageHeaderErrors.FailedToReadField,
                 .request_id = reader.takeInt(u32, .big) catch return DeserializeMessageHeaderErrors.FailedToReadField,
                 .payload_len = reader.takeInt(u32, .big) catch return DeserializeMessageHeaderErrors.FailedToReadField,
             };
@@ -36,6 +38,7 @@ pub fn deserializeMessageHeaders(reader: *std.Io.Reader) DeserializeMessageHeade
             const header: @import("broadcast-headers.zig").BroadcastHeaders = .{
                 .version = version,
                 .message_type = .Broadcast,
+                .flags = reader.takeInt(u16, .big) catch return DeserializeMessageHeaderErrors.FailedToReadField,
                 .contract_id = reader.takeInt(u16, .big) catch return DeserializeMessageHeaderErrors.FailedToReadField,
                 .method_id = reader.takeInt(u16, .big) catch return DeserializeMessageHeaderErrors.FailedToReadField,
                 .payload_len = reader.takeInt(u32, .big) catch return DeserializeMessageHeaderErrors.FailedToReadField,

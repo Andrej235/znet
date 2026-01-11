@@ -5,6 +5,7 @@ const Job = @import("job.zig").Job;
 const JobResult = @import("job-result.zig").JobResult;
 
 const HandlerFn = @import("handler-fn/handler-fn.zig").HandlerFn;
+const MessageHeadersByteSize = @import("../message-headers/message-headers.zig").HeadersByteSize;
 const deserializeMessageHeaders = @import("../message-headers/deserialize-message-headers.zig").deserializeMessageHeaders;
 
 const Server = @import("server.zig").Server;
@@ -59,8 +60,8 @@ pub const Worker = struct {
                         &writer,
                     );
 
-                    const response_payload_len = std.mem.readInt(u32, self.response_buffer[6..10], .big);
-                    const response_data = try self.allocator.alloc(u8, response_payload_len + 10);
+                    const response_payload_len = std.mem.readInt(u32, self.response_buffer[MessageHeadersByteSize.Response - 4 .. MessageHeadersByteSize.Response], .big);
+                    const response_data = try self.allocator.alloc(u8, response_payload_len + MessageHeadersByteSize.Response);
                     @memcpy(response_data, self.response_buffer[0..response_data.len]);
 
                     const job_result = JobResult{

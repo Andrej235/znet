@@ -3,6 +3,7 @@ const ClientConnection = @import("../client-connection.zig").ClientConnection;
 const BroadcastJob = @import("../broadcast-job.zig").BroadcastJob;
 const Queue = @import("../../utils/mpmc-queue.zig").Queue;
 
+const MessageHeadersByteSize = @import("../../message-headers/message-headers.zig").HeadersByteSize;
 const serializeHeaders = @import("../../message-headers/serialize-message-headers.zig").serializeMessageHeaders;
 const Serializer = @import("../../serializer/serializer.zig").Serializer;
 const CountingSerializer = @import("../../serializer/counting-serializer.zig").Serializer;
@@ -32,6 +33,7 @@ pub const Audience = struct {
             .Broadcast = .{
                 .version = app_version,
                 .message_type = .Broadcast,
+                .flags = 0,
                 .contract_id = contract_id,
                 .method_id = method_id,
                 .payload_len = payload_len,
@@ -40,8 +42,8 @@ pub const Audience = struct {
 
         try Serializer.serialize(@TypeOf(args), &writer, args);
 
-        const message = try self.allocator.alloc(u8, payload_len + 10);
-        @memcpy(message, write_buffer[0 .. payload_len + 10]);
+        const message = try self.allocator.alloc(u8, payload_len + MessageHeadersByteSize.Broadcast);
+        @memcpy(message, write_buffer[0 .. payload_len + MessageHeadersByteSize.Broadcast]);
 
         self.broadcast_job_queue.push(.{
             .bitset = self.selected_bitset,

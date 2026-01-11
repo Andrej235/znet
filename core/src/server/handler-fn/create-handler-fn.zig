@@ -85,6 +85,7 @@ pub fn createHandlerFn(comptime fn_impl: anytype) HandlerFn {
                     .Response = .{
                         .version = request_headers.version,
                         .msg_type = .Response,
+                        .flags = 0,
                         .request_id = request_headers.request_id,
                         .payload_len = try CountingSerializer.serialize(fn_info.@"fn".return_type.?, output),
                     },

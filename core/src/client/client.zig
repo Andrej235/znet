@@ -4,6 +4,7 @@ const posix = @import("std").posix;
 const ClientOptions = @import("client-options.zig").ClientOptions;
 
 const MessageHeaders = @import("../message-headers/message-headers.zig").MessageHeaders;
+const MessageHeadersByteSize = @import("../message-headers/message-headers.zig").HeadersByteSize;
 const MessageType = @import("../message-headers/message-type.zig").MessageType;
 const serializeHeaders = @import("../message-headers/serialize-message-headers.zig").serializeMessageHeaders;
 const deserializeMessageHeaders = @import("../message-headers/deserialize-message-headers.zig").deserializeMessageHeaders;
@@ -204,6 +205,7 @@ pub const Client = struct {
                     .Request = .{
                         .version = app_version,
                         .contract_id = contract_id,
+                        .flags = 0,
                         .method_id = method_id,
                         .msg_type = .Request,
                         .request_id = message.request_id,
@@ -343,15 +345,16 @@ pub const Client = struct {
     }
 
     fn bufferedMessage(self: *Client) !?[]u8 {
-        if (self.read_pos < 10) {
+        // response and broadcast headers have the same size
+        if (self.read_pos < MessageHeadersByteSize.Response) {
             // not enough data to read the header
             return null;
         }
 
         // payload_len is in the same position for both response and broadcast headers
-        const payload_len = std.mem.readInt(u32, self.receive_buffer[6..10], .big);
+        const payload_len = std.mem.readInt(u32, self.receive_buffer[MessageHeadersByteSize.Response - 4 .. MessageHeadersByteSize.Response], .big);
 
-        const message_len = payload_len + 10;
+        const message_len = payload_len + MessageHeadersByteSize.Response;
 
         if (self.read_pos < message_len) {
             // not enough data to read the full message
@@ -380,7 +383,7 @@ pub const Client = struct {
                     const headers = try out_msg.serialize(out_msg, &writer);
                     switch (headers) {
                         .Request => |req_headers| {
-                            const total_len = req_headers.payload_len + 14; // header size = 14
+                            const total_len = req_headers.payload_len + MessageHeadersByteSize.Request;
                             try writeAll(self.socket, self.send_buffer[0..total_len]);
                         },
                         .Response => {
