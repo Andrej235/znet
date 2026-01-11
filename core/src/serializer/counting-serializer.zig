@@ -7,7 +7,7 @@ pub const Serializer = struct {
     pub fn serialize(comptime T: type, data: T) SerializationErrors!u32 {
         const info = @typeInfo(T);
 
-        return switch (info) {
+        return (comptime trySerializeInComptime(T)) orelse switch (info) {
             .@"struct" => |struct_info| try serializeStruct(data, struct_info),
             .@"union" => |union_info| try serializeUnion(data, union_info),
             .array => |array_info| try serializeArray(data, array_info),
@@ -15,9 +15,9 @@ pub const Serializer = struct {
             .optional => |optional_info| try serializeOptional(data, optional_info),
             .error_union => |error_union_info| try serializeErrorUnion(data, error_union_info),
             .bool => 1,
-            .int => |int_info| try serializeInt(int_info),
+            .int => |int_info| serializeInt(int_info),
             .float => |float_info| float_info.bits / 8,
-            .@"enum" => |enum_info| try serializeEnum(enum_info),
+            .@"enum" => |enum_info| serializeEnum(enum_info),
             .comptime_int => @compileError("Comptime integers cannot be serialized directly, consider converting to a regular integer type before serialization"),
             .comptime_float => @compileError("Comptime floats cannot be serialized directly, consider converting to a regular float type before serialization"),
             .error_set => @compileError("Direct serialization of error sets is not supported, consider using an error union instead"),
@@ -52,7 +52,7 @@ pub const Serializer = struct {
 
                 if (active == current) {
                     const field_value = @field(data, field.name);
-                    return try serialize(field.type, field_value) + try serializeEnum(data, @typeInfo(enum_tag_type).@"enum");
+                    return try serialize(field.type, field_value) + serializeEnum(@typeInfo(enum_tag_type).@"enum");
                 }
             }
 
@@ -65,7 +65,11 @@ pub const Serializer = struct {
     inline fn serializeArray(data: anytype, comptime array_info: std.builtin.Type.Array) SerializationErrors!u32 {
         const len = array_info.len;
         var size: u32 = 0;
-        inline for (0..len) |i| {
+        comptime if (trySerializeInComptime(array_info.child)) |child_size| {
+            return len * child_size;
+        };
+
+        for (0..len) |i| {
             size += try serialize(array_info.child, data[i]);
         }
         return size;
@@ -74,6 +78,10 @@ pub const Serializer = struct {
     inline fn serializePointer(data: anytype, comptime pointer_info: std.builtin.Type.Pointer) SerializationErrors!u32 {
         return blk: switch (pointer_info.size) {
             .one => {
+                comptime if (trySerializeInComptime(@TypeOf(data))) |child_size| {
+                    break :blk child_size;
+                };
+
                 break :blk try serialize(pointer_info.child, data.*);
             },
             .many => {
@@ -85,12 +93,48 @@ pub const Serializer = struct {
             .slice => {
                 const len = data.len;
                 var size: u32 = @sizeOf(@TypeOf(len));
+
+                if (comptime trySerializeInComptime(pointer_info.child)) |child_size| {
+                    break :blk child_size * @as(u32, @intCast(len)) + size;
+                }
+
                 for (0..len) |i| {
                     size += try serialize(pointer_info.child, data[i]);
                 }
                 break :blk size;
             },
         };
+    }
+
+    inline fn trySerializeInComptime(comptime T: type) ?u32 {
+        comptime {
+            const info = @typeInfo(T);
+            return switch (info) {
+                .@"struct" => |struct_info| blk: {
+                    var total_bytes: u32 = 0;
+                    for (struct_info.fields) |field| {
+                        total_bytes += trySerializeInComptime(field.type) orelse break :blk null;
+                    }
+                    break :blk total_bytes;
+                },
+
+                .array => |array_info| blk: {
+                    const child = trySerializeInComptime(array_info.child) orelse break :blk null;
+                    break :blk child * @as(u32, array_info.len);
+                },
+
+                .pointer => |pointer_info| switch (pointer_info.size) {
+                    .one => trySerializeInComptime(pointer_info.child),
+                    else => null,
+                },
+
+                .bool => 1,
+                .float => |float_info| float_info.bits / 8,
+                .int => |int_info| serializeInt(int_info),
+                .@"enum" => |enum_info| serializeEnum(enum_info),
+                else => null,
+            };
+        }
     }
 
     inline fn serializeOptional(data: anytype, comptime optional_info: std.builtin.Type.Optional) SerializationErrors!u32 {
@@ -102,7 +146,7 @@ pub const Serializer = struct {
         return try serialize(error_union_info.payload, safe_data) + 1;
     }
 
-    inline fn serializeEnum(comptime enum_info: std.builtin.Type.Enum) SerializationErrors!u32 {
+    inline fn serializeEnum(comptime enum_info: std.builtin.Type.Enum) u32 {
         const int_info = @typeInfo(enum_info.tag_type).int;
         if (int_info.signedness == .signed) {
             @compileError("Signed enum tag types are not supported");
@@ -112,7 +156,7 @@ pub const Serializer = struct {
         return bit_size_with_padding / 8;
     }
 
-    inline fn serializeInt(comptime int_info: std.builtin.Type.Int) SerializationErrors!u32 {
+    inline fn serializeInt(comptime int_info: std.builtin.Type.Int) u32 {
         const bit_size_with_padding = comptime (int_info.bits + 7) / 8 * 8;
         return bit_size_with_padding / 8;
     }

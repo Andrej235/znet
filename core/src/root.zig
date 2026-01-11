@@ -1,4 +1,5 @@
 pub const Serializer = @import("serializer/serializer.zig").Serializer;
+pub const CountingSerializer = @import("serializer/counting-serializer.zig").Serializer;
 pub const Deserializer = @import("serializer/deserializer.zig").Deserializer;
 
 pub const Client = @import("client/client.zig").Client;
