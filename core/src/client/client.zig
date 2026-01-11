@@ -431,7 +431,7 @@ pub const Client = struct {
                     }
                 },
                 .Broadcast => |broadcast| {
-                    comptime if (call_table.len == 0) return;
+                    if (comptime call_table.len == 0) return;
 
                     const handler = call_table[broadcast.contract_id][broadcast.method_id];
                     try handler(self, self.allocator, &reader);

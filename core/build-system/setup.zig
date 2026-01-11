@@ -1,7 +1,9 @@
 const std = @import("std");
-
 const BuildOptions = @import("build-options.zig").BuildOptions;
 
+// todo: fix memory leaks in setup, right now no memory is freed after build
+// this is most likely not a big deal since build runs once and exits, but still not ideal
+// especially for many step processes where this **may** run multiple times
 pub fn setupZnet(b: *std.Build, options: BuildOptions) !void {
     const znet = b.dependency("znet", .{
         .target = options.target,

@@ -27,7 +27,12 @@ pub fn ExploreContracts() ![]Contract {
         defer @constCast(dir).close();
         _ = try iterateDir(dir.*, &client_contracts, "contracts/client", .client);
 
-        // todo: sort contracts by name to ensure stable output before writing
+        std.mem.sort(Contract, client_contracts.items, {}, struct {
+            pub fn cmp(_: void, a: Contract, b: Contract) bool {
+                return std.mem.lessThan(u8, a.contract_name, b.contract_name);
+            }
+        }.cmp);
+
         for (client_contracts.items) |item| {
             try writer.writeAll(
                 try std.fmt.allocPrint(
@@ -56,7 +61,12 @@ pub fn ExploreContracts() ![]Contract {
         defer @constCast(dir).close();
         try iterateDir(dir.*, &server_contracts, "contracts/server", .server);
 
-        // todo: sort contracts by name to ensure stable output before writing
+        std.mem.sort(Contract, server_contracts.items, {}, struct {
+            pub fn cmp(_: void, a: Contract, b: Contract) bool {
+                return std.mem.lessThan(u8, a.contract_name, b.contract_name);
+            }
+        }.cmp);
+
         for (server_contracts.items) |item| {
             try writer.writeAll(
                 try std.fmt.allocPrint(
