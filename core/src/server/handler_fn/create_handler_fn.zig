@@ -1,11 +1,11 @@
 const std = @import("std");
 
-const RequestHeaders = @import("../../message-headers/request-headers.zig").RequestHeaders;
-const serializeMessageHeaders = @import("../../message-headers/serialize-message-headers.zig").serializeMessageHeaders;
+const RequestHeaders = @import("../../message_headers/request_headers.zig").RequestHeaders;
+const serializeMessageHeaders = @import("../../message_headers/serialize_message_headers.zig").serializeMessageHeaders;
 const Deserializer = @import("../../serializer/deserializer.zig").Deserializer;
 const Serializer = @import("../../serializer/serializer.zig").Serializer;
-const CountingSerializer = @import("../../serializer/counting-serializer.zig").Serializer;
-const HandlerFn = @import("handler-fn.zig").HandlerFn;
+const CountingSerializer = @import("../../serializer/counting_serializer.zig").Serializer;
+const HandlerFn = @import("handler_fn.zig").HandlerFn;
 const Server = @import("../server.zig").Server;
 
 const Context = @import("../context/context.zig").Context;

@@ -1,5 +1,5 @@
 const std = @import("std");
-const BroadcastHandlerFn = @import("./broadcast-handler-fn.zig").BroadcastHandlerFn;
+const BroadcastHandlerFn = @import("./broadcast_handler_fn.zig").BroadcastHandlerFn;
 const Client = @import("../client.zig").Client;
 const Deserializer = @import("../../serializer/deserializer.zig").Deserializer;
 

@@ -1,6 +1,6 @@
 const std = @import("std");
 const znet = @import("znet");
-const MessageContract = @import("server/message-contract").MessageContract;
+const MessageContract = @import("server/message_contract").MessageContract;
 
 pub fn main() !void {
     var client = try znet.Client.init(std.heap.page_allocator, .{});

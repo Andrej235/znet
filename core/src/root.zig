@@ -1,16 +1,16 @@
 pub const Serializer = @import("serializer/serializer.zig").Serializer;
-pub const CountingSerializer = @import("serializer/counting-serializer.zig").Serializer;
+pub const CountingSerializer = @import("serializer/counting_serializer.zig").Serializer;
 pub const Deserializer = @import("serializer/deserializer.zig").Deserializer;
 
 pub const Client = @import("client/client.zig").Client;
 pub const Server = @import("server/server.zig").Server;
 
-pub const MessageHeaders = @import("message-headers/message-headers.zig").MessageHeaders;
-pub const RequestHeaders = @import("message-headers/request-headers.zig").RequestHeaders;
-pub const ResponseHeaders = @import("message-headers/response-headers.zig").ResponseHeaders;
-pub const deserializeMessageHeaders = @import("message-headers/deserialize-message-headers.zig").deserializeMessageHeaders;
-pub const serializeMessageHeaders = @import("message-headers/serialize-message-headers.zig").serializeMessageHeaders;
-pub const MessageType = @import("message-headers/message-type.zig").MessageType;
-pub const app_version: u8 = @import("app-version.zig").app_version;
+pub const MessageHeaders = @import("message_headers/message_headers.zig").MessageHeaders;
+pub const RequestHeaders = @import("message_headers/request_headers.zig").RequestHeaders;
+pub const ResponseHeaders = @import("message_headers/response_headers.zig").ResponseHeaders;
+pub const deserializeMessageHeaders = @import("message_headers/deserialize_message_headers.zig").deserializeMessageHeaders;
+pub const serializeMessageHeaders = @import("message_headers/serialize_message_headers.zig").serializeMessageHeaders;
+pub const MessageType = @import("message_headers/message_type.zig").MessageType;
+pub const app_version: u8 = @import("app_version.zig").app_version;
 
 pub const Context = @import("server/context/context.zig").Context;

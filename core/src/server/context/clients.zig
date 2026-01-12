@@ -1,8 +1,8 @@
 const std = @import("std");
 const Audience = @import("audience.zig").Audience;
-const ClientConnection = @import("../client-connection.zig").ClientConnection;
-const BroadcastJob = @import("../broadcast-job.zig").BroadcastJob;
-const Queue = @import("../../utils/mpmc-queue.zig").Queue;
+const ClientConnection = @import("../client_connection.zig").ClientConnection;
+const BroadcastJob = @import("../broadcast_job.zig").BroadcastJob;
+const Queue = @import("../../utils/mpmc_queue.zig").Queue;
 
 pub const Clients = struct {
     allocator: std.mem.Allocator,

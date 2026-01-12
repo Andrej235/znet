@@ -2,19 +2,19 @@ const std = @import("std");
 const posix = std.posix;
 const net = std.net;
 
-const ServerOptions = @import("server-options.zig").ServerOptions;
-const ClientConnection = @import("client-connection.zig").ClientConnection;
+const ServerOptions = @import("server_options.zig").ServerOptions;
+const ClientConnection = @import("client_connection.zig").ClientConnection;
 const Worker = @import("worker.zig").Worker;
 
-const Queue = @import("../utils/mpmc-queue.zig").Queue;
+const Queue = @import("../utils/mpmc_queue.zig").Queue;
 const Job = @import("job.zig").Job;
-const JobResult = @import("job-result.zig").JobResult;
-const BroadcastJob = @import("broadcast-job.zig").BroadcastJob;
+const JobResult = @import("job_result.zig").JobResult;
+const BroadcastJob = @import("broadcast_job.zig").BroadcastJob;
 
-const HandlerFn = @import("handler-fn/handler-fn.zig").HandlerFn;
-const createHandlerFn = @import("handler-fn/create-handler-fn.zig").createHandlerFn;
+const HandlerFn = @import("handler_fn/handler_fn.zig").HandlerFn;
+const createHandlerFn = @import("handler_fn/create_handler_fn.zig").createHandlerFn;
 
-const ConnectionId = @import("connection-id.zig").ConnectionId;
+const ConnectionId = @import("connection_id.zig").ConnectionId;
 
 pub const Server = struct {
     pub const call_table = createCallTable();

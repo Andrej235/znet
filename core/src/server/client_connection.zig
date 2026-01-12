@@ -1,9 +1,9 @@
 const std = @import("std");
 const posix = std.posix;
 
-const MessageHeadersByteSize = @import("../message-headers/message-headers.zig").HeadersByteSize;
-const deserializeMessageHeaders = @import("../message-headers/deserialize-message-headers.zig").deserializeMessageHeaders;
-const ConnectionId = @import("connection-id.zig").ConnectionId;
+const MessageHeadersByteSize = @import("../message_headers/message_headers.zig").HeadersByteSize;
+const deserializeMessageHeaders = @import("../message_headers/deserialize_message_headers.zig").deserializeMessageHeaders;
+const ConnectionId = @import("connection_id.zig").ConnectionId;
 
 pub const ClientConnection = struct {
     reader: ConnectionReader,

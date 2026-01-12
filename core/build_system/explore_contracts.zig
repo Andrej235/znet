@@ -114,7 +114,7 @@ fn iterateDir(dir: std.fs.Dir, contracts: *std.ArrayList(Contract), current_path
                     "{s}/{s}",
                     .{ current_path, entry.name },
                 ),
-                .contract_name = try kebabToPascalCase(
+                .contract_name = try snakeToPascalCase(
                     std.heap.page_allocator,
                     entry.name[0 .. entry.name.len - 4], // remove .zig
                 ),
@@ -140,7 +140,7 @@ fn iterateDir(dir: std.fs.Dir, contracts: *std.ArrayList(Contract), current_path
     }
 }
 
-pub fn kebabToPascalCase(
+pub fn snakeToPascalCase(
     allocator: std.mem.Allocator,
     input: []const u8,
 ) ![]u8 {
@@ -150,7 +150,7 @@ pub fn kebabToPascalCase(
     var capitalize_next = true;
 
     for (input) |c| {
-        if (c == '-') {
+        if (c == '_') {
             capitalize_next = true;
             continue;
         }

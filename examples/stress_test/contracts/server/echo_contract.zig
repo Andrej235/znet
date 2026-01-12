@@ -1,6 +1,6 @@
 const std = @import("std");
 const znet = @import("znet");
-const ClientEchoContract = @import("client/echo-contract").EchoContract;
+const ClientEchoContract = @import("client/echo_contract").EchoContract;
 
 pub const EchoContract = struct {
     pub fn echo(ctx: *znet.Context, message: []const u8) []const u8 {

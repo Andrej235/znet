@@ -1,5 +1,5 @@
 const std = @import("std");
-const BuildOptions = @import("build-options.zig").BuildOptions;
+const BuildOptions = @import("build_options.zig").BuildOptions;
 
 // todo: fix memory leaks in setup, right now no memory is freed after build
 // this is most likely not a big deal since build runs once and exits, but still not ideal
@@ -64,7 +64,7 @@ pub fn setupZnet(b: *std.Build, options: BuildOptions) !void {
     //#endregion
 
     //#region codegen
-    const contracts = try @import("explore-contracts.zig").ExploreContracts();
+    const contracts = try @import("explore_contracts.zig").ExploreContracts();
     const codegen_module = b.createModule(
         .{
             .root_source_file = b.path("./.zig-cache/znet/znet_contract_registry.zig"),

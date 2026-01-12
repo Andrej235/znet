@@ -1,5 +1,5 @@
 const std = @import("std");
-const RequestHeaders = @import("../../message-headers/request-headers.zig").RequestHeaders;
+const RequestHeaders = @import("../../message_headers/request_headers.zig").RequestHeaders;
 const Server = @import("../server.zig").Server;
 
 pub const HandlerFn = *const fn (

@@ -1,5 +1,5 @@
 const std = @import("std");
-const MessageHeaders = @import("../message-headers/message-headers.zig").MessageHeaders;
+const MessageHeaders = @import("../message_headers/message_headers.zig").MessageHeaders;
 
 pub fn serializeMessageHeaders(writer: *std.Io.Writer, header: MessageHeaders) anyerror!void {
     switch (header) {

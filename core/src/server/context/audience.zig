@@ -1,16 +1,16 @@
 const std = @import("std");
-const ClientConnection = @import("../client-connection.zig").ClientConnection;
-const BroadcastJob = @import("../broadcast-job.zig").BroadcastJob;
-const Queue = @import("../../utils/mpmc-queue.zig").Queue;
+const ClientConnection = @import("../client_connection.zig").ClientConnection;
+const BroadcastJob = @import("../broadcast_job.zig").BroadcastJob;
+const Queue = @import("../../utils/mpmc_queue.zig").Queue;
 
-const MessageHeadersByteSize = @import("../../message-headers/message-headers.zig").HeadersByteSize;
-const serializeHeaders = @import("../../message-headers/serialize-message-headers.zig").serializeMessageHeaders;
+const MessageHeadersByteSize = @import("../../message_headers/message_headers.zig").HeadersByteSize;
+const serializeHeaders = @import("../../message_headers/serialize_message_headers.zig").serializeMessageHeaders;
 const Serializer = @import("../../serializer/serializer.zig").Serializer;
-const CountingSerializer = @import("../../serializer/counting-serializer.zig").Serializer;
+const CountingSerializer = @import("../../serializer/counting_serializer.zig").Serializer;
 
 const Client = @import("../../client//client.zig").Client;
 
-const app_version = @import("../../app-version.zig").app_version;
+const app_version = @import("../../app_version.zig").app_version;
 
 pub const Audience = struct {
     allocator: std.mem.Allocator,

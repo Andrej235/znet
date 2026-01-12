@@ -1,5 +1,5 @@
 const std = @import("std");
-const MessageHeaders = @import("../message-headers/message-headers.zig").MessageHeaders;
+const MessageHeaders = @import("../message_headers/message_headers.zig").MessageHeaders;
 
 pub const OutboundMessage = struct {
     request_id: u32,

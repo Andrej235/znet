@@ -1,5 +1,5 @@
 const znet = @import("znet");
-const ClientMessageContract = @import("client/message-contract").MessageContract;
+const ClientMessageContract = @import("client/message_contract").MessageContract;
 
 pub const MessageContract = struct {
     pub fn send(context: *znet.Context, name: []const u8, message: []const u8) bool {

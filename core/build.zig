@@ -11,4 +11,4 @@ pub fn build(b: *std.Build) !void {
     });
 }
 
-pub const setup = @import("build-system/setup.zig").setupZnet;
+pub const setup = @import("build_system/setup.zig").setupZnet;

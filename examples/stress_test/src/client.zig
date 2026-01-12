@@ -1,6 +1,6 @@
 const std = @import("std");
 const znet = @import("znet");
-const EchoContract = @import("server/echo-contract").EchoContract;
+const EchoContract = @import("server/echo_contract").EchoContract;
 
 pub fn main() !void {
     const num_workers = 2; // bigger number just doesn't work (server can't handle it? ), todo: fix

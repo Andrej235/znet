@@ -1,32 +1,32 @@
 const std = @import("std");
 const posix = @import("std").posix;
 
-const ClientOptions = @import("client-options.zig").ClientOptions;
+const ClientOptions = @import("client_options.zig").ClientOptions;
 
-const MessageHeaders = @import("../message-headers/message-headers.zig").MessageHeaders;
-const MessageHeadersByteSize = @import("../message-headers/message-headers.zig").HeadersByteSize;
-const MessageType = @import("../message-headers/message-type.zig").MessageType;
-const serializeHeaders = @import("../message-headers/serialize-message-headers.zig").serializeMessageHeaders;
-const deserializeMessageHeaders = @import("../message-headers/deserialize-message-headers.zig").deserializeMessageHeaders;
+const MessageHeaders = @import("../message_headers/message_headers.zig").MessageHeaders;
+const MessageHeadersByteSize = @import("../message_headers/message_headers.zig").HeadersByteSize;
+const MessageType = @import("../message_headers/message_type.zig").MessageType;
+const serializeHeaders = @import("../message_headers/serialize_message_headers.zig").serializeMessageHeaders;
+const deserializeMessageHeaders = @import("../message_headers/deserialize_message_headers.zig").deserializeMessageHeaders;
 
 const ServerContext = @import("../server/context/context.zig").Context;
 
 const Serializer = @import("../serializer/serializer.zig").Serializer;
-const CountingSerializer = @import("../serializer/counting-serializer.zig").Serializer;
+const CountingSerializer = @import("../serializer/counting_serializer.zig").Serializer;
 const Deserializer = @import("../serializer/deserializer.zig").Deserializer;
 const DeserializationErrors = @import("../serializer/errors.zig").DeserializationErrors;
 
-const Queue = @import("../utils/mpmc-queue.zig").Queue;
+const Queue = @import("../utils/mpmc_queue.zig").Queue;
 const Promise = @import("../promise/promise.zig").Promise;
 
-const OutboundMessage = @import("outbound-message.zig").OutboundMessage;
-const InboundMessage = @import("inbound-message.zig").InboundMessage;
-const PendingRequest = @import("pending-request.zig").PendingRequest;
+const OutboundMessage = @import("outbound_message.zig").OutboundMessage;
+const InboundMessage = @import("inbound_message.zig").InboundMessage;
+const PendingRequest = @import("pending_request.zig").PendingRequest;
 
-const BroadcastHandlerFn = @import("handler-fn/broadcast-handler-fn.zig").BroadcastHandlerFn;
-const createBroadcastHandlerFn = @import("handler-fn/create-broadcast-handler-fn.zig").createBroadcastHandlerFn;
+const BroadcastHandlerFn = @import("handler_fn/broadcast_handler_fn.zig").BroadcastHandlerFn;
+const createBroadcastHandlerFn = @import("handler_fn/create_broadcast_handler_fn.zig").createBroadcastHandlerFn;
 
-const app_version: u8 = @import("../app-version.zig").app_version;
+const app_version: u8 = @import("../app_version.zig").app_version;
 
 pub const Client = struct {
     pub const call_table = createCallTable();

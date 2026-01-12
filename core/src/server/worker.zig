@@ -1,12 +1,12 @@
 const std = @import("std");
 
-const Queue = @import("../utils/mpmc-queue.zig").Queue;
+const Queue = @import("../utils/mpmc_queue.zig").Queue;
 const Job = @import("job.zig").Job;
-const JobResult = @import("job-result.zig").JobResult;
+const JobResult = @import("job_result.zig").JobResult;
 
-const HandlerFn = @import("handler-fn/handler-fn.zig").HandlerFn;
-const MessageHeadersByteSize = @import("../message-headers/message-headers.zig").HeadersByteSize;
-const deserializeMessageHeaders = @import("../message-headers/deserialize-message-headers.zig").deserializeMessageHeaders;
+const HandlerFn = @import("handler_fn/handler_fn.zig").HandlerFn;
+const MessageHeadersByteSize = @import("../message_headers/message_headers.zig").HeadersByteSize;
+const deserializeMessageHeaders = @import("../message_headers/deserialize_message_headers.zig").deserializeMessageHeaders;
 
 const Server = @import("server.zig").Server;
 

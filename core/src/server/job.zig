@@ -1,4 +1,4 @@
-const ConnectionId = @import("connection-id.zig").ConnectionId;
+const ConnectionId = @import("connection_id.zig").ConnectionId;
 
 pub const Job = struct {
     data: []const u8,

@@ -1,4 +1,4 @@
-const MessageType = @import("message-type.zig").MessageType;
+const MessageType = @import("message_type.zig").MessageType;
 
 pub const ResponseHeaders = struct {
     version: u8,
