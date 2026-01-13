@@ -42,6 +42,7 @@ pub const Worker = struct {
     pub fn run(self: *Worker) !noreturn {
         while (true) {
             const job = self.job_queue.pop();
+            std.debug.print("[{}] Picked up a job\n", .{std.Thread.getCurrentId()});
             var reader: std.Io.Reader = .fixed(job.data);
 
             const headers = try deserializeMessageHeaders(&reader);
