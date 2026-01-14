@@ -207,23 +207,22 @@ pub const Server = struct {
                     var client = &self.clients[client_idx];
 
                     // this socket is ready to be read, keep reading messages until there are no more
-                    // todo: implement round robin to avoid one client/request blocking the entire i/o loop
                     while (true) {
-                        const msg = client.readMessage() catch {
+                        client.readMessage() catch |err| {
+                            if (err == error.Closed) {
+                                std.debug.print("[{f}] disconnected\n", .{client.address.in});
+                            } else {
+                                std.debug.print("Error reading from client {}: {}\n", .{ client_idx, err });
+                            }
+
                             // removeClient will swap the last client into position i, do not increment i
                             self.removeClient(i);
                             break;
-                        } orelse {
-                            // no more messages, but this client is still connected
-                            i += 1;
-                            break;
                         };
 
-                        // freed in worker thread after processing
-                        const heap_msg = try self.allocator.alloc(u8, msg.len);
-                        @memcpy(heap_msg, msg);
-
-                        self.job_queue.push(.{ .data = heap_msg, .client_id = client.id });
+                        // no more messages, but this client is still connected
+                        i += 1;
+                        break;
                     }
                 } else {
                     std.debug.print("Client ready for out\n", .{});
@@ -298,7 +297,15 @@ pub const Server = struct {
             const client_id = self.popIndex();
             std.debug.print("[{f}] connected as {} (gen {})\n", .{ address.in, client_id.index, client_id.gen });
 
-            const client = ClientConnection.init(self.options.client_read_buffer_size, self.allocator, socket, address, client_id) catch |err| {
+            const client = ClientConnection.init(
+                self.options.client_read_buffer_size,
+                32 * 1024,
+                self.allocator,
+                self.job_queue,
+                socket,
+                address,
+                client_id,
+            ) catch |err| {
                 posix.close(socket);
                 std.debug.print("failed to initialize client: {}", .{err});
                 self.pushIndex(client_id);
