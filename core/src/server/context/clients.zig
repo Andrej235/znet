@@ -1,7 +1,6 @@
 const std = @import("std");
 const Audience = @import("audience.zig").Audience;
 const ClientConnection = @import("../client_connection.zig").ClientConnection;
-const BroadcastJob = @import("../broadcast_job.zig").BroadcastJob;
 const Queue = @import("../../utils/mpmc_queue.zig").Queue;
 
 pub const Clients = struct {
@@ -9,7 +8,6 @@ pub const Clients = struct {
     client_connections: []const ClientConnection,
     connected_clients: []const u32,
     sender_id: u32,
-    broadcast_job_queue: *Queue(BroadcastJob),
     wakeup_fd: std.posix.fd_t,
 
     pub fn sender(self: *Clients) !Audience {
@@ -18,7 +16,6 @@ pub const Clients = struct {
 
         return Audience{
             .allocator = self.allocator,
-            .broadcast_job_queue = self.broadcast_job_queue,
             .client_connections = self.client_connections,
             .selected_bitset = bitset,
             .wakeup_fd = self.wakeup_fd,
@@ -34,7 +31,6 @@ pub const Clients = struct {
 
         return Audience{
             .allocator = self.allocator,
-            .broadcast_job_queue = self.broadcast_job_queue,
             .client_connections = self.client_connections,
             .selected_bitset = bitset,
             .wakeup_fd = self.wakeup_fd,
@@ -49,7 +45,6 @@ pub const Clients = struct {
 
         return Audience{
             .allocator = self.allocator,
-            .broadcast_job_queue = self.broadcast_job_queue,
             .client_connections = self.client_connections,
             .selected_bitset = bitset,
             .wakeup_fd = self.wakeup_fd,

@@ -2,7 +2,6 @@ const std = @import("std");
 
 const Queue = @import("../utils/mpmc_queue.zig").Queue;
 const Job = @import("job.zig").Job;
-const JobResult = @import("job_result.zig").JobResult;
 const OutMessage = @import("out_message.zig").OutMessage;
 
 const HandlerFn = @import("handler_fn/handler_fn.zig").HandlerFn;

@@ -8,8 +8,6 @@ const Worker = @import("worker.zig").Worker;
 
 const Queue = @import("../utils/mpmc_queue.zig").Queue;
 const Job = @import("job.zig").Job;
-const JobResult = @import("job_result.zig").JobResult;
-const BroadcastJob = @import("broadcast_job.zig").BroadcastJob;
 const OutMessage = @import("out_message.zig").OutMessage;
 
 const HandlerFn = @import("handler_fn/handler_fn.zig").HandlerFn;
@@ -52,7 +50,6 @@ pub const Server = struct {
     wakeup_fd: posix.fd_t,
 
     job_queue: *Queue(Job),
-    broadcast_job_queue: *Queue(BroadcastJob),
 
     pub fn init(allocator: std.mem.Allocator, comptime options: ServerOptions) !*Server {
         // + 2 for the listening socket and the wakeup socket
@@ -68,16 +65,6 @@ pub const Server = struct {
         const job_queue = try allocator.create(Queue(Job));
         job_queue.* = try Queue(Job).init(jobs_buf);
         errdefer allocator.destroy(job_queue);
-
-        const job_results_buf = try allocator.alloc(JobResult, options.max_jobs_in_queue);
-        errdefer allocator.free(job_results_buf);
-
-        const broadcast_jobs_buf = try allocator.alloc(BroadcastJob, options.max_broadcast_jobs_in_queue);
-        errdefer allocator.free(broadcast_jobs_buf);
-
-        const broadcast_job_queue = try allocator.create(Queue(BroadcastJob));
-        broadcast_job_queue.* = try Queue(BroadcastJob).init(broadcast_jobs_buf);
-        errdefer allocator.destroy(broadcast_job_queue);
 
         const wakeup_fd = try posix.eventfd(0, posix.SOCK.NONBLOCK);
 
@@ -106,7 +93,6 @@ pub const Server = struct {
             .connected = 0,
 
             .job_queue = job_queue,
-            .broadcast_job_queue = broadcast_job_queue,
 
             .polls = polls,
             .wakeup_fd = wakeup_fd,
@@ -129,9 +115,6 @@ pub const Server = struct {
 
         self.allocator.free(self.job_queue.buf);
         self.allocator.destroy(self.job_queue);
-
-        self.allocator.free(self.broadcast_job_queue.buf);
-        self.allocator.destroy(self.broadcast_job_queue);
 
         self.allocator.free(self.polls);
         self.allocator.free(self.clients);
@@ -194,10 +177,10 @@ pub const Server = struct {
                     continue;
                 }
 
-                if (revents & posix.POLL.IN == posix.POLL.IN) {
-                    const client_idx = self.poll_to_client[i];
-                    var client = &self.clients[client_idx];
+                const client_idx = self.poll_to_client[i];
+                var client = &self.clients[client_idx];
 
+                if (revents & posix.POLL.IN == posix.POLL.IN) {
                     // this socket is ready to be read, keep reading messages until there are no more
                     while (true) {
                         client.readMessage() catch |err| {
@@ -217,7 +200,7 @@ pub const Server = struct {
                         break;
                     }
                 } else {
-                    std.debug.print("Client ready for out\n", .{});
+                    std.debug.print("Found unexpected event in socket for client {}\n", .{client.id.index});
                     continue;
                 }
             }
@@ -258,29 +241,6 @@ pub const Server = struct {
                 if (clear_eventfd) { // nothing left to send, clear the eventfd
                     var buf: [8]u8 = undefined;
                     _ = try posix.read(self.wakeup_fd, &buf);
-                }
-
-                // process all available broadcast jobs
-                while (self.broadcast_job_queue.tryPop()) |broadcast_job| {
-                    const message = broadcast_job.message;
-                    var bitset = broadcast_job.bitset;
-                    defer self.allocator.free(broadcast_job.message);
-                    defer bitset.deinit();
-
-                    while (bitset.findFirstSet()) |idx| {
-                        bitset.unset(idx);
-                        const client = self.clients[idx];
-
-                        var sent: usize = 0;
-                        while (sent < message.len) {
-                            sent += posix.write(client.socket, message[sent..]) catch |err| switch (err) {
-                                error.NotOpenForWriting => break,
-                                else => return err,
-                            };
-                        }
-
-                        // std.debug.print("---> Broadcast ({} bytes) to {}\n", .{ message.len, idx });
-                    }
                 }
             }
         }

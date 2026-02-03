@@ -1,6 +1,5 @@
 const std = @import("std");
 const ClientConnection = @import("../client_connection.zig").ClientConnection;
-const BroadcastJob = @import("../broadcast_job.zig").BroadcastJob;
 const Queue = @import("../../utils/mpmc_queue.zig").Queue;
 
 const MessageHeadersByteSize = @import("../../message_headers/message_headers.zig").HeadersByteSize;
@@ -16,7 +15,6 @@ pub const Audience = struct {
     allocator: std.mem.Allocator,
     client_connections: []const ClientConnection,
     selected_bitset: std.bit_set.DynamicBitSet,
-    broadcast_job_queue: *Queue(BroadcastJob),
     wakeup_fd: std.posix.fd_t,
 
     pub fn broadcast(self: *Audience, method: anytype, args: MethodTupleArg(method)) !void {
@@ -24,7 +22,7 @@ pub const Audience = struct {
         const contract_id: u16 = ids.contract_id;
         const method_id: u16 = ids.method_id;
 
-        const write_buffer = try self.allocator.alloc(u8, 4096); // todo: make this configurable, maybe reuse buffers
+        const write_buffer = try self.allocator.alloc(u8, 1024 * 1024 * 64); // todo: make this configurable, maybe reuse buffers
         defer self.allocator.free(write_buffer);
 
         var writer: std.io.Writer = .fixed(write_buffer);
@@ -45,12 +43,22 @@ pub const Audience = struct {
         const message = try self.allocator.alloc(u8, payload_len + MessageHeadersByteSize.Broadcast);
         @memcpy(message, write_buffer[0 .. payload_len + MessageHeadersByteSize.Broadcast]);
 
-        self.broadcast_job_queue.push(.{
-            .bitset = self.selected_bitset,
-            .message = message,
-        });
+        var bitset = self.selected_bitset;
+        defer self.allocator.free(message);
+        defer bitset.deinit();
 
-        // message and bitset will be freed by the network thread
+        // TODO: remove bitsets
+        while (bitset.findFirstSet()) |idx| {
+            bitset.unset(idx);
+            const client = self.client_connections[idx];
+
+            // TODO: Replace msg_dupe with a shared ref to a slice
+            // TODO: then replace allocations entirely with 2 slices pointing to a ring buffer (one for head, one for tail, where tail is only useful/non-empty when it wraps around i.e. starts back from the start). This needs to be implemented in unison with the same mechanism on job results/response side
+            // for now msg_dupe is just freed by the network thread
+            const msg_dupe = try self.allocator.dupe(u8, message);
+            client.out_message_queue.push(.{ .data = msg_dupe, .offset = 0 });
+        }
+
         // wake up the server to process the broadcast job
         _ = try std.posix.write(self.wakeup_fd, std.mem.asBytes(&@as(u64, 1)));
     }
