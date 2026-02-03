@@ -44,8 +44,12 @@ pub const ClientConnection = struct {
         };
     }
 
-    pub fn deinit(self: *const ClientConnection, allocator: std.mem.Allocator) void {
-        self.reader.deinit(allocator);
+    pub fn deinit(self: *const ClientConnection) void {
+        self.reader.deinit(self.allocator);
+        while (self.out_message_queue.tryPop()) |msg| {
+            self.allocator.free(msg.data);
+        }
+
         self.allocator.free(self.out_message_queue.buf);
         self.allocator.destroy(self.out_message_queue);
     }

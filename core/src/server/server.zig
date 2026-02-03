@@ -233,6 +233,7 @@ pub const Server = struct {
                     if (out.offset >= out.data.len) {
                         _ = client.out_message_queue.tryPop();
                         self.allocator.free(out.data);
+                        std.debug.print("free data\n", .{});
                     } else {
                         clear_eventfd = false;
                     }
@@ -243,6 +244,10 @@ pub const Server = struct {
                     _ = try posix.read(self.wakeup_fd, &buf);
                 }
             }
+        }
+
+        for (0..self.connected) |_| {
+            self.removeClient(0);
         }
     }
 
@@ -316,7 +321,7 @@ pub const Server = struct {
         self.pushIndex(.{ .index = client_idx, .gen = client.id.gen + 1 });
 
         posix.close(client.socket);
-        client.deinit(self.allocator);
+        client.deinit();
 
         const last_index = self.connected - 1;
         self.client_polls[at] = self.client_polls[last_index];
