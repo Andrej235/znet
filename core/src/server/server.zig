@@ -10,6 +10,7 @@ const Queue = @import("../utils/mpmc_queue.zig").Queue;
 const Job = @import("job.zig").Job;
 const JobResult = @import("job_result.zig").JobResult;
 const BroadcastJob = @import("broadcast_job.zig").BroadcastJob;
+const OutMessage = @import("out_message.zig").OutMessage;
 
 const HandlerFn = @import("handler_fn/handler_fn.zig").HandlerFn;
 const createHandlerFn = @import("handler_fn/create_handler_fn.zig").createHandlerFn;
@@ -51,7 +52,6 @@ pub const Server = struct {
     wakeup_fd: posix.fd_t,
 
     job_queue: *Queue(Job),
-    job_result_queue: *Queue(JobResult),
     broadcast_job_queue: *Queue(BroadcastJob),
 
     pub fn init(allocator: std.mem.Allocator, comptime options: ServerOptions) !*Server {
@@ -71,10 +71,6 @@ pub const Server = struct {
 
         const job_results_buf = try allocator.alloc(JobResult, options.max_jobs_in_queue);
         errdefer allocator.free(job_results_buf);
-
-        const job_result_queue = try allocator.create(Queue(JobResult));
-        job_result_queue.* = try Queue(JobResult).init(job_results_buf);
-        errdefer allocator.destroy(job_result_queue);
 
         const broadcast_jobs_buf = try allocator.alloc(BroadcastJob, options.max_broadcast_jobs_in_queue);
         errdefer allocator.free(broadcast_jobs_buf);
@@ -110,7 +106,6 @@ pub const Server = struct {
             .connected = 0,
 
             .job_queue = job_queue,
-            .job_result_queue = job_result_queue,
             .broadcast_job_queue = broadcast_job_queue,
 
             .polls = polls,
@@ -134,9 +129,6 @@ pub const Server = struct {
 
         self.allocator.free(self.job_queue.buf);
         self.allocator.destroy(self.job_queue);
-
-        self.allocator.free(self.job_result_queue.buf);
-        self.allocator.destroy(self.job_result_queue);
 
         self.allocator.free(self.broadcast_job_queue.buf);
         self.allocator.destroy(self.broadcast_job_queue);
@@ -232,30 +224,40 @@ pub const Server = struct {
 
             // send responses to clients
             if (self.polls[1].revents != 0) {
-                // wakeup socket is ready, read the eventfd to clear it
-                var buf: [8]u8 = undefined;
-                _ = try posix.read(self.wakeup_fd, &buf);
+                var clear_eventfd = true;
 
-                // process all available job results
-                while (self.job_result_queue.tryPop()) |job_result| {
-                    defer self.allocator.free(job_result.data);
+                for (0..self.connected) |j| {
+                    const client = self.clients[self.poll_to_client[j]];
+                    const latest_out_message = client.out_message_queue.tryPeek();
 
-                    const client_idx = job_result.client_id.index;
-                    const client = &self.clients[client_idx];
-                    if (client.id.gen != job_result.client_id.gen)
-                        continue; // client has disconnected and a new client has taken its place, drop the response
+                    // has messages queued to send
+                    if (latest_out_message == null) continue;
+                    var out = latest_out_message.?;
 
-                    // todo: implement round robin or similar to avoid one client starving others, maybe change polling to watch out for POLLOUT on clients with pending responses
                     var sent: usize = 0;
-                    while (sent < job_result.data.len) {
-                        sent += posix.write(client.socket, job_result.data[sent..]) catch |err| switch (err) {
-                            error.NotOpenForWriting => break,
+                    while (out.offset < out.data.len and sent < self.options.max_write_per_tick) {
+                        const n = posix.write(client.socket, out.data[out.offset..]) catch |err| switch (err) {
+                            error.NotOpenForWriting, error.WouldBlock => break,
                             else => return err,
                         };
+
+                        if (n == 0) break; // socket closed?
+
+                        sent += n;
+                        out.offset += n;
                     }
 
-                    std.debug.print("Responding to: {}/{}\n", .{ job_result.client_id.index, job_result.client_id.gen });
-                    // std.debug.print("---> response sent to {} (gen {}): {any}\n", .{ job_result.client_id.index, job_result.client_id.gen, job_result.data });
+                    if (out.offset >= out.data.len) {
+                        _ = client.out_message_queue.tryPop();
+                        self.allocator.free(out.data);
+                    } else {
+                        clear_eventfd = false;
+                    }
+                }
+
+                if (clear_eventfd) { // nothing left to send, clear the eventfd
+                    var buf: [8]u8 = undefined;
+                    _ = try posix.read(self.wakeup_fd, &buf);
                 }
 
                 // process all available broadcast jobs
@@ -297,11 +299,19 @@ pub const Server = struct {
             const client_id = self.popIndex();
             std.debug.print("[{f}] connected as {} (gen {})\n", .{ address.in, client_id.index, client_id.gen });
 
+            const out_message_buf = try self.allocator.alloc(OutMessage, self.options.client_out_message_queue_size);
+            errdefer self.allocator.free(out_message_buf);
+
+            const out_message_queue = try self.allocator.create(Queue(OutMessage));
+            out_message_queue.* = try Queue(OutMessage).init(out_message_buf);
+            errdefer self.allocator.destroy(out_message_queue);
+
             const client = ClientConnection.init(
                 self.options.client_read_buffer_size,
-                32 * 1024,
+                self.options.max_read_per_tick,
                 self.allocator,
                 self.job_queue,
+                out_message_queue,
                 socket,
                 address,
                 client_id,

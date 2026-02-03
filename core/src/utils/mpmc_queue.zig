@@ -63,5 +63,35 @@ pub fn Queue(comptime T: type) type {
             self.cond.signal();
             return job;
         }
+
+        pub fn peek(self: *Self) *T {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+
+            while (self.count == 0)
+                self.cond.wait(&self.mutex);
+
+            const job = &self.buf[self.head];
+            return job;
+        }
+
+        pub fn tryPeek(self: *Self) ?*T {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+
+            if (self.count == 0) {
+                return null;
+            }
+
+            const job = &self.buf[self.head];
+            return job;
+        }
+
+        pub fn isEmpty(self: *Self) bool {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+
+            return self.count == 0;
+        }
     };
 }

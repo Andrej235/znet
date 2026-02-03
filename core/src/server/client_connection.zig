@@ -8,10 +8,12 @@ const RequestHeaders = @import("../message_headers/request_headers.zig").Request
 
 const Queue = @import("../utils/mpmc_queue.zig").Queue;
 const Job = @import("./job.zig").Job;
+const OutMessage = @import("./out_message.zig").OutMessage;
 
 pub const ClientConnection = struct {
     allocator: std.mem.Allocator,
     job_queue: *Queue(Job),
+    out_message_queue: *Queue(OutMessage),
 
     reader: ConnectionReader,
     socket: posix.socket_t,
@@ -23,6 +25,7 @@ pub const ClientConnection = struct {
         max_read_per_tick: usize,
         allocator: std.mem.Allocator,
         job_queue: *Queue(Job),
+        out_message_queue: *Queue(OutMessage),
         socket: posix.socket_t,
         address: std.net.Address,
         id: ConnectionId,
@@ -37,11 +40,14 @@ pub const ClientConnection = struct {
             .address = address,
             .allocator = allocator,
             .job_queue = job_queue,
+            .out_message_queue = out_message_queue,
         };
     }
 
     pub fn deinit(self: *const ClientConnection, allocator: std.mem.Allocator) void {
         self.reader.deinit(allocator);
+        self.allocator.free(self.out_message_queue.buf);
+        self.allocator.destroy(self.out_message_queue);
     }
 
     pub fn readMessage(self: *ClientConnection) !void {

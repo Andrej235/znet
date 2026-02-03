@@ -3,6 +3,7 @@ const std = @import("std");
 const Queue = @import("../utils/mpmc_queue.zig").Queue;
 const Job = @import("job.zig").Job;
 const JobResult = @import("job_result.zig").JobResult;
+const OutMessage = @import("out_message.zig").OutMessage;
 
 const HandlerFn = @import("handler_fn/handler_fn.zig").HandlerFn;
 const MessageHeadersByteSize = @import("../message_headers/message_headers.zig").HeadersByteSize;
@@ -15,7 +16,6 @@ pub const Worker = struct {
     allocator: std.mem.Allocator,
 
     job_queue: *Queue(Job),
-    job_result_queue: *Queue(JobResult),
     wakeup_fd: std.posix.fd_t,
 
     call_table: []const []const HandlerFn,
@@ -27,7 +27,6 @@ pub const Worker = struct {
             .allocator = server.allocator,
 
             .job_queue = server.job_queue,
-            .job_result_queue = server.job_result_queue,
             .wakeup_fd = server.wakeup_fd,
 
             .call_table = Server.call_table,
@@ -44,6 +43,7 @@ pub const Worker = struct {
             const job = self.job_queue.pop();
             std.debug.print("[{}] Picked up a job\n", .{std.Thread.getCurrentId()});
             var reader: std.Io.Reader = .fixed(job.data);
+            defer self.allocator.free(job.data);
 
             const headers = try deserializeMessageHeaders(&reader);
 
@@ -65,17 +65,21 @@ pub const Worker = struct {
                     const response_data = try self.allocator.alloc(u8, response_payload_len + MessageHeadersByteSize.Response);
                     @memcpy(response_data, self.response_buffer[0..response_data.len]);
 
-                    const job_result = JobResult{
-                        .client_id = job.client_id,
-                        .data = response_data,
-                    };
-                    self.job_result_queue.push(job_result);
+                    var client = &self.server.clients[job.client_id.index];
+                    if (client.id.gen != job.client_id.gen) {
+                        std.debug.print("Client gen mismatch: expected {}, got {}\n", .{ client.id.gen, job.client_id.gen });
+                        self.allocator.free(response_data);
+                        continue;
+                    }
 
-                    // response_data will be freed by the server after sending
+                    // response_data will be freed by the reactor thread after sending
+                    client.out_message_queue.push(OutMessage{
+                        .data = response_data,
+                        .offset = 0,
+                    });
+
                     // notify the reactor thread that a new job result is available
                     _ = try std.posix.write(self.wakeup_fd, std.mem.asBytes(&@as(u64, 1)));
-
-                    self.allocator.free(job.data);
                 },
                 .Response => {
                     return error.UnexpectedResponseHeader;
