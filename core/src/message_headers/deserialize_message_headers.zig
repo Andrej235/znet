@@ -37,7 +37,7 @@ pub fn deserializeMessageHeaders(reader: *std.Io.Reader) DeserializeMessageHeade
         2 => {
             const header: @import("broadcast_headers.zig").BroadcastHeaders = .{
                 .version = version,
-                .message_type = .Broadcast,
+                .msg_type = .Broadcast,
                 .flags = reader.takeInt(u16, .big) catch return DeserializeMessageHeaderErrors.FailedToReadField,
                 .contract_id = reader.takeInt(u16, .big) catch return DeserializeMessageHeaderErrors.FailedToReadField,
                 .method_id = reader.takeInt(u16, .big) catch return DeserializeMessageHeaderErrors.FailedToReadField,

@@ -231,11 +231,13 @@ pub const Server = struct {
                     }
 
                     if (out.offset >= out.data.len) {
+                        // message fully sent, remove it from the queue
                         _ = client.out_message_queue.tryPop();
                         self.allocator.free(out.data);
-                        std.debug.print("free data\n", .{});
-                    } else {
-                        clear_eventfd = false;
+                    }
+
+                    if (!client.out_message_queue.isEmpty()) {
+                        clear_eventfd = false; // more messages left to send
                     }
                 }
 

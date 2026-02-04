@@ -2,7 +2,7 @@ const MessageType = @import("message_type.zig").MessageType;
 
 pub const BroadcastHeaders = struct {
     version: u8,
-    message_type: MessageType,
+    msg_type: MessageType,
     flags: u16,
     contract_id: u16,
     method_id: u16,

@@ -22,7 +22,7 @@ pub const Audience = struct {
         const contract_id: u16 = ids.contract_id;
         const method_id: u16 = ids.method_id;
 
-        const write_buffer = try self.allocator.alloc(u8, 1024 * 1024 * 64); // todo: make this configurable, maybe reuse buffers
+        const write_buffer = try self.allocator.alloc(u8, 1024); // todo: make this configurable, maybe reuse buffers
         defer self.allocator.free(write_buffer);
 
         var writer: std.io.Writer = .fixed(write_buffer);
@@ -30,7 +30,7 @@ pub const Audience = struct {
         try serializeHeaders(&writer, .{
             .Broadcast = .{
                 .version = app_version,
-                .message_type = .Broadcast,
+                .msg_type = .Broadcast,
                 .flags = 0,
                 .contract_id = contract_id,
                 .method_id = method_id,
