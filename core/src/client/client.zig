@@ -101,7 +101,11 @@ pub const Client = struct {
         return self;
     }
 
-    pub fn deinit(self: *Client) void {
+    pub fn deinit(self: *Client) !void {
+        var it = self.pending_requests_map.iterator();
+        while (it.next()) |pending_request|
+            try pending_request.value_ptr.destroy(pending_request.value_ptr.promise);
+
         self.allocator.free(self.send_buffer);
         self.allocator.free(self.receive_buffer);
 
@@ -188,11 +192,21 @@ pub const Client = struct {
                 const message_promise: *TPromise = @ptrCast(@alignCast(request_promise));
                 message_promise.resolve(result);
             }
+
+            pub fn destroy(request_promise: *anyopaque) !void {
+                const message_promise: *TPromise = @ptrCast(@alignCast(request_promise));
+                message_promise.destroyResult() catch |err| {
+                    if (err != error.PromiseNotFulfilled) return err;
+                };
+
+                message_promise.deinit();
+            }
         };
 
         try self.pending_requests_map.put(request_id, .{
             .promise = promise,
             .resolve = DeserilizeWrapper.resolve,
+            .destroy = DeserilizeWrapper.destroy,
         });
 
         const SerializeWrapper = struct {
@@ -361,15 +375,19 @@ pub const Client = struct {
             return null;
         }
 
-        // copy out the full message before shifting the buffer
         const msg = self.receive_buffer[0..message_len];
+
+        // todo: replace with a ring buffer for zero-copy and no allocations
+        // freed in worker thread after processing
+        const heap_msg = try self.allocator.alloc(u8, msg.len);
+        @memcpy(heap_msg, msg);
 
         // shift remaining data to the front of the buffer
         @memmove(self.receive_buffer[0 .. self.read_pos - message_len], self.receive_buffer[message_len..self.read_pos]);
         self.read_pos -= message_len;
         self.reader.seek = 0;
 
-        return msg;
+        return heap_msg;
     }
 
     fn networkThread(self: *Client) !void {
@@ -414,6 +432,7 @@ pub const Client = struct {
     fn workerThread(self: *Client) !void {
         while (true) {
             const in_msg = self.inbound_queue.pop();
+            defer self.allocator.free(in_msg.payload);
             var reader = std.io.Reader.fixed(in_msg.payload);
             const headers = try deserializeMessageHeaders(&reader);
 

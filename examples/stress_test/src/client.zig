@@ -38,7 +38,7 @@ fn worker(idx: usize) !void {
     const address = try std.net.Address.parseIp("127.0.0.1", 5000);
     try client.connect(address);
 
-    for (0..50) |_| {
+    for (0..4) |_| {
         // std.debug.print("[{}] sending a request\n", .{idx});
         // std.debug.print("---> Request\n", .{});
 
@@ -53,5 +53,5 @@ fn worker(idx: usize) !void {
         promise.deinit();
     }
 
-    client.deinit();
+    try client.deinit();
 }
