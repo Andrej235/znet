@@ -48,6 +48,7 @@ pub const Server = struct {
     client_polls: []posix.pollfd,
 
     wakeup_fd: posix.fd_t,
+    stop_flag: std.atomic.Value(bool),
 
     job_queue: *Queue(Job),
 
@@ -96,6 +97,7 @@ pub const Server = struct {
 
             .polls = polls,
             .wakeup_fd = wakeup_fd,
+            .stop_flag = std.atomic.Value(bool).init(false),
         };
 
         for (0..options.worker_threads) |i| {
@@ -127,14 +129,7 @@ pub const Server = struct {
         self.allocator.destroy(self);
     }
 
-    pub inline fn run(self: *Server, address: std.net.Address) !noreturn {
-        var running = std.atomic.Value(bool).init(true);
-        try self.runUntil(address, &running);
-
-        @panic("unreachable");
-    }
-
-    pub fn runUntil(self: *Server, address: std.net.Address, running: *std.atomic.Value(bool)) !void {
+    pub fn run(self: *Server, address: std.net.Address) !void {
         const socket_type: u32 = posix.SOCK.STREAM | posix.SOCK.NONBLOCK;
         const protocol = posix.IPPROTO.TCP;
         const listener = try posix.socket(address.any.family, socket_type, protocol);
@@ -157,9 +152,11 @@ pub const Server = struct {
             .events = posix.POLL.IN,
         };
 
-        while (running.load(.acquire)) {
-            // +2 is for the listening socket and the wakeup socket, 1s timeout
-            _ = try posix.poll(self.polls[0 .. self.connected + 2], 1_000); // todo: remove timeout, use eventfd for shutdown signaling
+        while (true) {
+            // +2 is for the listening socket and the wakeup fd, infinite/no timeout
+            _ = try posix.poll(self.polls[0 .. self.connected + 2], -1);
+
+            if (self.stop_flag.load(.acquire)) break;
 
             // new connections
             if (self.polls[0].revents != 0) {
@@ -251,6 +248,11 @@ pub const Server = struct {
         for (0..self.connected) |_| {
             self.removeClient(0);
         }
+    }
+
+    pub fn stop(self: *Server) !void {
+        self.stop_flag.store(true, .release);
+        _ = try posix.write(self.wakeup_fd, std.mem.asBytes(&@as(u64, 1)));
     }
 
     fn accept(self: *Server, listener: posix.socket_t) !void {

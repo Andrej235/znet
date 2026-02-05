@@ -3,7 +3,7 @@ const znet = @import("znet");
 const role = @import("znet/role").role;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{ .thread_safe = true }){};
-var running = std.atomic.Value(bool).init(true);
+var server: *znet.Server = undefined;
 
 pub fn main() !void {
     defer {
@@ -14,7 +14,7 @@ pub fn main() !void {
         }
     }
 
-    var server = try znet.Server.init(gpa.allocator(), .{
+    server = try znet.Server.init(gpa.allocator(), .{
         .max_clients = 8,
         .worker_threads = 8,
         .client_read_buffer_size = 1024,
@@ -26,7 +26,7 @@ pub fn main() !void {
     _ = try std.Thread.spawn(.{}, listenerThread, .{});
 
     const address = try std.net.Address.parseIp("192.168.1.100", 5000);
-    try server.runUntil(address, &running);
+    try server.run(address);
     try server.deinit();
 }
 
@@ -37,7 +37,7 @@ pub fn listenerThread() !void {
 
     while (try reader.takeDelimiter('\n')) |message| {
         if (std.mem.eql(u8, message, "exit")) {
-            running.store(false, .release);
+            try server.stop();
             std.debug.print("Exit\n", .{});
             break;
         }
