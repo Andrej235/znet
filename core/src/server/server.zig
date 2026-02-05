@@ -113,6 +113,7 @@ pub const Server = struct {
     }
 
     pub fn deinit(self: *Server) !void {
+        try self.stop();
         posix.close(self.wakeup_fd);
 
         self.allocator.free(self.job_queue.buf);
@@ -146,6 +147,7 @@ pub const Server = struct {
             .events = posix.POLL.IN,
         };
 
+        // second polling slot is reserved for the wakeup fd
         self.polls[1] = .{
             .fd = self.wakeup_fd,
             .revents = 0,
@@ -164,84 +166,84 @@ pub const Server = struct {
                 self.accept(listener) catch |err| std.debug.print("failed to accept: {}", .{err});
             }
 
-            // read requests from clients
+            // wakeup fd is ready, at least one worker thread has completed a job and enqueued a message to send to a client
+            const has_out = self.polls[1].revents != 0;
+            // used by out region, if there are any clients with messages left to send this will be set to false
+            // initilized to has_out because if the wakeup fd is what woke us up, then we know for sure there is at least one message to send
+            var clear_wakeup_fd = has_out;
+
+            // has to be a while loop instead of a for loop because we may remove clients in the middle of iterating using swap remove which would require us to not increment i
             var i: usize = 0;
             while (i < self.connected) {
-                const revents = self.client_polls[i].revents;
-                if (revents == 0) {
-                    // this socket isn't ready, move on to the next one
-                    i += 1;
-                    continue;
-                }
-
                 const client_idx = self.poll_to_client[i];
                 var client = &self.clients[client_idx];
 
-                if (revents & posix.POLL.IN == posix.POLL.IN) {
-                    // this socket is ready to be read, keep reading messages until there are no more
-                    while (true) {
-                        client.readMessage() catch |err| {
-                            if (err == error.Closed) {
-                                std.debug.print("[{f}] disconnected\n", .{client.address.in});
-                            } else {
-                                std.debug.print("Error reading from client {}: {}\n", .{ client_idx, err });
-                            }
+                //#region in: messages from clients
+                const revents = self.client_polls[i].revents;
+                if (revents != 0) {
+                    if (revents & posix.POLL.IN == posix.POLL.IN) {
+                        // this socket is ready to be read, keep reading messages until there are no more
+                        // client.readMessage() implements fairness
+                        while (true) {
+                            client.readMessage() catch |err| {
+                                if (err == error.Closed)
+                                    std.debug.print("[{f}] disconnected\n", .{client.address.in})
+                                else
+                                    std.debug.print("Error reading from client {}: {}\n", .{ client_idx, err });
 
-                            // removeClient will swap the last client into position i, do not increment i
-                            self.removeClient(i);
+                                // removeClient will swap the last client into position i, do not increment i
+                                self.removeClient(i);
+                                break;
+                            };
+
+                            // no more messages, but this client is still connected
+                            i += 1;
                             break;
-                        };
-
-                        // no more messages, but this client is still connected
-                        i += 1;
-                        break;
+                        }
+                    } else {
+                        std.debug.print("Found unexpected event ({}) in socket for client {}\n", .{ revents, client.id.index });
                     }
-                } else {
-                    std.debug.print("Found unexpected event in socket for client {}\n", .{client.id.index});
-                    continue;
                 }
-            }
+                //#endregion
 
-            // send responses to clients
-            if (self.polls[1].revents != 0) {
-                var clear_eventfd = true;
-
-                for (0..self.connected) |j| {
-                    const client = self.clients[self.poll_to_client[j]];
+                //#region out: responses and broadcasts
+                if (has_out) {
                     const latest_out_message = client.out_message_queue.tryPeek();
 
                     // has messages queued to send
-                    if (latest_out_message == null) continue;
-                    var out = latest_out_message.?;
+                    if (latest_out_message) |out| {
+                        var sent: usize = 0;
+                        while (out.offset < out.data.len and sent < self.options.max_write_per_tick) {
+                            const n = posix.write(client.socket, out.data[out.offset..]) catch |err| switch (err) {
+                                error.NotOpenForWriting, error.WouldBlock => break,
+                                else => return err,
+                            };
 
-                    var sent: usize = 0;
-                    while (out.offset < out.data.len and sent < self.options.max_write_per_tick) {
-                        const n = posix.write(client.socket, out.data[out.offset..]) catch |err| switch (err) {
-                            error.NotOpenForWriting, error.WouldBlock => break,
-                            else => return err,
-                        };
+                            if (n == 0) break; // socket closed?
 
-                        if (n == 0) break; // socket closed?
+                            sent += n;
+                            out.offset += n;
+                        }
 
-                        sent += n;
-                        out.offset += n;
-                    }
+                        if (out.offset >= out.data.len) {
+                            // message fully sent, remove it from the queue
+                            _ = client.out_message_queue.tryPop();
+                            self.allocator.free(out.data);
+                        }
 
-                    if (out.offset >= out.data.len) {
-                        // message fully sent, remove it from the queue
-                        _ = client.out_message_queue.tryPop();
-                        self.allocator.free(out.data);
-                    }
-
-                    if (!client.out_message_queue.isEmpty()) {
-                        clear_eventfd = false; // more messages left to send
+                        if (!client.out_message_queue.isEmpty()) {
+                            clear_wakeup_fd = false; // more messages left to send
+                        }
                     }
                 }
+                //#endregion
 
-                if (clear_eventfd) { // nothing left to send, clear the eventfd
-                    var buf: [8]u8 = undefined;
-                    _ = try posix.read(self.wakeup_fd, &buf);
-                }
+                i += 1;
+            }
+
+            if (clear_wakeup_fd) { // nothing left to send, clear the eventfd
+                var buf: [8]u8 = undefined;
+                _ = try posix.read(self.wakeup_fd, &buf);
             }
         }
 
