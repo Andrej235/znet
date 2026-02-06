@@ -53,5 +53,9 @@ fn worker(idx: usize) !void {
         promise.deinit();
     }
 
-    try client.deinit();
+    client.deinit() catch |err| {
+        std.debug.print("error deinitializing client {}: {}\n", .{ idx, err });
+
+        return err;
+    };
 }

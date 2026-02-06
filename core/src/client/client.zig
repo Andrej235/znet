@@ -43,11 +43,15 @@ pub const Client = struct {
 
     pending_requests_map: std.AutoHashMap(u32, PendingRequest),
 
-    socket: posix.socket_t = undefined,
+    server_connection_socket: posix.socket_t = undefined,
 
-    // 0 is outbound queue wakeup, 1 is incoming data from server
-    network_thread_polls: []posix.pollfd,
-    outbound_wakeup_fd: posix.fd_t,
+    connected: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    network_thread: std.Thread = undefined,
+    worker_threads: []std.Thread = undefined,
+
+    // 0 is server, 1 is wakeup fd
+    polls: []posix.pollfd,
+    wakeup_fd: posix.fd_t,
 
     outbound_buffer: []OutboundMessage,
     outbound_queue: *Queue(OutboundMessage),
@@ -69,11 +73,12 @@ pub const Client = struct {
         const inbound_queue = try allocator.create(Queue(InboundMessage));
         inbound_queue.* = try Queue(InboundMessage).init(inbound_buffer);
 
-        const network_thread_polls = try allocator.alloc(posix.pollfd, 2);
-        const outbound_wakeup_fd = try posix.eventfd(0, posix.SOCK.NONBLOCK);
+        const polls = try allocator.alloc(posix.pollfd, 2);
 
         var pending_requests_map = std.AutoHashMap(u32, PendingRequest).init(allocator);
         try pending_requests_map.ensureTotalCapacity(options.max_pending_requests);
+
+        const worker_threads = try allocator.alloc(std.Thread, options.worker_thread_count);
 
         const self = try allocator.create(Client);
         self.* = Client{
@@ -94,17 +99,18 @@ pub const Client = struct {
 
             .pending_requests_map = pending_requests_map,
 
-            .network_thread_polls = network_thread_polls,
-            .outbound_wakeup_fd = outbound_wakeup_fd,
+            .worker_threads = worker_threads,
+            .polls = polls,
+            .wakeup_fd = undefined,
         };
 
         return self;
     }
 
     pub fn deinit(self: *Client) !void {
-        var it = self.pending_requests_map.iterator();
-        while (it.next()) |pending_request|
-            try pending_request.value_ptr.destroy(pending_request.value_ptr.promise);
+        try self.disconnect();
+
+        self.allocator.free(self.worker_threads);
 
         self.allocator.free(self.send_buffer);
         self.allocator.free(self.receive_buffer);
@@ -114,51 +120,74 @@ pub const Client = struct {
         self.allocator.free(self.inbound_buffer);
         self.allocator.destroy(self.inbound_queue);
 
-        self.allocator.free(self.network_thread_polls);
+        self.allocator.free(self.polls);
 
         self.pending_requests_map.deinit();
         self.allocator.destroy(self);
     }
 
     pub fn connect(self: *Client, address: std.net.Address) !void {
-        self.socket = try posix.socket(
+        self.server_connection_socket = try posix.socket(
             address.any.family,
             posix.SOCK.STREAM | posix.SOCK.NONBLOCK,
             posix.IPPROTO.TCP,
         );
 
-        self.outbound_wakeup_fd = try posix.eventfd(0, posix.SOCK.NONBLOCK);
+        self.wakeup_fd = try posix.eventfd(0, posix.SOCK.NONBLOCK);
 
-        self.network_thread_polls[0] = .{
-            .fd = self.outbound_wakeup_fd,
+        self.polls[0] = .{
+            .fd = self.server_connection_socket,
             .events = posix.POLL.IN,
             .revents = 0,
         };
 
-        self.network_thread_polls[1] = .{
-            .fd = self.socket,
+        self.polls[1] = .{
+            .fd = self.wakeup_fd,
             .events = posix.POLL.IN,
             .revents = 0,
         };
 
-        _ = try posix.poll(self.network_thread_polls[1..], -1);
+        _ = try posix.poll(self.polls, -1);
         while (true) {
-            posix.connect(self.socket, &address.any, address.getOsSockLen()) catch |err| switch (err) {
+            posix.connect(self.server_connection_socket, &address.any, address.getOsSockLen()) catch |err| switch (err) {
                 error.WouldBlock => continue,
                 else => return err,
             };
             break;
         }
 
-        _ = try std.Thread.spawn(.{}, networkThread, .{self});
+        self.connected.store(true, .release);
+        self.network_thread = try std.Thread.spawn(.{}, networkThread, .{self});
 
-        for (0..self.options.worker_thread_count) |_| {
-            _ = try std.Thread.spawn(.{}, workerThread, .{self});
+        for (0..self.options.worker_thread_count) |i| {
+            const thread = try std.Thread.spawn(.{}, workerThread, .{self});
+            self.worker_threads[i] = thread;
         }
     }
 
     pub fn disconnect(self: *Client) !void {
-        posix.close(self.socket);
+        self.connected.store(false, .release);
+        _ = try posix.write(self.wakeup_fd, std.mem.asBytes(&@as(u64, 1)));
+
+        self.network_thread.join();
+
+        self.inbound_queue.close();
+        for (self.worker_threads) |thread| {
+            thread.join();
+        }
+
+        posix.close(self.server_connection_socket);
+        posix.close(self.wakeup_fd);
+
+        var it = self.pending_requests_map.iterator();
+        while (it.next()) |pending_request|
+            try pending_request.value_ptr.destroy(pending_request.value_ptr.promise);
+
+        self.pending_requests_map.clearRetainingCapacity();
+
+        while (self.inbound_queue.tryPop()) |in_msg| {
+            self.allocator.free(in_msg.payload);
+        }
     }
 
     pub fn fetch(self: *Client, method: anytype, args: MethodTupleArg(method)) anyerror!*Promise(MethodReturnType(method)) {
@@ -247,7 +276,7 @@ pub const Client = struct {
         });
 
         // notify the network thread that a new outbound message is available
-        _ = try std.posix.write(self.outbound_wakeup_fd, std.mem.asBytes(&@as(u64, 1)));
+        _ = try std.posix.write(self.wakeup_fd, std.mem.asBytes(&@as(u64, 1)));
 
         return promise;
     }
@@ -392,17 +421,27 @@ pub const Client = struct {
 
     fn networkThread(self: *Client) !void {
         while (true) {
-            _ = try posix.poll(self.network_thread_polls, -1);
+            _ = try posix.poll(self.polls, -1);
+            if (!self.connected.load(.acquire)) break;
+
+            // process inbound messages
+            if (self.polls[0].revents & posix.POLL.IN == posix.POLL.IN) {
+                while (try self.safeReadMessage(self.server_connection_socket)) |message| {
+                    try self.inbound_queue.push(.{
+                        .payload = message,
+                    });
+                }
+            }
 
             // process outbound messages
-            if (self.network_thread_polls[0].revents != 0) {
+            if (self.polls[1].revents != 0) {
                 while (self.outbound_queue.tryPop()) |out_msg| {
                     var writer: std.io.Writer = .fixed(self.send_buffer);
                     const headers = try out_msg.serialize(out_msg, &writer);
                     switch (headers) {
                         .Request => |req_headers| {
                             const total_len = req_headers.payload_len + MessageHeadersByteSize.Request;
-                            try writeAll(self.socket, self.send_buffer[0..total_len]);
+                            try writeAll(self.server_connection_socket, self.send_buffer[0..total_len]);
                         },
                         .Response => {
                             std.debug.print("Tried to read response in outbound messages, client\n", .{});
@@ -415,23 +454,19 @@ pub const Client = struct {
 
                 // clear the wakeup event
                 var buf: u64 = 0;
-                _ = try std.posix.read(self.outbound_wakeup_fd, std.mem.asBytes(&buf));
-            }
-
-            // process inbound messages
-            if (self.network_thread_polls[1].revents & posix.POLL.IN == posix.POLL.IN) {
-                while (try self.safeReadMessage(self.socket)) |message| {
-                    try self.inbound_queue.push(.{
-                        .payload = message,
-                    });
-                }
+                _ = try std.posix.read(self.wakeup_fd, std.mem.asBytes(&buf));
             }
         }
     }
 
     fn workerThread(self: *Client) !void {
         while (true) {
-            const in_msg = try self.inbound_queue.pop();
+            const in_msg = self.inbound_queue.pop() catch |err| {
+                switch (err) {
+                    error.Closed => return,
+                }
+            };
+
             defer self.allocator.free(in_msg.payload);
             var reader = std.io.Reader.fixed(in_msg.payload);
             const headers = try deserializeMessageHeaders(&reader);
