@@ -238,7 +238,7 @@ pub const Client = struct {
         const heap_args = try self.allocator.create(@TypeOf(args));
         heap_args.* = args;
 
-        self.outbound_queue.push(.{
+        try self.outbound_queue.push(.{
             .request_id = request_id,
             .promise = promise,
             .allocator = self.allocator,
@@ -421,7 +421,7 @@ pub const Client = struct {
             // process inbound messages
             if (self.network_thread_polls[1].revents & posix.POLL.IN == posix.POLL.IN) {
                 while (try self.safeReadMessage(self.socket)) |message| {
-                    self.inbound_queue.push(.{
+                    try self.inbound_queue.push(.{
                         .payload = message,
                     });
                 }
@@ -431,7 +431,7 @@ pub const Client = struct {
 
     fn workerThread(self: *Client) !void {
         while (true) {
-            const in_msg = self.inbound_queue.pop();
+            const in_msg = try self.inbound_queue.pop();
             defer self.allocator.free(in_msg.payload);
             var reader = std.io.Reader.fixed(in_msg.payload);
             const headers = try deserializeMessageHeaders(&reader);

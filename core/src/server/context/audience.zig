@@ -56,7 +56,7 @@ pub const Audience = struct {
             // TODO: then replace allocations entirely with 2 slices pointing to a ring buffer (one for head, one for tail, where tail is only useful/non-empty when it wraps around i.e. starts back from the start). This needs to be implemented in unison with the same mechanism on job results/response side
             // for now msg_dupe is just freed by the network thread
             const msg_dupe = try self.allocator.dupe(u8, message);
-            client.out_message_queue.push(.{ .data = msg_dupe, .offset = 0 });
+            try client.out_message_queue.push(.{ .data = msg_dupe, .offset = 0 });
         }
 
         // wake up the server to process the broadcast job

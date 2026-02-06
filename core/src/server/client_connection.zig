@@ -50,6 +50,7 @@ pub const ClientConnection = struct {
             self.allocator.free(msg.data);
         }
 
+        self.out_message_queue.close();
         self.allocator.free(self.out_message_queue.buf);
         self.allocator.destroy(self.out_message_queue);
     }
@@ -60,7 +61,7 @@ pub const ClientConnection = struct {
             else => return err,
         } orelse return;
 
-        self.job_queue.push(.{ .data = msg, .client_id = self.id });
+        try self.job_queue.push(.{ .data = msg, .client_id = self.id });
     }
 };
 

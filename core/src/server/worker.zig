@@ -37,9 +37,14 @@ pub const Worker = struct {
         self.allocator.free(self.response_buffer);
     }
 
-    pub fn run(self: *Worker) !noreturn {
+    pub fn run(self: *Worker) !void {
         while (true) {
-            const job = self.job_queue.pop();
+            const job = self.job_queue.pop() catch |err| {
+                switch (err) {
+                    error.Closed => return,
+                }
+            };
+
             var reader: std.Io.Reader = .fixed(job.data);
             defer self.allocator.free(job.data);
 
@@ -71,7 +76,7 @@ pub const Worker = struct {
                     }
 
                     // response_data will be freed by the reactor thread after sending
-                    client.out_message_queue.push(OutMessage{
+                    try client.out_message_queue.push(OutMessage{
                         .data = response_data,
                         .offset = 0,
                     });

@@ -116,6 +116,7 @@ pub const Server = struct {
         try self.stop();
         posix.close(self.wakeup_fd);
 
+        self.job_queue.close();
         self.allocator.free(self.job_queue.buf);
         self.allocator.destroy(self.job_queue);
 
