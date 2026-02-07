@@ -103,8 +103,8 @@ pub const Server = struct {
         for (0..options.worker_threads) |i| {
             workers[i] = try Worker.init(options.job_result_buffer_size, self);
 
-            _ = std.Thread.spawn(.{}, Worker.run, .{&workers[i]}) catch |err| {
-                std.debug.print("failed to spawn worker thread {}: {}", .{ i, err });
+            workers[i].runThread() catch |err| {
+                std.debug.print("Failed to spawn worker thread {}: {}", .{ i, err });
                 return err;
             };
         }
@@ -117,6 +117,13 @@ pub const Server = struct {
         posix.close(self.wakeup_fd);
 
         self.job_queue.close();
+
+        for (self.workers) |*w| {
+            w.thread.join();
+            w.deinit();
+        }
+        self.allocator.free(self.workers);
+
         self.allocator.free(self.job_queue.buf);
         self.allocator.destroy(self.job_queue);
 
@@ -124,9 +131,6 @@ pub const Server = struct {
         self.allocator.free(self.clients);
         self.allocator.free(self.free_indices);
         self.allocator.free(self.poll_to_client);
-
-        for (self.workers) |*w| w.deinit();
-        self.allocator.free(self.workers);
 
         self.allocator.destroy(self);
     }

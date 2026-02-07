@@ -11,6 +11,8 @@ const deserializeMessageHeaders = @import("../message_headers/deserialize_messag
 const Server = @import("server.zig").Server;
 
 pub const Worker = struct {
+    thread: std.Thread = undefined,
+
     server: *Server,
     allocator: std.mem.Allocator,
 
@@ -37,7 +39,12 @@ pub const Worker = struct {
         self.allocator.free(self.response_buffer);
     }
 
-    pub fn run(self: *Worker) !void {
+    pub inline fn runThread(self: *Worker) !void {
+        const thread = try std.Thread.spawn(.{}, Worker.run, .{self});
+        self.thread = thread;
+    }
+
+    fn run(self: *Worker) !void {
         while (true) {
             const job = self.job_queue.pop() catch |err| {
                 switch (err) {
