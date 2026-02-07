@@ -84,8 +84,10 @@ pub const Worker = struct {
 
                     // response_data will be freed by the reactor thread after sending
                     try client.out_message_queue.push(OutMessage{
-                        .data = response_data,
                         .offset = 0,
+                        .data = .{
+                            .single = response_data,
+                        },
                     });
 
                     // notify the reactor thread that a new job result is available

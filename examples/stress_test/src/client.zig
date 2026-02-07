@@ -2,8 +2,10 @@ const std = @import("std");
 const znet = @import("znet");
 const EchoContract = @import("server/echo_contract").EchoContract;
 
+// broadcasting slows something down dramatically, todo: fix
+
 pub fn main() !void {
-    const num_workers = 2; // bigger numbers just don't work (server can't handle it? ), todo: fix ||| this is caused by broadcasting somehow
+    const num_workers = 4;
     var threads: [num_workers]std.Thread = undefined;
 
     // Spawn threads
@@ -37,18 +39,13 @@ fn worker(idx: usize) !void {
     var client = try znet.Client.init(gpa.allocator(), .{});
     const address = try std.net.Address.parseIp("127.0.0.1", 5000);
     try client.connect(address);
-
     for (0..16) |_| {
-        // std.debug.print("[{}] sending a request\n", .{idx});
-        // std.debug.print("---> Request\n", .{});
-
         const promise = try client.fetch(EchoContract.echo, .{&message});
         const res = promise.await();
 
         if (!std.mem.eql(u8, &message, res))
             std.debug.print("----- Incorrect response! -----\n", .{});
 
-        // std.debug.print("<-- Response\n", .{});
         try promise.destroyResult();
         promise.deinit();
     }

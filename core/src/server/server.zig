@@ -217,9 +217,14 @@ pub const Server = struct {
 
                     // has messages queued to send
                     if (latest_out_message) |out| {
+                        const data = switch (out.data) {
+                            .single => |single| single,
+                            .shared => |shared| shared.get(),
+                        };
+
                         var sent: usize = 0;
-                        while (out.offset < out.data.len and sent < self.options.max_write_per_tick) {
-                            const n = posix.write(client.socket, out.data[out.offset..]) catch |err| switch (err) {
+                        while (out.offset < data.len and sent < self.options.max_write_per_tick) {
+                            const n = posix.write(client.socket, data[out.offset..]) catch |err| switch (err) {
                                 error.NotOpenForWriting, error.WouldBlock => break,
                                 else => return err,
                             };
@@ -230,10 +235,14 @@ pub const Server = struct {
                             out.offset += n;
                         }
 
-                        if (out.offset >= out.data.len) {
+                        if (out.offset >= data.len) {
                             // message fully sent, remove it from the queue
                             _ = client.out_message_queue.tryPop();
-                            self.allocator.free(out.data);
+
+                            switch (out.data) {
+                                .single => |single| self.allocator.free(single),
+                                .shared => |shared| shared.release(),
+                            }
                         }
 
                         if (!client.out_message_queue.isEmpty()) {

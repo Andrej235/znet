@@ -1,6 +1,7 @@
 const std = @import("std");
 const ClientConnection = @import("../client_connection.zig").ClientConnection;
-const Queue = @import("../../utils/mpmc_queue.zig").Queue;
+const OutMessage = @import("../out_message.zig").OutMessage;
+const SharedSlice = @import("../../utils/shared_slice.zig").SharedSlice;
 
 const MessageHeadersByteSize = @import("../../message_headers/message_headers.zig").HeadersByteSize;
 const serializeHeaders = @import("../../message_headers/serialize_message_headers.zig").serializeMessageHeaders;
@@ -44,19 +45,25 @@ pub const Audience = struct {
         @memcpy(message, write_buffer[0 .. payload_len + MessageHeadersByteSize.Broadcast]);
 
         var bitset = self.selected_bitset;
-        defer self.allocator.free(message);
         defer bitset.deinit();
+
+        const shared_slice = try SharedSlice(u8).create(self.allocator, message);
 
         // TODO: remove bitsets
         while (bitset.findFirstSet()) |idx| {
             bitset.unset(idx);
             const client = self.client_connections[idx];
 
-            // TODO: Replace msg_dupe with a shared ref to a slice
-            // TODO: then replace allocations entirely with 2 slices pointing to a ring buffer (one for head, one for tail, where tail is only useful/non-empty when it wraps around i.e. starts back from the start). This needs to be implemented in unison with the same mechanism on job results/response side
-            // for now msg_dupe is just freed by the network thread
-            const msg_dupe = try self.allocator.dupe(u8, message);
-            try client.out_message_queue.push(.{ .data = msg_dupe, .offset = 0 });
+            // TODO:? replace allocations entirely with 2 slices pointing to a ring buffer (one for head, one for tail, where tail is only useful/non-empty when it wraps around i.e. starts back from the start). This needs to be implemented in unison with the same mechanism on job results/response side
+            // TODO:? or use a buffer pool because a ring buffer for outgoing messages is problematic to say the least
+            // for now message is freed by the network thread after ref count reaches 0
+            try client.out_message_queue.push(OutMessage{
+                .offset = 0,
+                .data = .{
+                    .shared = shared_slice,
+                },
+            });
+            shared_slice.retain();
         }
 
         // wake up the server to process the broadcast job
