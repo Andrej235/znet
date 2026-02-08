@@ -12,10 +12,18 @@ const Client = @import("../../client//client.zig").Client;
 
 const app_version = @import("../../app_version.zig").app_version;
 
+pub const AudienceType = enum {
+    sender,
+    others,
+    all,
+};
+
 pub const Audience = struct {
     allocator: std.mem.Allocator,
     client_connections: []const ClientConnection,
-    selected_bitset: std.bit_set.DynamicBitSet,
+    connected_clients: []const u32,
+    sender_id: u32,
+    audience_type: AudienceType,
     wakeup_fd: std.posix.fd_t,
 
     pub fn broadcast(self: *Audience, method: anytype, args: MethodTupleArg(method)) !void {
@@ -44,27 +52,41 @@ pub const Audience = struct {
         const message = try self.allocator.alloc(u8, payload_len + MessageHeadersByteSize.Broadcast);
         @memcpy(message, write_buffer[0 .. payload_len + MessageHeadersByteSize.Broadcast]);
 
-        var bitset = self.selected_bitset;
-        defer bitset.deinit();
-
+        // TODO:? replace allocations entirely with 2 slices pointing to a ring buffer (one for head, one for tail, where tail is only useful/non-empty when it wraps around i.e. starts back from the start). This needs to be implemented in unison with the same mechanism on job results/response side
+        // TODO:? or use a buffer pool because a ring buffer for outgoing messages is problematic to say the least
+        // for now message is freed by the network thread after ref count reaches 0
         const shared_slice = try SharedSlice(u8).create(self.allocator, message);
+        const msg = OutMessage{
+            .offset = 0,
+            .data = .{
+                .shared = shared_slice,
+            },
+        };
 
-        // TODO: remove bitsets
-        while (bitset.findFirstSet()) |idx| {
-            bitset.unset(idx);
-            const client = self.client_connections[idx];
+        switch (self.audience_type) {
+            .sender => {
+                const client = self.client_connections[self.sender_id];
+                try client.out_message_queue.push(msg);
+                shared_slice.retain();
+            },
+            .others => {
+                for (self.connected_clients) |i| {
+                    if (i == self.sender_id) continue;
 
-            // TODO:? replace allocations entirely with 2 slices pointing to a ring buffer (one for head, one for tail, where tail is only useful/non-empty when it wraps around i.e. starts back from the start). This needs to be implemented in unison with the same mechanism on job results/response side
-            // TODO:? or use a buffer pool because a ring buffer for outgoing messages is problematic to say the least
-            // for now message is freed by the network thread after ref count reaches 0
-            try client.out_message_queue.push(OutMessage{
-                .offset = 0,
-                .data = .{
-                    .shared = shared_slice,
-                },
-            });
-            shared_slice.retain();
+                    const client = self.client_connections[i];
+                    try client.out_message_queue.push(msg);
+                    shared_slice.retain();
+                }
+            },
+            .all => {
+                for (self.connected_clients) |i| {
+                    const client = self.client_connections[i];
+                    try client.out_message_queue.push(msg);
+                    shared_slice.retain();
+                }
+            },
         }
+        shared_slice.release();
 
         // wake up the server to process the broadcast job
         _ = try std.posix.write(self.wakeup_fd, std.mem.asBytes(&@as(u64, 1)));

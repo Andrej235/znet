@@ -18,7 +18,7 @@ pub fn SharedSlice(comptime T: type) type {
         ) !Self {
             const ctrl = try allocator.create(Control);
             ctrl.* = .{
-                .ref_count = std.atomic.Value(usize).init(0),
+                .ref_count = std.atomic.Value(usize).init(1),
                 .allocator = allocator,
                 .value = value,
             };
@@ -36,9 +36,8 @@ pub fn SharedSlice(comptime T: type) type {
 
         pub fn release(self: *const Self) void {
             if (self.ctrl.ref_count.fetchSub(1, .seq_cst) == 1) {
-                const value = self.ctrl.value;
+                self.ctrl.allocator.free(self.ctrl.value);
                 self.ctrl.allocator.destroy(self.ctrl);
-                self.ctrl.allocator.free(value);
             }
         }
     };

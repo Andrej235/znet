@@ -11,43 +11,35 @@ pub const Clients = struct {
     wakeup_fd: std.posix.fd_t,
 
     pub fn sender(self: *Clients) !Audience {
-        var bitset = try std.bit_set.DynamicBitSet.initEmpty(self.allocator, self.client_connections.len);
-        bitset.set(self.sender_id);
-
         return Audience{
             .allocator = self.allocator,
             .client_connections = self.client_connections,
-            .selected_bitset = bitset,
+            .connected_clients = self.connected_clients,
             .wakeup_fd = self.wakeup_fd,
+            .audience_type = .sender,
+            .sender_id = self.sender_id,
         };
     }
 
     pub fn others(self: *Clients) !Audience {
-        var bitset = try std.bit_set.DynamicBitSet.initEmpty(self.allocator, self.client_connections.len);
-        for (self.connected_clients) |client_id| {
-            bitset.set(client_id);
-        }
-        bitset.unset(self.sender_id);
-
         return Audience{
             .allocator = self.allocator,
             .client_connections = self.client_connections,
-            .selected_bitset = bitset,
+            .connected_clients = self.connected_clients,
             .wakeup_fd = self.wakeup_fd,
+            .audience_type = .others,
+            .sender_id = self.sender_id,
         };
     }
 
     pub fn all(self: *Clients) !Audience {
-        var bitset = try std.bit_set.DynamicBitSet.initEmpty(self.allocator, self.client_connections.len);
-        for (self.connected_clients) |client_id| {
-            bitset.set(client_id);
-        }
-
         return Audience{
             .allocator = self.allocator,
             .client_connections = self.client_connections,
-            .selected_bitset = bitset,
+            .connected_clients = self.connected_clients,
             .wakeup_fd = self.wakeup_fd,
+            .audience_type = .all,
+            .sender_id = self.sender_id,
         };
     }
 };
