@@ -47,6 +47,8 @@ pub const Server = struct {
     // listening socket, and we don't ever touch that.
     client_polls: []posix.pollfd,
 
+    // number of clients that have messages enqueued to send but haven't been fully sent yet, used to decide when to clear the wakeup fd
+    dirty_clients: std.atomic.Value(usize),
     wakeup_fd: posix.fd_t,
     stop_flag: std.atomic.Value(bool),
 
@@ -96,6 +98,8 @@ pub const Server = struct {
             .job_queue = job_queue,
 
             .polls = polls,
+            .dirty_clients = std.atomic.Value(usize).init(0),
+
             .wakeup_fd = wakeup_fd,
             .stop_flag = std.atomic.Value(bool).init(false),
         };
@@ -173,9 +177,6 @@ pub const Server = struct {
 
             // wakeup fd is ready, at least one worker thread has completed a job and enqueued a message to send to a client
             const has_out = self.polls[1].revents != 0;
-            // used by out region, if there are any clients with messages left to send this will be set to false
-            // initilized to has_out because if the wakeup fd is what woke us up, then we know for sure there is at least one message to send
-            var clear_wakeup_fd = has_out;
 
             // has to be a while loop instead of a for loop because we may remove clients in the middle of iterating using swap remove which would require us to not increment i
             var i: usize = 0;
@@ -192,7 +193,7 @@ pub const Server = struct {
                         while (true) {
                             client.readMessage() catch |err| {
                                 if (err == error.Closed)
-                                    std.debug.print("[{f}] disconnected\n", .{client.address.in})
+                                    std.debug.print("[{f} | {}/{}] disconnected\n", .{ client.address.in, client_idx, client.id.gen })
                                 else
                                     std.debug.print("Error reading from client {}: {}\n", .{ client_idx, err });
 
@@ -245,8 +246,11 @@ pub const Server = struct {
                             }
                         }
 
-                        if (!client.out_message_queue.isEmpty()) {
-                            clear_wakeup_fd = false; // more messages left to send
+                        if (client.out_message_queue.isEmpty()) {
+                            if (client.dirty.swap(false, .acq_rel)) {
+                                // no more messages left to send to this client
+                                _ = self.dirty_clients.fetchSub(1, .release);
+                            }
                         }
                     }
                 }
@@ -255,14 +259,24 @@ pub const Server = struct {
                 i += 1;
             }
 
-            if (clear_wakeup_fd) { // nothing left to send, clear the eventfd
-                var buf: [8]u8 = undefined;
-                _ = try posix.read(self.wakeup_fd, &buf);
-            }
+            // nothing left to send, clear the eventfd
+            if (self.dirty_clients.load(.acquire) == 0)
+                try self.drain_wakeup_fd();
         }
 
-        for (0..self.connected) |_| {
+        for (0..self.connected) |i| {
+            std.debug.print("kicked client due to shutdown {} with {} messages in queue\n", .{ self.poll_to_client[i], self.clients[self.poll_to_client[i]].out_message_queue.count });
             self.removeClient(0);
+        }
+    }
+
+    fn drain_wakeup_fd(self: *Server) !void {
+        var buf: [8]u8 = undefined;
+        while (true) {
+            _ = posix.read(self.wakeup_fd, &buf) catch |err| switch (err) {
+                error.WouldBlock => return,
+                else => return err,
+            };
         }
     }
 
@@ -297,6 +311,7 @@ pub const Server = struct {
                 self.allocator,
                 self.job_queue,
                 out_message_queue,
+                self,
                 socket,
                 address,
                 client_id,

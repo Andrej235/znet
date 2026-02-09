@@ -83,15 +83,12 @@ pub const Worker = struct {
                     }
 
                     // response_data will be freed by the reactor thread after sending
-                    try client.out_message_queue.push(OutMessage{
+                    try client.enqueueMessage(OutMessage{
                         .offset = 0,
                         .data = .{
                             .single = response_data,
                         },
                     });
-
-                    // notify the reactor thread that a new job result is available
-                    _ = try std.posix.write(self.wakeup_fd, std.mem.asBytes(&@as(u64, 1)));
                 },
                 .Response => {
                     return error.UnexpectedResponseHeader;

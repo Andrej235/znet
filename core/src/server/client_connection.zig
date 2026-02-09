@@ -1,6 +1,7 @@
 const std = @import("std");
 const posix = std.posix;
 
+const Server = @import("server.zig").Server;
 const MessageHeadersByteSize = @import("../message_headers/message_headers.zig").HeadersByteSize;
 const deserializeMessageHeaders = @import("../message_headers/deserialize_message_headers.zig").deserializeMessageHeaders;
 const ConnectionId = @import("connection_id.zig").ConnectionId;
@@ -15,6 +16,9 @@ pub const ClientConnection = struct {
     job_queue: *Queue(Job),
     out_message_queue: *Queue(OutMessage),
 
+    server: *Server,
+    dirty: std.atomic.Value(bool),
+
     reader: ConnectionReader,
     socket: posix.socket_t,
     address: std.net.Address,
@@ -26,6 +30,7 @@ pub const ClientConnection = struct {
         allocator: std.mem.Allocator,
         job_queue: *Queue(Job),
         out_message_queue: *Queue(OutMessage),
+        server: *Server,
         socket: posix.socket_t,
         address: std.net.Address,
         id: ConnectionId,
@@ -41,6 +46,8 @@ pub const ClientConnection = struct {
             .allocator = allocator,
             .job_queue = job_queue,
             .out_message_queue = out_message_queue,
+            .server = server,
+            .dirty = std.atomic.Value(bool).init(false),
         };
     }
 
@@ -65,6 +72,17 @@ pub const ClientConnection = struct {
         } orelse return;
 
         try self.job_queue.push(.{ .data = msg, .client_id = self.id });
+    }
+
+    pub fn enqueueMessage(self: *ClientConnection, msg: OutMessage) !void {
+        const was_empty = self.out_message_queue.isEmpty();
+        if (!was_empty) return;
+        if (self.dirty.swap(true, .acq_rel)) return;
+
+        _ = self.server.dirty_clients.fetchAdd(1, .release);
+        _ = try posix.write(self.server.wakeup_fd, std.mem.asBytes(&@as(u64, 1)));
+
+        try self.out_message_queue.push(msg);
     }
 };
 
