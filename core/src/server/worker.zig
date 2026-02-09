@@ -53,7 +53,7 @@ pub const Worker = struct {
             };
 
             var reader: std.Io.Reader = .fixed(job.data);
-            defer self.allocator.free(job.data);
+            defer self.server.input_buffer_pool.release(job.buffer_idx);
 
             const headers = try deserializeMessageHeaders(&reader);
 

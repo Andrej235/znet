@@ -25,7 +25,6 @@ pub const ClientConnection = struct {
     id: ConnectionId,
 
     pub fn init(
-        read_buffer_size: usize,
         max_read_per_tick: usize,
         allocator: std.mem.Allocator,
         job_queue: *Queue(Job),
@@ -35,7 +34,7 @@ pub const ClientConnection = struct {
         address: std.net.Address,
         id: ConnectionId,
     ) !ClientConnection {
-        const reader = try ConnectionReader.init(allocator, max_read_per_tick, read_buffer_size, id);
+        const reader = ConnectionReader.init(allocator, server, max_read_per_tick, id);
         errdefer reader.deinit(allocator);
 
         return .{
@@ -52,7 +51,7 @@ pub const ClientConnection = struct {
     }
 
     pub fn deinit(self: *const ClientConnection) void {
-        self.reader.deinit(self.allocator);
+        self.reader.deinit();
         while (self.out_message_queue.tryPop()) |msg| {
             switch (msg.data) {
                 .single => |single| self.allocator.free(single),
@@ -71,7 +70,11 @@ pub const ClientConnection = struct {
             else => return err,
         } orelse return;
 
-        try self.job_queue.push(.{ .data = msg, .client_id = self.id });
+        try self.job_queue.push(.{
+            .data = msg.data,
+            .buffer_idx = msg.buffer_idx,
+            .client_id = self.id,
+        });
     }
 
     pub fn enqueueMessage(self: *ClientConnection, msg: OutMessage) !void {
@@ -90,42 +93,63 @@ const ConnectionReader = struct {
     allocator: std.mem.Allocator,
     connection_id: ConnectionId,
     max_read_per_tick: usize,
-    buffer: []u8,
-    reader: std.Io.Reader,
-    pos: usize = 0,
-    headers: ?RequestHeaders = null,
 
-    fn init(allocator: std.mem.Allocator, max_read_per_tick: usize, size: usize, connection_id: ConnectionId) !ConnectionReader {
-        const buf = try allocator.alloc(u8, size);
+    current_buffer: []u8, // only valid if current_buffer_idx != null
+    current_buffer_idx: ?u32,
+    pos: usize,
+
+    current_headers: ?RequestHeaders,
+
+    server: *Server,
+
+    fn init(allocator: std.mem.Allocator, server: *Server, max_read_per_tick: usize, connection_id: ConnectionId) ConnectionReader {
         return .{
-            .pos = 0,
-            .max_read_per_tick = max_read_per_tick,
-            .buffer = buf,
-            .reader = std.Io.Reader.fixed(buf),
-            .connection_id = connection_id,
             .allocator = allocator,
+            .connection_id = connection_id,
+            .max_read_per_tick = max_read_per_tick,
+
+            .current_buffer = undefined,
+            .current_buffer_idx = null,
+            .pos = 0,
+
+            .current_headers = null,
+
+            .server = server,
         };
     }
 
-    fn deinit(self: *const ConnectionReader, allocator: std.mem.Allocator) void {
-        allocator.free(self.buffer);
+    fn deinit(self: *const ConnectionReader) void {
+        if (self.current_buffer_idx) |idx| {
+            self.server.input_buffer_pool.release(idx);
+        }
     }
 
-    fn readMessage(self: *ConnectionReader, socket: posix.socket_t) !?[]u8 {
+    const MessageReadResult = struct {
+        buffer_idx: u32,
+        data: []const u8,
+    };
+
+    fn readMessage(self: *ConnectionReader, socket: posix.socket_t) !?MessageReadResult {
+        if (self.current_buffer_idx == null) {
+            const idx = self.server.input_buffer_pool.acquire() orelse return null;
+            self.current_buffer_idx = idx;
+            self.current_buffer = self.server.input_buffer_pool.buffer(idx);
+
+            self.pos = 0;
+            self.current_headers = null;
+        }
+
         var reads: usize = 0;
         while (reads < self.max_read_per_tick) {
             // loop until we have a full message to process
-            if (try self.bufferedMessage()) |msg|
+            if (try self.tryParseMessage()) |msg|
                 return msg;
 
             // read more data from the socket, fills up the buffer from pos to the end
-            const n = try posix.read(socket, self.buffer[self.pos..]);
+            const n = try posix.read(socket, self.current_buffer[self.pos..]);
 
             if (n == 0) // no more data, connection closed or EOF
-            {
-                @branchHint(.cold);
                 return error.Closed;
-            }
 
             reads += n;
             self.pos += n;
@@ -134,18 +158,19 @@ const ConnectionReader = struct {
         return null;
     }
 
-    inline fn bufferedMessage(self: *ConnectionReader) !?[]u8 {
-        if (self.headers == null) {
+    inline fn tryParseMessage(self: *ConnectionReader) !?MessageReadResult {
+        if (self.current_headers == null) {
+            var reader = std.io.Reader.fixed(self.current_buffer);
+
             if (self.pos < MessageHeadersByteSize.Request) {
                 // not enough data to read the header
                 return null;
             }
 
-            self.reader.seek = 0;
-            self.headers = (try deserializeMessageHeaders(&self.reader)).Request;
+            self.current_headers = (try deserializeMessageHeaders(&reader)).Request;
         }
 
-        const payload_len = self.headers.?.payload_len;
+        const payload_len = self.current_headers.?.payload_len;
         const message_len = payload_len + MessageHeadersByteSize.Request;
 
         if (self.pos < message_len) {
@@ -153,18 +178,35 @@ const ConnectionReader = struct {
             return null;
         }
 
-        const msg = self.buffer[0..message_len];
-        // todo: replace with a ring buffer for zero-copy and no allocations
-        // freed in worker thread after processing
-        const heap_msg = try self.allocator.alloc(u8, msg.len);
-        @memcpy(heap_msg, msg);
+        const msg = self.current_buffer[0..message_len];
+        const current_buffer_idx = self.current_buffer_idx.?;
 
-        // shift remaining data to the front of the buffer
-        @memmove(self.buffer[0 .. self.pos - message_len], self.buffer[message_len..self.pos]);
+        if (self.pos == message_len) {
+            self.current_buffer_idx = null;
+            return .{
+                .buffer_idx = current_buffer_idx,
+                .data = msg,
+            };
+        }
+
+        const remaining_bytes = self.current_buffer[message_len..self.pos];
+        // if there isn't a free buffer, we can't process this message yet
+        // we also can't return the fully read one because then we wouldn't be able to preserve the remaining data for the next read
+        const new_buffer_idx = self.server.input_buffer_pool.acquire() orelse return null;
+        const new_buffer = self.server.input_buffer_pool.buffer(new_buffer_idx);
+
+        // move the remaining bytes to the new buffer so that we can continue reading that message in this new buffer we just acquired from the pool
+        @memcpy(new_buffer[0..remaining_bytes.len], remaining_bytes);
+
+        self.current_buffer_idx = new_buffer_idx;
+        self.current_buffer = new_buffer;
+
         self.pos -= message_len;
-        self.reader.seek = 0;
+        self.current_headers = null;
 
-        self.headers = null;
-        return heap_msg;
+        return .{
+            .buffer_idx = current_buffer_idx,
+            .data = msg,
+        };
     }
 };

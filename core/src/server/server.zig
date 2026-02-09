@@ -2,6 +2,8 @@ const std = @import("std");
 const posix = std.posix;
 const net = std.net;
 
+const BufferPool = @import("../utils/buffer_pool.zig").BufferPool;
+
 const ServerOptions = @import("server_options.zig").ServerOptions;
 const ClientConnection = @import("client_connection.zig").ClientConnection;
 const Worker = @import("worker.zig").Worker;
@@ -52,6 +54,8 @@ pub const Server = struct {
     wakeup_fd: posix.fd_t,
     stop_flag: std.atomic.Value(bool),
 
+    input_buffer_pool: *BufferPool,
+
     job_queue: *Queue(Job),
 
     pub fn init(allocator: std.mem.Allocator, comptime options: ServerOptions) !*Server {
@@ -76,6 +80,14 @@ pub const Server = struct {
         for (0..options.max_clients) |i| {
             free_indices[i] = .{ .index = @intCast(i), .gen = 0 };
         }
+
+        const input_buffer_pool = try allocator.create(BufferPool);
+        input_buffer_pool.* = try BufferPool.init(
+            allocator,
+            options.max_jobs_in_queue,
+            options.client_read_buffer_size,
+        );
+        errdefer input_buffer_pool.deinit(allocator);
 
         const poll_to_client = try allocator.alloc(u32, options.max_clients);
         errdefer allocator.free(poll_to_client);
@@ -102,6 +114,8 @@ pub const Server = struct {
 
             .wakeup_fd = wakeup_fd,
             .stop_flag = std.atomic.Value(bool).init(false),
+
+            .input_buffer_pool = input_buffer_pool,
         };
 
         for (0..options.worker_threads) |i| {
@@ -127,6 +141,9 @@ pub const Server = struct {
             w.deinit();
         }
         self.allocator.free(self.workers);
+
+        self.input_buffer_pool.deinit(self.allocator);
+        self.allocator.destroy(self.input_buffer_pool);
 
         self.allocator.free(self.job_queue.buf);
         self.allocator.destroy(self.job_queue);
@@ -306,7 +323,6 @@ pub const Server = struct {
             errdefer self.allocator.destroy(out_message_queue);
 
             const client = ClientConnection.init(
-                self.options.client_read_buffer_size,
                 self.options.max_read_per_tick,
                 self.allocator,
                 self.job_queue,
