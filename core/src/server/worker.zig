@@ -46,6 +46,8 @@ pub const Worker = struct {
 
     fn run(self: *Worker) !void {
         while (true) {
+            // buffer released in handler right after deserialization
+
             const job = self.job_queue.pop() catch |err| {
                 switch (err) {
                     error.Closed => return,
@@ -53,9 +55,11 @@ pub const Worker = struct {
             };
 
             var reader: std.Io.Reader = .fixed(job.data);
-            defer self.server.input_buffer_pool.release(job.buffer_idx);
-
-            const headers = try deserializeMessageHeaders(&reader);
+            const headers = deserializeMessageHeaders(&reader) catch |err| {
+                self.server.input_buffer_pool.release(job.buffer_idx);
+                std.debug.print("Failed to deserialize message headers: {}\n", .{err});
+                continue;
+            };
 
             switch (headers) {
                 .Request => |req_header| {
@@ -63,12 +67,13 @@ pub const Worker = struct {
 
                     var writer: std.Io.Writer = .fixed(self.response_buffer);
                     try handler(
+                        self.allocator,
                         self.server,
                         job.client_id.index,
                         headers.Request,
-                        self.allocator,
                         &reader,
                         &writer,
+                        job.buffer_idx,
                     );
 
                     const response_payload_len = std.mem.readInt(u32, self.response_buffer[MessageHeadersByteSize.Response - 4 .. MessageHeadersByteSize.Response], .big);
@@ -91,9 +96,11 @@ pub const Worker = struct {
                     });
                 },
                 .Response => {
+                    std.debug.print("Worker encountered a response message\n", .{});
                     return error.UnexpectedResponseHeader;
                 },
                 .Broadcast => {
+                    std.debug.print("Worker encountered a broadcast message\n", .{});
                     return error.UnexpectedBroadcastHeader;
                 },
             }

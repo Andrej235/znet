@@ -42,15 +42,21 @@ pub fn createHandlerFn(comptime fn_impl: anytype) HandlerFn {
 
     return struct {
         fn handler(
+            allocator: std.mem.Allocator,
             server: *Server,
             initiated_by_connection_id: u32,
             request_headers: RequestHeaders,
-            allocator: std.mem.Allocator,
             input_reader: *std.Io.Reader,
             output_writer: *std.Io.Writer,
+            input_buffer_idx: u32,
         ) anyerror!void {
             var deserializer = Deserializer.init(allocator);
-            const payload: TPayload = try deserializer.deserialize(input_reader, TPayload);
+            const payload: TPayload = deserializer.deserialize(input_reader, TPayload) catch |err| {
+                server.input_buffer_pool.release(input_buffer_idx);
+                return err;
+            };
+            server.input_buffer_pool.release(input_buffer_idx);
+
             const params: TParams = blk: {
                 if (!inject_context) break :blk payload;
 

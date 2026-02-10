@@ -44,7 +44,10 @@ pub const BufferPool = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        if (self.free_count == 0) return null;
+        if (self.free_count == 0) {
+            std.debug.print("no free buffer\n", .{});
+            return null;
+        }
 
         self.free_count -= 1;
         return self.free[self.free_count];
