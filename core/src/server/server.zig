@@ -122,7 +122,7 @@ pub const Server = struct {
             workers[i] = try Worker.init(options.job_result_buffer_size, self);
 
             workers[i].runThread() catch |err| {
-                std.debug.print("Failed to spawn worker thread {}: {}", .{ i, err });
+                std.debug.print("Failed to spawn worker thread {}: {}\n", .{ i, err });
                 return err;
             };
         }

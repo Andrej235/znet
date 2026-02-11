@@ -57,24 +57,14 @@ pub const Client = struct {
     input_buffer_pool: *BufferPool,
 
     send_buffer: []u8,
-    receive_buffer: []u8,
-    read_pos: usize = 0,
-    reader: std.io.Reader,
 
     deserializer: Deserializer,
 
     pending_requests_map: std.AutoHashMap(u32, PendingRequest),
 
-    server_connection_socket: posix.socket_t = undefined,
     server_connection: *ServerConnection,
 
-    connected: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-    network_thread: std.Thread = undefined,
     workers: []Worker = undefined,
-
-    // 0 is server, 1 is wakeup fd
-    polls: []posix.pollfd,
-    wakeup_fd: posix.fd_t,
 
     outbound_buffer: []OutboundMessage,
     outbound_queue: *Queue(OutboundMessage),
@@ -86,7 +76,6 @@ pub const Client = struct {
 
     pub fn init(allocator: std.mem.Allocator, comptime options: ClientOptions) !*Client {
         const send_buffer = try allocator.alloc(u8, options.write_buffer_size);
-        const receive_buffer = try allocator.alloc(u8, options.read_buffer_size);
 
         const outbound_buffer = try allocator.alloc(OutboundMessage, options.max_outbound_messages);
         const outbound_queue = try allocator.create(Queue(OutboundMessage));
@@ -95,8 +84,6 @@ pub const Client = struct {
         const inbound_buffer = try allocator.alloc(InboundMessage, options.max_inbound_messages);
         const inbound_queue = try allocator.create(Queue(InboundMessage));
         inbound_queue.* = try Queue(InboundMessage).init(inbound_buffer);
-
-        const polls = try allocator.alloc(posix.pollfd, 2);
 
         var pending_requests_map = std.AutoHashMap(u32, PendingRequest).init(allocator);
         try pending_requests_map.ensureTotalCapacity(options.max_pending_requests);
@@ -114,8 +101,6 @@ pub const Client = struct {
             .allocator = allocator,
 
             .send_buffer = send_buffer,
-            .receive_buffer = receive_buffer,
-            .reader = std.io.Reader.fixed(receive_buffer),
 
             .deserializer = Deserializer.init(allocator),
 
@@ -130,13 +115,11 @@ pub const Client = struct {
             .input_buffer_pool = input_buffer_pool,
 
             .workers = workers,
-            .polls = polls,
-            .wakeup_fd = undefined,
 
             .server_connection = server_connection,
         };
 
-        server_connection.* = ServerConnection.init(
+        server_connection.* = try ServerConnection.init(
             allocator,
             self,
         );
@@ -147,17 +130,16 @@ pub const Client = struct {
     pub fn deinit(self: *Client) !void {
         try self.disconnect();
 
+        self.server_connection.deinit();
+
         self.allocator.free(self.workers);
 
         self.allocator.free(self.send_buffer);
-        self.allocator.free(self.receive_buffer);
 
         self.allocator.free(self.outbound_buffer);
         self.allocator.destroy(self.outbound_queue);
         self.allocator.free(self.inbound_buffer);
         self.allocator.destroy(self.inbound_queue);
-
-        self.allocator.free(self.polls);
 
         self.input_buffer_pool.deinit(self.allocator);
         self.allocator.destroy(self.input_buffer_pool);
@@ -169,63 +151,25 @@ pub const Client = struct {
     }
 
     pub fn connect(self: *Client, address: std.net.Address) !void {
-        self.server_connection_socket = try posix.socket(
-            address.any.family,
-            posix.SOCK.STREAM | posix.SOCK.NONBLOCK,
-            posix.IPPROTO.TCP,
-        );
-
-        self.wakeup_fd = try posix.eventfd(0, posix.SOCK.NONBLOCK);
-
-        self.polls[0] = .{
-            .fd = self.server_connection_socket,
-            .events = posix.POLL.IN,
-            .revents = 0,
-        };
-
-        self.polls[1] = .{
-            .fd = self.wakeup_fd,
-            .events = posix.POLL.IN,
-            .revents = 0,
-        };
-
-        self.server_connection.connection_socket = self.server_connection_socket;
-
-        _ = try posix.poll(self.polls, -1);
-        while (true) {
-            posix.connect(self.server_connection_socket, &address.any, address.getOsSockLen()) catch |err| switch (err) {
-                error.WouldBlock => continue,
-                else => return err,
-            };
-            break;
-        }
-
-        self.connected.store(true, .release);
-        self.network_thread = try std.Thread.spawn(.{}, networkThread, .{self});
+        try self.server_connection.connect(address);
 
         for (0..self.options.worker_thread_count) |i| {
             self.workers[i] = Worker.init(self.allocator, self);
 
             self.workers[i].runThread() catch |err| {
-                std.debug.print("Failed to spawn worker thread {}: {}", .{ i, err });
+                std.debug.print("Failed to spawn worker thread {}: {}\n", .{ i, err });
                 return err;
             };
         }
     }
 
     pub fn disconnect(self: *Client) !void {
-        self.connected.store(false, .release);
-        _ = try posix.write(self.wakeup_fd, std.mem.asBytes(&@as(u64, 1)));
-
-        self.network_thread.join();
+        try self.server_connection.disconnect();
 
         self.inbound_queue.close();
         for (self.workers) |*w| {
             w.thread.join();
         }
-
-        posix.close(self.server_connection_socket);
-        posix.close(self.wakeup_fd);
 
         var it = self.pending_requests_map.iterator();
         while (it.next()) |pending_request|
@@ -324,7 +268,7 @@ pub const Client = struct {
         });
 
         // notify the network thread that a new outbound message is available
-        _ = try std.posix.write(self.wakeup_fd, std.mem.asBytes(&@as(u64, 1)));
+        _ = try std.posix.write(self.server_connection.wakeup_fd, std.mem.asBytes(&@as(u64, 1)));
 
         return promise;
     }
@@ -332,48 +276,6 @@ pub const Client = struct {
     fn generateRequestId(self: *Client) u32 {
         self.current_request_id += 1;
         return self.current_request_id;
-    }
-
-    fn networkThread(self: *Client) !void {
-        while (true) {
-            _ = try posix.poll(self.polls, -1);
-            if (!self.connected.load(.acquire)) break;
-
-            // process inbound messages
-            if (self.polls[0].revents & posix.POLL.IN == posix.POLL.IN) {
-                self.server_connection.readMessage() catch |err| {
-                    std.debug.print("Error reading message from server: {}\n", .{err});
-                };
-            }
-
-            // process outbound messages
-            if (self.polls[1].revents != 0) {
-                while (self.outbound_queue.tryPop()) |out_msg| {
-                    var writer: std.io.Writer = .fixed(self.send_buffer);
-                    const headers = try out_msg.serialize(out_msg, &writer);
-                    switch (headers) {
-                        .Request => |req_headers| {
-                            const total_len = req_headers.payload_len + MessageHeadersByteSize.Request;
-
-                            var sent: usize = 0;
-                            while (sent < total_len) {
-                                sent += try posix.write(self.server_connection_socket, self.send_buffer[sent..total_len]);
-                            }
-                        },
-                        .Response => {
-                            std.debug.print("Tried to read response in outbound messages, client\n", .{});
-                        },
-                        .Broadcast => {
-                            std.debug.print("Tried to read broadcast in outbound messages, client\n", .{});
-                        },
-                    }
-                }
-
-                // clear the wakeup event
-                var buf: u64 = 0;
-                _ = try std.posix.read(self.wakeup_fd, std.mem.asBytes(&buf));
-            }
-        }
     }
 };
 

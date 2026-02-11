@@ -6,9 +6,10 @@ const Client = @import("client.zig").Client;
 const Queue = @import("../utils//mpmc_queue.zig").Queue;
 const Job = @import("./inbound_message.zig").InboundMessage;
 
+const MessageReadResult = @import("./message_read_result.zig").MessageReadResult;
+const ConnectionReader = @import("./connection_reader.zig").ConnectionReader;
+
 const MessageHeadersByteSize = @import("../message_headers/message_headers.zig").HeadersByteSize;
-const MessageHeaders = @import("../message_headers/message_headers.zig").MessageHeaders;
-const deserializeMessageHeaders = @import("../message_headers/deserialize_message_headers.zig").deserializeMessageHeaders;
 
 pub const ServerConnection = struct {
     allocator: std.mem.Allocator,
@@ -20,19 +21,77 @@ pub const ServerConnection = struct {
     client: *Client,
     connection_reader: ConnectionReader,
 
-    pub fn init(allocator: std.mem.Allocator, client: *Client) ServerConnection {
+    // 0 is server, 1 is wakeup fd
+    polls: []posix.pollfd,
+    wakeup_fd: posix.fd_t,
+
+    network_thread: std.Thread = undefined,
+
+    pub fn init(allocator: std.mem.Allocator, client: *Client) !ServerConnection {
+        const polls = try allocator.alloc(posix.pollfd, 2);
+
         return ServerConnection{
             .allocator = allocator,
             .job_queue = client.inbound_queue,
             .connection_socket = undefined,
             .client = client,
             .connection_reader = ConnectionReader.init(allocator, client),
+
+            .polls = polls,
+            .wakeup_fd = undefined,
         };
     }
-    pub fn deinit() void {}
 
-    pub fn connect() !void {}
-    pub fn disconnect() void {}
+    pub fn deinit(self: *ServerConnection) void {
+        self.connection_reader.deinit();
+
+        self.allocator.free(self.polls);
+    }
+
+    pub fn connect(self: *ServerConnection, address: std.net.Address) !void {
+        self.connection_socket = try posix.socket(
+            address.any.family,
+            posix.SOCK.STREAM | posix.SOCK.NONBLOCK,
+            posix.IPPROTO.TCP,
+        );
+
+        self.wakeup_fd = try posix.eventfd(0, posix.SOCK.NONBLOCK);
+
+        self.polls[0] = .{
+            .fd = self.connection_socket,
+            .events = posix.POLL.IN,
+            .revents = 0,
+        };
+
+        self.polls[1] = .{
+            .fd = self.wakeup_fd,
+            .events = posix.POLL.IN,
+            .revents = 0,
+        };
+
+        _ = try posix.poll(self.polls, -1);
+        while (true) {
+            posix.connect(self.connection_socket, &address.any, address.getOsSockLen()) catch |err| switch (err) {
+                error.WouldBlock => continue,
+                else => return err,
+            };
+            break;
+        }
+
+        self.connected.store(true, .release);
+
+        self.network_thread = try std.Thread.spawn(.{}, networkThread, .{self});
+    }
+
+    pub fn disconnect(self: *ServerConnection) !void {
+        self.connected.store(false, .release);
+        _ = try posix.write(self.wakeup_fd, std.mem.asBytes(&@as(u64, 1)));
+
+        self.network_thread.join();
+
+        posix.close(self.connection_socket);
+        posix.close(self.wakeup_fd);
+    }
 
     pub fn readMessage(self: *ServerConnection) !void {
         const msg = self.connection_reader.readMessage(self.connection_socket) catch |err| switch (err) {
@@ -45,129 +104,46 @@ pub const ServerConnection = struct {
             .buffer_idx = msg.buffer_idx,
         });
     }
-};
 
-const ConnectionReader = struct {
-    allocator: std.mem.Allocator,
-    connection_socket: posix.socket_t,
-
-    current_buffer: []u8, // only valid if current_buffer_idx != null
-    current_buffer_idx: ?u32,
-    pos: usize,
-
-    current_headers: ?MessageHeaders,
-
-    client: *Client,
-
-    fn init(allocator: std.mem.Allocator, client: *Client) ConnectionReader {
-        return .{
-            .allocator = allocator,
-            .connection_socket = undefined,
-
-            .current_buffer = undefined,
-            .current_buffer_idx = null,
-            .pos = 0,
-
-            .current_headers = null,
-
-            .client = client,
-        };
-    }
-
-    fn deinit(self: *const ConnectionReader) void {
-        if (self.current_buffer_idx) |idx| {
-            self.client.input_buffer_pool.release(idx);
-        }
-    }
-
-    const MessageReadResult = struct {
-        buffer_idx: u32,
-        data: []const u8,
-    };
-
-    fn readMessage(self: *ConnectionReader, socket: posix.socket_t) !?MessageReadResult {
-        if (self.current_buffer_idx == null) {
-            const idx = self.client.input_buffer_pool.acquire() orelse return null;
-            self.current_buffer_idx = idx;
-            self.current_buffer = self.client.input_buffer_pool.buffer(idx);
-
-            self.pos = 0;
-            self.current_headers = null;
-        }
-
+    fn networkThread(self: *ServerConnection) !void {
         while (true) {
-            // loop until we have a full message to process
-            if (try self.tryParseMessage()) |msg|
-                return msg;
+            _ = try posix.poll(self.polls, -1);
+            if (!self.connected.load(.acquire)) break;
 
-            // read more data from the socket, fills up the buffer from pos to the end
-            const n = try posix.read(socket, self.current_buffer[self.pos..]);
-
-            if (n == 0) // no more data, connection closed or EOF
-                return error.Closed;
-
-            self.pos += n;
-        }
-    }
-
-    inline fn tryParseMessage(self: *ConnectionReader) !?MessageReadResult {
-        if (self.current_headers == null) {
-            var reader = std.io.Reader.fixed(self.current_buffer);
-
-            if (self.pos < MessageHeadersByteSize.Request) {
-                // not enough data to read the header
-                return null;
+            // process inbound messages
+            if (self.polls[0].revents & posix.POLL.IN == posix.POLL.IN) {
+                self.readMessage() catch |err| {
+                    std.debug.print("Error reading message from server: {}\n", .{err});
+                };
             }
 
-            self.current_headers = (try deserializeMessageHeaders(&reader));
+            // process outbound messages
+            if (self.polls[1].revents != 0) {
+                while (self.client.outbound_queue.tryPop()) |out_msg| {
+                    var writer: std.io.Writer = .fixed(self.client.send_buffer);
+                    const headers = try out_msg.serialize(out_msg, &writer);
+                    switch (headers) {
+                        .Request => |req_headers| {
+                            const total_len = req_headers.payload_len + MessageHeadersByteSize.Request;
+
+                            var sent: usize = 0;
+                            while (sent < total_len) {
+                                sent += try posix.write(self.connection_socket, self.client.send_buffer[sent..total_len]);
+                            }
+                        },
+                        .Response => {
+                            std.debug.print("Tried to read response in outbound messages, client\n", .{});
+                        },
+                        .Broadcast => {
+                            std.debug.print("Tried to read broadcast in outbound messages, client\n", .{});
+                        },
+                    }
+                }
+
+                // clear the wakeup event
+                var buf: u64 = 0;
+                _ = try std.posix.read(self.wakeup_fd, std.mem.asBytes(&buf));
+            }
         }
-
-        const payload_len = switch (self.current_headers.?) {
-            .Request => return error.InvalidState, // we should never have request headers in the connection reader, they are only used for outgoing messages
-            .Response => |res| res.payload_len,
-            .Broadcast => |b| b.payload_len,
-        };
-        const message_len = payload_len + MessageHeadersByteSize.Response; // response and broadcast headers have the same size
-
-        if (self.pos < message_len) {
-            // not enough data to read the full message
-            return null;
-        }
-
-        if (self.pos < message_len) {
-            // not enough data to read the full message
-            return null;
-        }
-
-        const msg = self.current_buffer[0..message_len];
-        const current_buffer_idx = self.current_buffer_idx.?;
-
-        if (self.pos == message_len) {
-            self.current_buffer_idx = null;
-            return .{
-                .buffer_idx = current_buffer_idx,
-                .data = msg,
-            };
-        }
-
-        const remaining_bytes = self.current_buffer[message_len..self.pos];
-        // if there isn't a free buffer, we can't process this message yet
-        // we also can't return the fully read one because then we wouldn't be able to preserve the remaining data for the next read
-        const new_buffer_idx = self.client.input_buffer_pool.acquire() orelse return null;
-        const new_buffer = self.client.input_buffer_pool.buffer(new_buffer_idx);
-
-        // move the remaining bytes to the new buffer so that we can continue reading that message in this new buffer we just acquired from the pool
-        @memcpy(new_buffer[0..remaining_bytes.len], remaining_bytes);
-
-        self.current_buffer_idx = new_buffer_idx;
-        self.current_buffer = new_buffer;
-
-        self.pos -= message_len;
-        self.current_headers = null;
-
-        return .{
-            .buffer_idx = current_buffer_idx,
-            .data = msg,
-        };
     }
 };
