@@ -1,17 +1,3 @@
-// TODO:
-//// user sends a fetch => serialize right away in a borrowed buffer (from a pool) on that thread to avoid allocating args
-// call a promise pool like object's method to allocate a new promise, allocate it with a request id that is free
-// put the promise into a thread safe array at index of request id
-//// network thread pops the message and just sends it, release the borrowed buffer back to the pool
-//// network thread receives a message directly into a borrowed buffer
-// worker deserializes, this allocates, gets the request id, looks up the promise in the array, resolves it, and frees the request id in the promise pool
-//// worker releases the borrowed buffer back to the pool
-// consumer must somehow free the response result and promise, maybe by promise.destroy() and/or promise.deinit()
-// total 2 allocs, 0-ish copy (only copy extra data received into a newly borrowed buffer)
-
-// test stuff with server started with smp allocator in fast release and client started in debug with general purpose allocator
-// this makes sure that the server is not the bottleneck
-
 const std = @import("std");
 const posix = @import("std").posix;
 
@@ -19,9 +5,7 @@ const ClientOptions = @import("client_options.zig").ClientOptions;
 
 const MessageHeaders = @import("../message_headers/message_headers.zig").MessageHeaders;
 const MessageHeadersByteSize = @import("../message_headers/message_headers.zig").HeadersByteSize;
-const MessageType = @import("../message_headers/message_type.zig").MessageType;
 const serializeHeaders = @import("../message_headers/serialize_message_headers.zig").serializeMessageHeaders;
-const deserializeMessageHeaders = @import("../message_headers/deserialize_message_headers.zig").deserializeMessageHeaders;
 
 const ServerContext = @import("../server/context/context.zig").Context;
 
@@ -35,7 +19,6 @@ const Promise = @import("../promise/promise.zig").Promise;
 
 const OutboundMessage = @import("outbound_message.zig").OutboundMessage;
 const InboundMessage = @import("inbound_message.zig").InboundMessage;
-const PendingRequest = @import("pending_request.zig").PendingRequest;
 
 const PendingRequestsMap = @import("pending_requests_map.zig").PendingRequestsMap;
 
