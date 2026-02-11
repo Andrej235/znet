@@ -1,11 +1,11 @@
 // TODO:
-// user sends a fetch => serialize right away in a borrowed buffer (from a pool) on that thread to avoid allocating args
+//// user sends a fetch => serialize right away in a borrowed buffer (from a pool) on that thread to avoid allocating args
 // call a promise pool like object's method to allocate a new promise, allocate it with a request id that is free
 // put the promise into a thread safe array at index of request id
-// network thread pops the message and just sends it, release the borrowed buffer back to the pool
-// network thread receives a message directly into a borrowed buffer
+//// network thread pops the message and just sends it, release the borrowed buffer back to the pool
+//// network thread receives a message directly into a borrowed buffer
 // worker deserializes, this allocates, gets the request id, looks up the promise in the array, resolves it, and frees the request id in the promise pool
-// worker releases the borrowed buffer back to the pool
+//// worker releases the borrowed buffer back to the pool
 // consumer must somehow free the response result and promise, maybe by promise.destroy() and/or promise.deinit()
 // total 2 allocs, 0-ish copy (only copy extra data received into a newly borrowed buffer)
 
@@ -54,9 +54,8 @@ pub const Client = struct {
     options: ClientOptions = .{},
     allocator: std.mem.Allocator,
 
-    input_buffer_pool: *BufferPool,
-
-    send_buffer: []u8,
+    inbound_buffer_pool: *BufferPool,
+    outbound_buffer_pool: *BufferPool,
 
     deserializer: Deserializer,
 
@@ -75,8 +74,6 @@ pub const Client = struct {
     current_request_id: u32 = 0,
 
     pub fn init(allocator: std.mem.Allocator, comptime options: ClientOptions) !*Client {
-        const send_buffer = try allocator.alloc(u8, options.write_buffer_size);
-
         const outbound_buffer = try allocator.alloc(OutboundMessage, options.max_outbound_messages);
         const outbound_queue = try allocator.create(Queue(OutboundMessage));
         outbound_queue.* = try Queue(OutboundMessage).init(outbound_buffer);
@@ -88,8 +85,11 @@ pub const Client = struct {
         var pending_requests_map = std.AutoHashMap(u32, PendingRequest).init(allocator);
         try pending_requests_map.ensureTotalCapacity(options.max_pending_requests);
 
-        const input_buffer_pool = try allocator.create(BufferPool);
-        input_buffer_pool.* = try BufferPool.init(allocator, options.max_inbound_messages, options.read_buffer_size);
+        const inbound_buffer_pool = try allocator.create(BufferPool);
+        inbound_buffer_pool.* = try BufferPool.init(allocator, options.max_inbound_messages, options.read_buffer_size);
+
+        const outbound_buffer_pool = try allocator.create(BufferPool);
+        outbound_buffer_pool.* = try BufferPool.init(allocator, options.max_outbound_messages, options.write_buffer_size);
 
         const server_connection = try allocator.create(ServerConnection);
 
@@ -99,8 +99,6 @@ pub const Client = struct {
         self.* = Client{
             .options = options,
             .allocator = allocator,
-
-            .send_buffer = send_buffer,
 
             .deserializer = Deserializer.init(allocator),
 
@@ -112,7 +110,8 @@ pub const Client = struct {
 
             .pending_requests_map = pending_requests_map,
 
-            .input_buffer_pool = input_buffer_pool,
+            .inbound_buffer_pool = inbound_buffer_pool,
+            .outbound_buffer_pool = outbound_buffer_pool,
 
             .workers = workers,
 
@@ -134,15 +133,16 @@ pub const Client = struct {
 
         self.allocator.free(self.workers);
 
-        self.allocator.free(self.send_buffer);
-
         self.allocator.free(self.outbound_buffer);
         self.allocator.destroy(self.outbound_queue);
         self.allocator.free(self.inbound_buffer);
         self.allocator.destroy(self.inbound_queue);
 
-        self.input_buffer_pool.deinit(self.allocator);
-        self.allocator.destroy(self.input_buffer_pool);
+        self.inbound_buffer_pool.deinit(self.allocator);
+        self.allocator.destroy(self.inbound_buffer_pool);
+
+        self.outbound_buffer_pool.deinit(self.allocator);
+        self.allocator.destroy(self.outbound_buffer_pool);
 
         self.allocator.destroy(self.server_connection);
 
@@ -230,41 +230,29 @@ pub const Client = struct {
             .destroy = DeserilizeWrapper.destroy,
         });
 
-        const SerializeWrapper = struct {
-            pub fn serialize(message: OutboundMessage, writer: *std.io.Writer) anyerror!MessageHeaders {
-                const message_args: *@TypeOf(args) = @ptrCast(@alignCast(message.args));
-                defer message.allocator.destroy(message_args);
-
-                const payload_len = try CountingSerializer.serialize(@TypeOf(message_args), message_args);
-                const headers = MessageHeaders{
-                    .Request = .{
-                        .version = app_version,
-                        .contract_id = contract_id,
-                        .flags = 0,
-                        .method_id = method_id,
-                        .msg_type = .Request,
-                        .request_id = message.request_id,
-                        .payload_len = payload_len,
-                    },
-                };
-                try serializeHeaders(writer, headers);
-
-                try Serializer.serialize(@TypeOf(message_args), writer, message_args);
-
-                return headers;
-            }
+        const payload_len = try CountingSerializer.serialize(@TypeOf(args), args);
+        const headers = MessageHeaders{
+            .Request = .{
+                .version = app_version,
+                .contract_id = contract_id,
+                .flags = 0,
+                .method_id = method_id,
+                .msg_type = .Request,
+                .request_id = request_id,
+                .payload_len = payload_len,
+            },
         };
 
-        // freed in network thread after sending by SerializeWrapper.serialize
-        const heap_args = try self.allocator.create(@TypeOf(args));
-        heap_args.* = args;
+        const buffer_idx = self.outbound_buffer_pool.acquire() orelse return error.OutOfBuffers;
+        const buffer = self.outbound_buffer_pool.buffer(buffer_idx);
+        var writer = std.io.Writer.fixed(buffer);
+
+        try serializeHeaders(&writer, headers);
+        try Serializer.serialize(@TypeOf(args), &writer, args);
 
         try self.outbound_queue.push(.{
-            .request_id = request_id,
-            .promise = promise,
-            .allocator = self.allocator,
-            .serialize = SerializeWrapper.serialize,
-            .args = heap_args,
+            .buffer_idx = buffer_idx,
+            .data = buffer[0 .. payload_len + MessageHeadersByteSize.Request],
         });
 
         // notify the network thread that a new outbound message is available

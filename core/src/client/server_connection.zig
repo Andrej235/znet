@@ -120,29 +120,19 @@ pub const ServerConnection = struct {
             // process outbound messages
             if (self.polls[1].revents != 0) {
                 while (self.client.outbound_queue.tryPop()) |out_msg| {
-                    var writer: std.io.Writer = .fixed(self.client.send_buffer);
-                    const headers = try out_msg.serialize(out_msg, &writer);
-                    switch (headers) {
-                        .Request => |req_headers| {
-                            const total_len = req_headers.payload_len + MessageHeadersByteSize.Request;
+                    defer self.client.outbound_buffer_pool.release(out_msg.buffer_idx);
+                    
+                    const total_len = out_msg.data.len;
+                    var sent: usize = 0;
 
-                            var sent: usize = 0;
-                            while (sent < total_len) {
-                                sent += try posix.write(self.connection_socket, self.client.send_buffer[sent..total_len]);
-                            }
-                        },
-                        .Response => {
-                            std.debug.print("Tried to read response in outbound messages, client\n", .{});
-                        },
-                        .Broadcast => {
-                            std.debug.print("Tried to read broadcast in outbound messages, client\n", .{});
-                        },
+                    while (sent < total_len) {
+                        sent += try posix.write(self.connection_socket, out_msg.data[sent..total_len]);
                     }
                 }
 
                 // clear the wakeup event
                 var buf: u64 = 0;
-                _ = try std.posix.read(self.wakeup_fd, std.mem.asBytes(&buf));
+                _ = try posix.read(self.wakeup_fd, std.mem.asBytes(&buf));
             }
         }
     }

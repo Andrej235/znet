@@ -35,7 +35,7 @@ pub const Worker = struct {
                 }
             };
 
-            defer self.client.input_buffer_pool.release(in_msg.buffer_idx);
+            defer self.client.inbound_buffer_pool.release(in_msg.buffer_idx);
             var reader = std.io.Reader.fixed(in_msg.data);
             const headers = try deserializeMessageHeaders(&reader);
 

@@ -37,15 +37,15 @@ pub const ConnectionReader = struct {
 
     pub fn deinit(self: *const ConnectionReader) void {
         if (self.current_buffer_idx) |idx| {
-            self.client.input_buffer_pool.release(idx);
+            self.client.inbound_buffer_pool.release(idx);
         }
     }
 
     pub fn readMessage(self: *ConnectionReader, socket: posix.socket_t) !?MessageReadResult {
         if (self.current_buffer_idx == null) {
-            const idx = self.client.input_buffer_pool.acquire() orelse return null;
+            const idx = self.client.inbound_buffer_pool.acquire() orelse return null;
             self.current_buffer_idx = idx;
-            self.current_buffer = self.client.input_buffer_pool.buffer(idx);
+            self.current_buffer = self.client.inbound_buffer_pool.buffer(idx);
 
             self.pos = 0;
             self.current_headers = null;
@@ -109,8 +109,8 @@ pub const ConnectionReader = struct {
         const remaining_bytes = self.current_buffer[message_len..self.pos];
         // if there isn't a free buffer, we can't process this message yet
         // we also can't return the fully read one because then we wouldn't be able to preserve the remaining data for the next read
-        const new_buffer_idx = self.client.input_buffer_pool.acquire() orelse return null;
-        const new_buffer = self.client.input_buffer_pool.buffer(new_buffer_idx);
+        const new_buffer_idx = self.client.inbound_buffer_pool.acquire() orelse return null;
+        const new_buffer = self.client.inbound_buffer_pool.buffer(new_buffer_idx);
 
         // move the remaining bytes to the new buffer so that we can continue reading that message in this new buffer we just acquired from the pool
         @memcpy(new_buffer[0..remaining_bytes.len], remaining_bytes);
