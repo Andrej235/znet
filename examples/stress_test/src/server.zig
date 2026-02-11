@@ -13,7 +13,7 @@ pub fn main() !void {
         }
     }
 
-    server = try znet.Server.init(gpa.allocator(), .{
+    server = try znet.Server.init(std.heap.smp_allocator, .{
         .max_clients = 128,
         .client_read_buffer_size = 4096,
         .job_result_buffer_size = 4096,

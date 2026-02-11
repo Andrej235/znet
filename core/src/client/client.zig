@@ -1,3 +1,17 @@
+// TODO:
+// user sends a fetch => serialize right away in a borrowed buffer (from a pool) on that thread to avoid allocating args
+// call a promise pool like object's method to allocate a new promise, allocate it with a request id that is free
+// put the promise into a thread safe array at index of request id
+// network thread pops the message and just sends it, release the borrowed buffer back to the pool
+// network thread receives a message directly into a borrowed buffer
+// worker deserializes, this allocates, gets the request id, looks up the promise in the array, resolves it, and frees the request id in the promise pool
+// worker releases the borrowed buffer back to the pool
+// consumer must somehow free the response result and promise, maybe by promise.destroy() and/or promise.deinit()
+// total 2 allocs, 0-ish copy (only copy extra data received into a newly borrowed buffer)
+
+// test stuff with server started with smp allocator in fast release and client started in debug with general purpose allocator
+// this makes sure that the server is not the bottleneck
+
 const std = @import("std");
 const posix = @import("std").posix;
 
@@ -26,6 +40,8 @@ const PendingRequest = @import("pending_request.zig").PendingRequest;
 const BroadcastHandlerFn = @import("handler_fn/broadcast_handler_fn.zig").BroadcastHandlerFn;
 const createBroadcastHandlerFn = @import("handler_fn/create_broadcast_handler_fn.zig").createBroadcastHandlerFn;
 
+const Worker = @import("worker.zig").Worker;
+
 const app_version: u8 = @import("../app_version.zig").app_version;
 
 pub const Client = struct {
@@ -47,7 +63,7 @@ pub const Client = struct {
 
     connected: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     network_thread: std.Thread = undefined,
-    worker_threads: []std.Thread = undefined,
+    workers: []Worker = undefined,
 
     // 0 is server, 1 is wakeup fd
     polls: []posix.pollfd,
@@ -78,7 +94,7 @@ pub const Client = struct {
         var pending_requests_map = std.AutoHashMap(u32, PendingRequest).init(allocator);
         try pending_requests_map.ensureTotalCapacity(options.max_pending_requests);
 
-        const worker_threads = try allocator.alloc(std.Thread, options.worker_thread_count);
+        const workers = try allocator.alloc(Worker, options.worker_thread_count);
 
         const self = try allocator.create(Client);
         self.* = Client{
@@ -99,7 +115,7 @@ pub const Client = struct {
 
             .pending_requests_map = pending_requests_map,
 
-            .worker_threads = worker_threads,
+            .workers = workers,
             .polls = polls,
             .wakeup_fd = undefined,
         };
@@ -110,7 +126,7 @@ pub const Client = struct {
     pub fn deinit(self: *Client) !void {
         try self.disconnect();
 
-        self.allocator.free(self.worker_threads);
+        self.allocator.free(self.workers);
 
         self.allocator.free(self.send_buffer);
         self.allocator.free(self.receive_buffer);
@@ -160,8 +176,12 @@ pub const Client = struct {
         self.network_thread = try std.Thread.spawn(.{}, networkThread, .{self});
 
         for (0..self.options.worker_thread_count) |i| {
-            const thread = try std.Thread.spawn(.{}, workerThread, .{self});
-            self.worker_threads[i] = thread;
+            self.workers[i] = Worker.init(self.allocator, self);
+
+            self.workers[i].runThread() catch |err| {
+                std.debug.print("Failed to spawn worker thread {}: {}", .{ i, err });
+                return err;
+            };
         }
     }
 
@@ -172,8 +192,8 @@ pub const Client = struct {
         self.network_thread.join();
 
         self.inbound_queue.close();
-        for (self.worker_threads) |thread| {
-            thread.join();
+        for (self.workers) |*w| {
+            w.thread.join();
         }
 
         posix.close(self.server_connection_socket);
@@ -281,87 +301,9 @@ pub const Client = struct {
         return promise;
     }
 
-    fn getMethodId(comptime method: anytype) struct { contract_id: u16, method_id: u16 } {
-        inline for (@import("znet_contract_registry").server_contracts, 0..) |TContract, contract_id| {
-            inline for (@typeInfo(TContract).@"struct".decls, 0..) |decl, method_id| {
-                const m = @field(TContract, decl.name);
-                if (@TypeOf(m) == @TypeOf(method) and m == method) {
-                    return .{ .contract_id = contract_id, .method_id = method_id };
-                }
-            }
-        }
-
-        @compileError("Method not found in any of the registered contracts");
-    }
-
-    fn MethodTupleArg(comptime method: anytype) type {
-        const arg_fields = comptime getParamTupleFields(@TypeOf(method));
-        const argument = comptime @Type(.{
-            .@"struct" = .{
-                .is_tuple = true,
-                .backing_integer = null,
-                .layout = .auto,
-                .decls = &.{},
-                .fields = arg_fields,
-            },
-        });
-
-        return argument;
-    }
-
-    pub fn getParamTupleFields(comptime TFn: type) []std.builtin.Type.StructField {
-        const fn_info = @typeInfo(TFn);
-        if (fn_info != .@"fn") @compileError("Expected function type");
-
-        if (fn_info.@"fn".params[0].type == ServerContext)
-            @compileError("Context must be injected as a pointer");
-
-        const inject_context: bool = fn_info.@"fn".params[0].type == *ServerContext;
-        const fields_len = if (inject_context) fn_info.@"fn".params.len - 1 else fn_info.@"fn".params.len;
-
-        var fields: [fields_len]std.builtin.Type.StructField = undefined;
-        const params = if (inject_context) fn_info.@"fn".params[1..] else fn_info.@"fn".params;
-
-        for (params, 0..) |param, idx| {
-            if (param.type) |T| {
-                fields[idx] = .{
-                    .name = std.fmt.comptimePrint("{}", .{idx}),
-                    .type = T,
-                    .default_value_ptr = null,
-                    .is_comptime = false,
-                    .alignment = @alignOf(T),
-                };
-            }
-        }
-
-        return &fields;
-    }
-
-    fn MethodReturnType(comptime method: anytype) type {
-        const type_info = @typeInfo(@TypeOf(method));
-        const fn_info = switch (type_info) {
-            .@"fn" => |@"fn"| @"fn",
-            .pointer => |ptr_info| switch (@typeInfo(ptr_info.child)) {
-                .@"fn" => |fn_info| fn_info,
-                else => @compileError("AsyncMethodReturnType only supports function types"),
-            },
-            else => @compileError("AsyncMethodReturnType only supports function types"),
-        };
-
-        const ReturnType = fn_info.return_type orelse void;
-        return ReturnType;
-    }
-
     fn generateRequestId(self: *Client) u32 {
         self.current_request_id += 1;
         return self.current_request_id;
-    }
-
-    fn writeAll(socket: posix.socket_t, data: []const u8) !void {
-        var sent: usize = 0;
-        while (sent < data.len) {
-            sent += try posix.write(socket, data[sent..]);
-        }
     }
 
     fn safeReadMessage(self: *Client, socket: posix.socket_t) !?[]u8 {
@@ -441,7 +383,11 @@ pub const Client = struct {
                     switch (headers) {
                         .Request => |req_headers| {
                             const total_len = req_headers.payload_len + MessageHeadersByteSize.Request;
-                            try writeAll(self.server_connection_socket, self.send_buffer[0..total_len]);
+
+                            var sent: usize = 0;
+                            while (sent < total_len) {
+                                sent += try posix.write(self.server_connection_socket, self.send_buffer[sent..total_len]);
+                            }
                         },
                         .Response => {
                             std.debug.print("Tried to read response in outbound messages, client\n", .{});
@@ -455,44 +401,6 @@ pub const Client = struct {
                 // clear the wakeup event
                 var buf: u64 = 0;
                 _ = try std.posix.read(self.wakeup_fd, std.mem.asBytes(&buf));
-            }
-        }
-    }
-
-    fn workerThread(self: *Client) !void {
-        while (true) {
-            const in_msg = self.inbound_queue.pop() catch |err| {
-                switch (err) {
-                    error.Closed => return,
-                }
-            };
-
-            defer self.allocator.free(in_msg.payload);
-            var reader = std.io.Reader.fixed(in_msg.payload);
-            const headers = try deserializeMessageHeaders(&reader);
-
-            switch (headers) {
-                .Request => {
-                    std.debug.print("Unexpected Request message found in inbound queue\n", .{});
-                    return;
-                },
-                .Response => |response| {
-                    if (self.pending_requests_map.get(response.request_id)) |pending_request| {
-                        pending_request.resolve(&self.deserializer, &reader, pending_request.promise) catch |err| {
-                            std.debug.print("Error resolving request_id {d}: {}\n", .{ response.request_id, err });
-                        };
-
-                        _ = self.pending_requests_map.remove(response.request_id);
-                    } else {
-                        std.debug.print("No pending request found for request_id: {d}\n", .{response.request_id});
-                    }
-                },
-                .Broadcast => |broadcast| {
-                    if (comptime call_table.len == 0) return;
-
-                    const handler = call_table[broadcast.contract_id][broadcast.method_id];
-                    try handler(self, self.allocator, &reader);
-                },
             }
         }
     }
@@ -520,4 +428,75 @@ pub fn createCallTable() []const []const BroadcastHandlerFn {
 
         break :blk call_table;
     };
+}
+
+fn getMethodId(comptime method: anytype) struct { contract_id: u16, method_id: u16 } {
+    inline for (@import("znet_contract_registry").server_contracts, 0..) |TContract, contract_id| {
+        inline for (@typeInfo(TContract).@"struct".decls, 0..) |decl, method_id| {
+            const m = @field(TContract, decl.name);
+            if (@TypeOf(m) == @TypeOf(method) and m == method) {
+                return .{ .contract_id = contract_id, .method_id = method_id };
+            }
+        }
+    }
+
+    @compileError("Method not found in any of the registered contracts");
+}
+
+fn MethodTupleArg(comptime method: anytype) type {
+    const arg_fields = comptime getParamTupleFields(@TypeOf(method));
+    const argument = comptime @Type(.{
+        .@"struct" = .{
+            .is_tuple = true,
+            .backing_integer = null,
+            .layout = .auto,
+            .decls = &.{},
+            .fields = arg_fields,
+        },
+    });
+
+    return argument;
+}
+
+fn getParamTupleFields(comptime TFn: type) []std.builtin.Type.StructField {
+    const fn_info = @typeInfo(TFn);
+    if (fn_info != .@"fn") @compileError("Expected function type");
+
+    if (fn_info.@"fn".params[0].type == ServerContext)
+        @compileError("Context must be injected as a pointer");
+
+    const inject_context: bool = fn_info.@"fn".params[0].type == *ServerContext;
+    const fields_len = if (inject_context) fn_info.@"fn".params.len - 1 else fn_info.@"fn".params.len;
+
+    var fields: [fields_len]std.builtin.Type.StructField = undefined;
+    const params = if (inject_context) fn_info.@"fn".params[1..] else fn_info.@"fn".params;
+
+    for (params, 0..) |param, idx| {
+        if (param.type) |T| {
+            fields[idx] = .{
+                .name = std.fmt.comptimePrint("{}", .{idx}),
+                .type = T,
+                .default_value_ptr = null,
+                .is_comptime = false,
+                .alignment = @alignOf(T),
+            };
+        }
+    }
+
+    return &fields;
+}
+
+fn MethodReturnType(comptime method: anytype) type {
+    const type_info = @typeInfo(@TypeOf(method));
+    const fn_info = switch (type_info) {
+        .@"fn" => |@"fn"| @"fn",
+        .pointer => |ptr_info| switch (@typeInfo(ptr_info.child)) {
+            .@"fn" => |fn_info| fn_info,
+            else => @compileError("AsyncMethodReturnType only supports function types"),
+        },
+        else => @compileError("AsyncMethodReturnType only supports function types"),
+    };
+
+    const ReturnType = fn_info.return_type orelse void;
+    return ReturnType;
 }
