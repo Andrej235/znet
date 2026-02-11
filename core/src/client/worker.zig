@@ -45,15 +45,14 @@ pub const Worker = struct {
                     return;
                 },
                 .Response => |response| {
-                    if (client.pending_requests_map.get(response.request_id)) |pending_request| {
-                        pending_request.resolve(&client.deserializer, &reader, pending_request.promise) catch |err| {
-                            std.debug.print("Error resolving request_id {d}: {}\n", .{ response.request_id, err });
-                        };
-
-                        _ = client.pending_requests_map.remove(response.request_id);
-                    } else {
+                    const pending_request = client.pending_requests_map.pop(response.request_id) catch {
                         std.debug.print("No pending request found for request_id: {d}\n", .{response.request_id});
-                    }
+                        continue;
+                    };
+
+                    pending_request.resolve(&client.deserializer, &reader, pending_request.promise) catch |err| {
+                        std.debug.print("Error resolving request_id {d}: {}\n", .{ response.request_id, err });
+                    };
                 },
                 .Broadcast => |broadcast| {
                     if (Client.call_table.len == 0) return;

@@ -37,6 +37,8 @@ const OutboundMessage = @import("outbound_message.zig").OutboundMessage;
 const InboundMessage = @import("inbound_message.zig").InboundMessage;
 const PendingRequest = @import("pending_request.zig").PendingRequest;
 
+const PendingRequestsMap = @import("pending_requests_map.zig").PendingRequestsMap;
+
 const ServerConnection = @import("server_connection.zig").ServerConnection;
 
 const BroadcastHandlerFn = @import("handler_fn/broadcast_handler_fn.zig").BroadcastHandlerFn;
@@ -58,8 +60,7 @@ pub const Client = struct {
     outbound_buffer_pool: *BufferPool,
 
     deserializer: Deserializer,
-
-    pending_requests_map: std.AutoHashMap(u32, PendingRequest),
+    pending_requests_map: *PendingRequestsMap,
 
     server_connection: *ServerConnection,
 
@@ -71,8 +72,6 @@ pub const Client = struct {
     inbound_buffer: []InboundMessage,
     inbound_queue: *Queue(InboundMessage),
 
-    current_request_id: u32 = 0,
-
     pub fn init(allocator: std.mem.Allocator, comptime options: ClientOptions) !*Client {
         const outbound_buffer = try allocator.alloc(OutboundMessage, options.max_outbound_messages);
         const outbound_queue = try allocator.create(Queue(OutboundMessage));
@@ -82,8 +81,8 @@ pub const Client = struct {
         const inbound_queue = try allocator.create(Queue(InboundMessage));
         inbound_queue.* = try Queue(InboundMessage).init(inbound_buffer);
 
-        var pending_requests_map = std.AutoHashMap(u32, PendingRequest).init(allocator);
-        try pending_requests_map.ensureTotalCapacity(options.max_pending_requests);
+        const pending_requests_map = try allocator.create(PendingRequestsMap);
+        pending_requests_map.* = PendingRequestsMap.init(allocator);
 
         const inbound_buffer_pool = try allocator.create(BufferPool);
         inbound_buffer_pool.* = try BufferPool.init(allocator, options.max_inbound_messages, options.read_buffer_size);
@@ -147,6 +146,8 @@ pub const Client = struct {
         self.allocator.destroy(self.server_connection);
 
         self.pending_requests_map.deinit();
+        self.allocator.destroy(self.pending_requests_map);
+
         self.allocator.destroy(self);
     }
 
@@ -171,12 +172,7 @@ pub const Client = struct {
             w.thread.join();
         }
 
-        var it = self.pending_requests_map.iterator();
-        while (it.next()) |pending_request|
-            try pending_request.value_ptr.destroy(pending_request.value_ptr.promise);
-
-        self.pending_requests_map.clearRetainingCapacity();
-
+        try self.pending_requests_map.clear();
         while (self.inbound_queue.tryPop()) |in_msg| {
             self.allocator.free(in_msg.data);
         }
@@ -187,7 +183,6 @@ pub const Client = struct {
         const contract_id: u16 = ids.contract_id;
         const method_id: u16 = ids.method_id;
 
-        const request_id = self.generateRequestId();
         const TResponse = MethodReturnType(method);
         const TPromise = Promise(TResponse);
         // allocated in init, must be deallocated by consumer
@@ -224,7 +219,7 @@ pub const Client = struct {
             }
         };
 
-        try self.pending_requests_map.put(request_id, .{
+        const request_id = try self.pending_requests_map.insert(.{
             .promise = promise,
             .resolve = DeserilizeWrapper.resolve,
             .destroy = DeserilizeWrapper.destroy,
@@ -259,11 +254,6 @@ pub const Client = struct {
         _ = try std.posix.write(self.server_connection.wakeup_fd, std.mem.asBytes(&@as(u64, 1)));
 
         return promise;
-    }
-
-    fn generateRequestId(self: *Client) u32 {
-        self.current_request_id += 1;
-        return self.current_request_id;
     }
 };
 
