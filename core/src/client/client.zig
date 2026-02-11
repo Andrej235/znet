@@ -15,7 +15,7 @@ const Deserializer = @import("../serializer/deserializer.zig").Deserializer;
 const DeserializationErrors = @import("../serializer/errors.zig").DeserializationErrors;
 
 const Queue = @import("../utils/mpmc_queue.zig").Queue;
-const Promise = @import("../promise/promise.zig").Promise;
+const Promise = @import("promise.zig").Promise;
 
 const OutboundMessage = @import("outbound_message.zig").OutboundMessage;
 const InboundMessage = @import("inbound_message.zig").InboundMessage;
@@ -44,6 +44,9 @@ pub const Client = struct {
 
     deserializer: Deserializer,
     pending_requests_map: *PendingRequestsMap,
+
+    promise_mutex: std.Thread.Mutex = .{},
+    promise_condition: std.Thread.Condition = .{},
 
     server_connection: *ServerConnection,
 
@@ -169,7 +172,7 @@ pub const Client = struct {
         const TResponse = MethodReturnType(method);
         const TPromise = Promise(TResponse);
         // allocated in init, must be deallocated by consumer
-        const promise = try TPromise.init(self.allocator, &self.deserializer);
+        const promise = try TPromise.init(self.allocator, &self.deserializer, self);
 
         const DeserilizeWrapper = struct {
             pub fn resolve(deserializer: *Deserializer, reader: *std.io.Reader, request_promise: *anyopaque) anyerror!void {

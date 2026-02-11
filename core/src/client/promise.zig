@@ -1,5 +1,6 @@
 const std = @import("std");
 const Deserializer = @import("../serializer/deserializer.zig").Deserializer;
+const Client = @import("client.zig").Client;
 
 const State = enum {
     pending,
@@ -10,8 +11,10 @@ pub fn Promise(comptime T: type) type {
     return struct {
         const Self = @This();
 
-        mutex: std.Thread.Mutex = .{},
-        cond: std.Thread.Condition = .{},
+        mutex: *std.Thread.Mutex = undefined,
+        cond: *std.Thread.Condition = undefined,
+
+        client: *Client,
 
         state: State = .pending,
         result: T = undefined,
@@ -19,27 +22,35 @@ pub fn Promise(comptime T: type) type {
         allocator: std.mem.Allocator,
         deserializer: *Deserializer,
 
-        pub fn init(allocator: std.mem.Allocator, deserializer: *Deserializer) !*Self {
+        pub fn init(allocator: std.mem.Allocator, deserializer: *Deserializer, client: *Client) !*Self {
             const self = try allocator.create(Self);
+
             self.* = Self{
-                .mutex = std.Thread.Mutex{},
-                .cond = std.Thread.Condition{},
-                .state = .pending,
-                .result = undefined,
                 .allocator = allocator,
                 .deserializer = deserializer,
+                .client = client,
+
+                .mutex = &client.promise_mutex,
+                .cond = &client.promise_condition,
             };
 
             return self;
         }
 
         pub fn destroyResult(self: *Self) !void {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+
             if (self.state != .fulfilled) return error.PromiseNotFulfilled;
             try self.deserializer.destroy(self.result);
         }
 
         pub fn deinit(self: *Self) void {
-            self.cond.signal();
+            const client = self.client; // avoids accessing self after deallocation
+            client.promise_mutex.lock();
+            defer client.promise_mutex.unlock();
+
+            self.cond.broadcast();
             self.allocator.destroy(self);
         }
 
@@ -52,7 +63,7 @@ pub fn Promise(comptime T: type) type {
             defer self.mutex.unlock();
 
             while (self.state == .pending) {
-                self.cond.wait(&self.mutex);
+                self.cond.wait(self.mutex);
             }
 
             return self.result;
@@ -67,7 +78,7 @@ pub fn Promise(comptime T: type) type {
             self.result = value;
             self.state = .fulfilled;
 
-            self.cond.signal();
+            self.cond.broadcast();
         }
     };
 }
