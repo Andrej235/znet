@@ -82,7 +82,7 @@ pub const Client = struct {
         inbound_queue.* = try Queue(InboundMessage).init(inbound_buffer);
 
         const pending_requests_map = try allocator.create(PendingRequestsMap);
-        pending_requests_map.* = PendingRequestsMap.init(allocator);
+        pending_requests_map.* = try PendingRequestsMap.init(allocator, options.max_outbound_messages);
 
         const inbound_buffer_pool = try allocator.create(BufferPool);
         inbound_buffer_pool.* = try BufferPool.init(allocator, options.max_inbound_messages, options.read_buffer_size);
