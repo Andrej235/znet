@@ -3,7 +3,6 @@ const std = @import("std");
 const deserializeMessageHeaders = @import("../message_headers/deserialize_message_headers.zig").deserializeMessageHeaders;
 const BroadcastHandlerFn = @import("handler_fn/broadcast_handler_fn.zig");
 const Queue = @import("../utils/mpmc_queue.zig").Queue;
-const InboundMessage = @import("inbound_message.zig").InboundMessage;
 const Client = @import("client.zig").Client;
 
 pub const Worker = struct {
@@ -36,8 +35,8 @@ pub const Worker = struct {
                 }
             };
 
-            defer self.allocator.free(in_msg.payload);
-            var reader = std.io.Reader.fixed(in_msg.payload);
+            defer self.client.input_buffer_pool.release(in_msg.buffer_idx);
+            var reader = std.io.Reader.fixed(in_msg.data);
             const headers = try deserializeMessageHeaders(&reader);
 
             switch (headers) {

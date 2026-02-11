@@ -1,3 +1,4 @@
-pub const InboundMessage = union(enum) {
-    payload: []const u8,
+pub const InboundMessage = struct {
+    data: []const u8,
+    buffer_idx: u32,
 };

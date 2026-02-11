@@ -37,8 +37,12 @@ const OutboundMessage = @import("outbound_message.zig").OutboundMessage;
 const InboundMessage = @import("inbound_message.zig").InboundMessage;
 const PendingRequest = @import("pending_request.zig").PendingRequest;
 
+const ServerConnection = @import("server_connection.zig").ServerConnection;
+
 const BroadcastHandlerFn = @import("handler_fn/broadcast_handler_fn.zig").BroadcastHandlerFn;
 const createBroadcastHandlerFn = @import("handler_fn/create_broadcast_handler_fn.zig").createBroadcastHandlerFn;
+
+const BufferPool = @import("../utils/buffer_pool.zig").BufferPool;
 
 const Worker = @import("worker.zig").Worker;
 
@@ -50,6 +54,8 @@ pub const Client = struct {
     options: ClientOptions = .{},
     allocator: std.mem.Allocator,
 
+    input_buffer_pool: *BufferPool,
+
     send_buffer: []u8,
     receive_buffer: []u8,
     read_pos: usize = 0,
@@ -60,6 +66,7 @@ pub const Client = struct {
     pending_requests_map: std.AutoHashMap(u32, PendingRequest),
 
     server_connection_socket: posix.socket_t = undefined,
+    server_connection: *ServerConnection,
 
     connected: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     network_thread: std.Thread = undefined,
@@ -94,6 +101,11 @@ pub const Client = struct {
         var pending_requests_map = std.AutoHashMap(u32, PendingRequest).init(allocator);
         try pending_requests_map.ensureTotalCapacity(options.max_pending_requests);
 
+        const input_buffer_pool = try allocator.create(BufferPool);
+        input_buffer_pool.* = try BufferPool.init(allocator, options.max_inbound_messages, options.read_buffer_size);
+
+        const server_connection = try allocator.create(ServerConnection);
+
         const workers = try allocator.alloc(Worker, options.worker_thread_count);
 
         const self = try allocator.create(Client);
@@ -115,10 +127,19 @@ pub const Client = struct {
 
             .pending_requests_map = pending_requests_map,
 
+            .input_buffer_pool = input_buffer_pool,
+
             .workers = workers,
             .polls = polls,
             .wakeup_fd = undefined,
+
+            .server_connection = server_connection,
         };
+
+        server_connection.* = ServerConnection.init(
+            allocator,
+            self,
+        );
 
         return self;
     }
@@ -137,6 +158,11 @@ pub const Client = struct {
         self.allocator.destroy(self.inbound_queue);
 
         self.allocator.free(self.polls);
+
+        self.input_buffer_pool.deinit(self.allocator);
+        self.allocator.destroy(self.input_buffer_pool);
+
+        self.allocator.destroy(self.server_connection);
 
         self.pending_requests_map.deinit();
         self.allocator.destroy(self);
@@ -162,6 +188,8 @@ pub const Client = struct {
             .events = posix.POLL.IN,
             .revents = 0,
         };
+
+        self.server_connection.connection_socket = self.server_connection_socket;
 
         _ = try posix.poll(self.polls, -1);
         while (true) {
@@ -206,7 +234,7 @@ pub const Client = struct {
         self.pending_requests_map.clearRetainingCapacity();
 
         while (self.inbound_queue.tryPop()) |in_msg| {
-            self.allocator.free(in_msg.payload);
+            self.allocator.free(in_msg.data);
         }
     }
 
@@ -306,61 +334,6 @@ pub const Client = struct {
         return self.current_request_id;
     }
 
-    fn safeReadMessage(self: *Client, socket: posix.socket_t) !?[]u8 {
-        const msg = self.readMessage(socket) catch |err| switch (err) {
-            error.WouldBlock, error.NotOpenForReading => return null,
-            else => return err,
-        };
-        return msg;
-    }
-
-    fn readMessage(self: *Client, socket: posix.socket_t) ![]u8 {
-        while (true) {
-            // loop until we have a full message to process
-            if (try self.bufferedMessage()) |msg|
-                return msg;
-
-            // read more data from the socket, fills up the buffer from pos to the end
-            const n = try posix.read(socket, self.receive_buffer[self.read_pos..]);
-            if (n == 0) // no more data, connection closed or EOF
-                return error.Closed;
-
-            self.read_pos += n;
-        }
-    }
-
-    fn bufferedMessage(self: *Client) !?[]u8 {
-        // response and broadcast headers have the same size
-        if (self.read_pos < MessageHeadersByteSize.Response) {
-            // not enough data to read the header
-            return null;
-        }
-
-        // payload_len is in the same position for both response and broadcast headers
-        const payload_len = std.mem.readInt(u32, self.receive_buffer[MessageHeadersByteSize.Response - 4 .. MessageHeadersByteSize.Response], .big);
-
-        const message_len = payload_len + MessageHeadersByteSize.Response;
-
-        if (self.read_pos < message_len) {
-            // not enough data to read the full message
-            return null;
-        }
-
-        const msg = self.receive_buffer[0..message_len];
-
-        // todo: replace with a ring buffer for zero-copy and no allocations
-        // freed in worker thread after processing
-        const heap_msg = try self.allocator.alloc(u8, msg.len);
-        @memcpy(heap_msg, msg);
-
-        // shift remaining data to the front of the buffer
-        @memmove(self.receive_buffer[0 .. self.read_pos - message_len], self.receive_buffer[message_len..self.read_pos]);
-        self.read_pos -= message_len;
-        self.reader.seek = 0;
-
-        return heap_msg;
-    }
-
     fn networkThread(self: *Client) !void {
         while (true) {
             _ = try posix.poll(self.polls, -1);
@@ -368,11 +341,9 @@ pub const Client = struct {
 
             // process inbound messages
             if (self.polls[0].revents & posix.POLL.IN == posix.POLL.IN) {
-                while (try self.safeReadMessage(self.server_connection_socket)) |message| {
-                    try self.inbound_queue.push(.{
-                        .payload = message,
-                    });
-                }
+                self.server_connection.readMessage() catch |err| {
+                    std.debug.print("Error reading message from server: {}\n", .{err});
+                };
             }
 
             // process outbound messages
