@@ -174,43 +174,7 @@ pub const Client = struct {
         const TResponse = MethodReturnType(method);
         const TPromise = Promise(TResponse);
 
-        const DeserilizeWrapper = struct {
-            pub fn resolve(request: *PendingRequest, reader: *std.io.Reader) anyerror!void {
-                if (request.state.load(.acquire) != .pending) {
-                    return error.PromiseAlreadyFulfilled;
-                }
-
-                request.client.promise_mutex.lock();
-                defer request.client.promise_mutex.unlock();
-
-                const result = try request.client.deserializer.deserializeAlloc(reader, TResponse);
-
-                request.value = @ptrCast(result);
-                request.state.store(.fulfilled, .release);
-                request.client.promise_condition.broadcast();
-            }
-
-            pub fn destroy(request: *PendingRequest) !void {
-                if (request.state.load(.acquire) != .fulfilled)
-                    return;
-
-                request.client.promise_mutex.lock();
-                defer request.client.promise_mutex.unlock();
-
-                if (request.value) |v| {
-                    const typed: Deserializer.AllocResult(TResponse) = @ptrCast(@alignCast(v));
-                    try request.client.deserializer.destroy(typed);
-                }
-
-                request.value = null;
-                request.state.store(.free, .release);
-            }
-        };
-
         const request = try self.pending_requests_map.acquire();
-        request.resolve = &DeserilizeWrapper.resolve;
-        request.destroy = &DeserilizeWrapper.destroy;
-
         const promise = TPromise.init(request);
 
         const payload_len = try CountingSerializer.serialize(@TypeOf(args), args);

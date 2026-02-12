@@ -2,6 +2,7 @@ const std = @import("std");
 const Deserializer = @import("../serializer/deserializer.zig").Deserializer;
 const Client = @import("client.zig").Client;
 const PendingRequest = @import("pending_request.zig").PendingRequest;
+const Timer = @import("../utils/timer.zig").Timer;
 
 const AwaitMode = enum(u8) {
     borrow,
@@ -19,32 +20,18 @@ pub fn Promise(comptime T: type) type {
             };
         }
 
-        pub fn await(self: *Self, comptime await_mode: AwaitMode) T {
-            const opaque_result = self.request.await() catch unreachable; // todo: handle promise rejection
-
-            const result: Deserializer.SafeAllocResult(T) = @ptrCast(@alignCast(opaque_result));
-
-            const info = @typeInfo(T);
-            if (info == .pointer and info.pointer.size == .one) {
-                if (comptime await_mode == .release)
-                    self.request.release();
-
-                return result;
-            }
-
-            if (comptime await_mode == .release) {
-                const result_val = result.*;
-
+        pub fn await(self: *Self, comptime await_mode: AwaitMode) PendingRequest.AwaitResult(T) {
+            const result = self.request.await(T);
+            if (comptime await_mode == .release)
                 self.request.release();
-                self.request.client.deserializer.allocator.destroy(result);
-                return result_val;
-            }
 
-            return result.*;
+            return result;
         }
 
         pub fn destroy(self: *Self, value: T) void {
+            // const t= Timer.start("");
             self.request.client.deserializer.destroy(value) catch return;
+            // t.end();
         }
     };
 }

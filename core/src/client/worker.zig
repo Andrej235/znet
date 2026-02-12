@@ -35,7 +35,6 @@ pub const Worker = struct {
                 }
             };
 
-            defer self.client.inbound_buffer_pool.release(in_msg.buffer_idx);
             var reader = std.io.Reader.fixed(in_msg.data);
             const headers = try deserializeMessageHeaders(&reader);
 
@@ -50,9 +49,7 @@ pub const Worker = struct {
                         continue;
                     };
 
-                    pending_request.resolve(pending_request, &reader) catch |err| {
-                        std.debug.print("Error resolving request_id {d}: {}\n", .{ response.request_id, err });
-                    };
+                    pending_request.resolve(in_msg.data, in_msg.buffer_idx);
                 },
                 .Broadcast => |broadcast| {
                     if (Client.call_table.len == 0) return;
@@ -65,4 +62,4 @@ pub const Worker = struct {
     }
 };
 
-// todo: make pending requests hold raw serialized data, await deserializes it, network thread resolves, network threads only exist if there are broadcast handlers enabled in options
+// todo: make network threads only exist if there are broadcast handlers enabled in options

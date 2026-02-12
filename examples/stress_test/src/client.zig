@@ -63,7 +63,7 @@ fn worker() !void {
     // ---- Warmup ----
     for (0..warmup_requests) |_| {
         var p = try client.fetch(EchoContract.echo, .{&message});
-        const result = p.await(.release);
+        const result = try p.await(.release);
         p.destroy(result);
     }
 
@@ -78,7 +78,7 @@ fn worker() !void {
     // ---- Timed benchmark ----
     while (running.load(.acquire)) {
         var p = try client.fetch(EchoContract.echo, .{&message});
-        const result = p.await(.release);
+        const result = try p.await(.release);
         p.destroy(result);
 
         _ = total_requests.fetchAdd(1, .monotonic);
