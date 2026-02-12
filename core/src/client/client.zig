@@ -23,6 +23,7 @@ const InboundMessage = @import("inbound_message.zig").InboundMessage;
 const PendingRequestsMap = @import("pending_requests_map.zig").PendingRequestsMap;
 
 const ServerConnection = @import("server_connection.zig").ServerConnection;
+const PendingRequest = @import("pending_request.zig").PendingRequest;
 
 const BroadcastHandlerFn = @import("handler_fn/broadcast_handler_fn.zig").BroadcastHandlerFn;
 const createBroadcastHandlerFn = @import("handler_fn/create_broadcast_handler_fn.zig").createBroadcastHandlerFn;
@@ -68,7 +69,6 @@ pub const Client = struct {
         inbound_queue.* = try Queue(InboundMessage).init(inbound_buffer);
 
         const pending_requests_map = try allocator.create(PendingRequestsMap);
-        pending_requests_map.* = try PendingRequestsMap.init(allocator, options.max_outbound_messages);
 
         const inbound_buffer_pool = try allocator.create(BufferPool);
         inbound_buffer_pool.* = try BufferPool.init(allocator, options.max_inbound_messages, options.read_buffer_size);
@@ -102,6 +102,8 @@ pub const Client = struct {
 
             .server_connection = server_connection,
         };
+
+        self.pending_requests_map.* = try PendingRequestsMap.init(allocator, options.max_outbound_messages, self);
 
         server_connection.* = try ServerConnection.init(
             allocator,
@@ -164,52 +166,52 @@ pub const Client = struct {
         }
     }
 
-    pub fn fetch(self: *Client, method: anytype, args: MethodTupleArg(method)) anyerror!*Promise(MethodReturnType(method)) {
+    pub fn fetch(self: *Client, method: anytype, args: MethodTupleArg(method)) anyerror!Promise(MethodReturnType(method)) {
         const ids = comptime getMethodId(method);
         const contract_id: u16 = ids.contract_id;
         const method_id: u16 = ids.method_id;
 
         const TResponse = MethodReturnType(method);
         const TPromise = Promise(TResponse);
-        // allocated in init, must be deallocated by consumer
-        const promise = try TPromise.init(self.allocator, &self.deserializer, self);
 
         const DeserilizeWrapper = struct {
-            pub fn resolve(deserializer: *Deserializer, reader: *std.io.Reader, request_promise: *anyopaque) anyerror!void {
-                const result = if (@typeInfo(TResponse) == .error_union) deserializer.deserialize(reader, TResponse) catch |err| switch (err) {
-                    DeserializationErrors.AllocationFailed,
-                    DeserializationErrors.BooleanDeserializationFailed,
-                    DeserializationErrors.EndOfStream,
-                    DeserializationErrors.IntegerDeserializationFailed,
-                    DeserializationErrors.InvalidBooleanValue,
-                    DeserializationErrors.InvalidUnionTag,
-                    DeserializationErrors.OutOfMemory,
-                    DeserializationErrors.UnexpectedEof,
-                    => {
-                        return error.DeserializationFailed;
-                    },
-                    else => @as(@typeInfo(TResponse).error_union.error_set, @errorCast(err)),
-                } else deserializer.deserialize(reader, TResponse) catch return error.DeserializationFailed;
+            pub fn resolve(request: *PendingRequest, reader: *std.io.Reader) anyerror!void {
+                if (request.state.load(.acquire) != .pending) {
+                    return error.PromiseAlreadyFulfilled;
+                }
 
-                const message_promise: *TPromise = @ptrCast(@alignCast(request_promise));
-                message_promise.resolve(result);
+                request.client.promise_mutex.lock();
+                defer request.client.promise_mutex.unlock();
+
+                const result = try request.client.deserializer.deserializeAlloc(reader, TResponse);
+
+                request.value = @ptrCast(result);
+                request.state.store(.fulfilled, .release);
+                request.client.promise_condition.broadcast();
             }
 
-            pub fn destroy(request_promise: *anyopaque) !void {
-                const message_promise: *TPromise = @ptrCast(@alignCast(request_promise));
-                message_promise.destroyResult() catch |err| {
-                    if (err != error.PromiseNotFulfilled) return err;
-                };
+            pub fn destroy(request: *PendingRequest) !void {
+                if (request.state.load(.acquire) != .fulfilled)
+                    return;
 
-                message_promise.deinit();
+                request.client.promise_mutex.lock();
+                defer request.client.promise_mutex.unlock();
+
+                if (request.value) |v| {
+                    const typed: Deserializer.AllocResult(TResponse) = @ptrCast(@alignCast(v));
+                    try request.client.deserializer.destroy(typed);
+                }
+
+                request.value = null;
+                request.state.store(.free, .release);
             }
         };
 
-        const request_id = try self.pending_requests_map.insert(.{
-            .promise = promise,
-            .resolve = DeserilizeWrapper.resolve,
-            .destroy = DeserilizeWrapper.destroy,
-        });
+        const request = try self.pending_requests_map.acquire();
+        request.resolve = &DeserilizeWrapper.resolve;
+        request.destroy = &DeserilizeWrapper.destroy;
+
+        const promise = TPromise.init(request);
 
         const payload_len = try CountingSerializer.serialize(@TypeOf(args), args);
         const headers = MessageHeaders{
@@ -219,7 +221,7 @@ pub const Client = struct {
                 .flags = 0,
                 .method_id = method_id,
                 .msg_type = .Request,
-                .request_id = request_id,
+                .request_id = request.idx,
                 .payload_len = payload_len,
             },
         };

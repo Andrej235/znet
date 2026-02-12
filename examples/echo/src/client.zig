@@ -19,12 +19,14 @@ pub fn main() !void {
     try writer.flush();
 
     while (try reader.takeDelimiter('\n')) |message| {
-        const promise = try client.fetch(EchoContract.echo, .{message});
-        const echoed_message = promise.await();
+        var promise = try client.fetch(EchoContract.echo, .{message});
+        const echoed_message = promise.await(.release);
 
         try writer.writeAll("< ");
         try writer.writeAll(echoed_message);
         try writer.writeAll("\n> ");
         try writer.flush();
+
+        promise.destroy(echoed_message);
     }
 }

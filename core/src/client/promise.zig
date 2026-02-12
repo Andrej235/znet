@@ -1,84 +1,50 @@
 const std = @import("std");
 const Deserializer = @import("../serializer/deserializer.zig").Deserializer;
 const Client = @import("client.zig").Client;
+const PendingRequest = @import("pending_request.zig").PendingRequest;
 
-const State = enum {
-    pending,
-    fulfilled,
+const AwaitMode = enum(u8) {
+    borrow,
+    release,
 };
 
 pub fn Promise(comptime T: type) type {
     return struct {
         const Self = @This();
+        request: *PendingRequest,
 
-        mutex: *std.Thread.Mutex = undefined,
-        cond: *std.Thread.Condition = undefined,
-
-        client: *Client,
-
-        state: State = .pending,
-        result: T = undefined,
-
-        allocator: std.mem.Allocator,
-        deserializer: *Deserializer,
-
-        pub fn init(allocator: std.mem.Allocator, deserializer: *Deserializer, client: *Client) !*Self {
-            const self = try allocator.create(Self);
-
-            self.* = Self{
-                .allocator = allocator,
-                .deserializer = deserializer,
-                .client = client,
-
-                .mutex = &client.promise_mutex,
-                .cond = &client.promise_condition,
+        pub fn init(request: *PendingRequest) Self {
+            return Self{
+                .request = request,
             };
-
-            return self;
         }
 
-        pub fn destroyResult(self: *Self) !void {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+        pub fn await(self: *Self, comptime await_mode: AwaitMode) T {
+            const opaque_result = self.request.await() catch unreachable; // todo: handle promise rejection
 
-            if (self.state != .fulfilled) return error.PromiseNotFulfilled;
-            try self.deserializer.destroy(self.result);
-        }
+            const result: Deserializer.SafeAllocResult(T) = @ptrCast(@alignCast(opaque_result));
 
-        pub fn deinit(self: *Self) void {
-            const client = self.client; // avoids accessing self after deallocation
-            client.promise_mutex.lock();
-            defer client.promise_mutex.unlock();
+            const info = @typeInfo(T);
+            if (info == .pointer and info.pointer.size == .one) {
+                if (comptime await_mode == .release)
+                    self.request.release();
 
-            self.cond.broadcast();
-            self.allocator.destroy(self);
-        }
-
-        pub fn await(self: *Self) T {
-            if (self.state == .fulfilled) {
-                return self.result;
+                return result;
             }
 
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            if (comptime await_mode == .release) {
+                const result_val = result.*;
 
-            while (self.state == .pending) {
-                self.cond.wait(self.mutex);
+                self.request.release();
+                self.request.client.deserializer.allocator.destroy(result);
+                return result_val;
             }
 
-            return self.result;
+            return result.*;
         }
 
-        pub fn resolve(self: *Self, value: T) void {
-            self.mutex.lock();
-            defer self.mutex.unlock();
-
-            if (self.state != .pending) return;
-
-            self.result = value;
-            self.state = .fulfilled;
-
-            self.cond.broadcast();
+        pub fn destroy(self: *Self, value: T) void {
+            self.request.client.deserializer.destroy(value) catch return;
         }
     };
 }

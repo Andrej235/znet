@@ -54,7 +54,7 @@ fn worker() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .thread_safe = true }){};
     defer _ = gpa.deinit();
 
-    var client = try znet.Client.init(gpa.allocator(), .{});
+    var client = try znet.Client.init(std.heap.smp_allocator, .{});
     defer client.deinit() catch {};
 
     const address = try std.net.Address.parseIp("127.0.0.1", 5000);
@@ -62,10 +62,9 @@ fn worker() !void {
 
     // ---- Warmup ----
     for (0..warmup_requests) |_| {
-        const p = try client.fetch(EchoContract.echo, .{&message});
-        _ = p.await();
-        try p.destroyResult();
-        p.deinit();
+        var p = try client.fetch(EchoContract.echo, .{&message});
+        const result = p.await(.release);
+        p.destroy(result);
     }
 
     // Signal readiness
@@ -78,10 +77,9 @@ fn worker() !void {
 
     // ---- Timed benchmark ----
     while (running.load(.acquire)) {
-        const p = try client.fetch(EchoContract.echo, .{&message});
-        _ = p.await();
-        try p.destroyResult();
-        p.deinit();
+        var p = try client.fetch(EchoContract.echo, .{&message});
+        const result = p.await(.release);
+        p.destroy(result);
 
         _ = total_requests.fetchAdd(1, .monotonic);
     }

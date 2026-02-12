@@ -11,7 +11,7 @@ pub const Deserializer = struct {
         };
     }
 
-    fn DeserializationResult(comptime TExpected: type) type {
+    pub fn DeserializationResult(comptime TExpected: type) type {
         const info = @typeInfo(TExpected);
         return switch (info) {
             .error_set => |err_set_info| t_result: {
@@ -53,6 +53,48 @@ pub const Deserializer = struct {
             .@"opaque" => @compileError("Opaque types cannot be serialized due to lack of type information at compile time"),
             .enum_literal => @compileError("Enum literals cannot be serialized directly, try using the enum type instead"),
         };
+    }
+
+    pub fn AllocResult(comptime T: type) type {
+        const info = @typeInfo(T);
+        if (info == .pointer and info.pointer.size == .one)
+            return DeserializationErrors!T;
+
+        return DeserializationErrors!*T;
+    }
+
+    pub fn SafeAllocResult(comptime T: type) type {
+        const info = @typeInfo(T);
+        if (info == .pointer and info.pointer.size == .one)
+            return T;
+
+        return *T;
+    }
+
+    pub fn deserializeAlloc(self: *Deserializer, reader: *std.Io.Reader, comptime T: type) AllocResult(T) {
+        const info = @typeInfo(T);
+
+        const deserialized = try self.deserialize(reader, T);
+
+        const result: T = if (info != .error_union) deserialized else deserialized catch |err| switch (err) {
+            DeserializationErrors.AllocationFailed,
+            DeserializationErrors.BooleanDeserializationFailed,
+            DeserializationErrors.EndOfStream,
+            DeserializationErrors.IntegerDeserializationFailed,
+            DeserializationErrors.InvalidBooleanValue,
+            DeserializationErrors.InvalidUnionTag,
+            DeserializationErrors.OutOfMemory,
+            DeserializationErrors.UnexpectedEof,
+            => return err,
+            else => @errorCast(err),
+        };
+
+        if (info == .pointer and info.pointer.size == .one)
+            return result;
+
+        const allocated = try self.allocator.create(T);
+        allocated.* = result;
+        return allocated;
     }
 
     inline fn deserializeStruct(self: *Deserializer, reader: *std.Io.Reader, comptime TStruct: type) DeserializationErrors!TStruct {
@@ -356,6 +398,6 @@ pub const Deserializer = struct {
 
     inline fn destroyErrorUnion(self: *Deserializer, data: anytype) DeserializationErrors!void {
         const safe_data = data catch return;
-        self.destroy(safe_data);
+        try self.destroy(safe_data);
     }
 };

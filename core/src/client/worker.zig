@@ -45,12 +45,12 @@ pub const Worker = struct {
                     return;
                 },
                 .Response => |response| {
-                    const pending_request = client.pending_requests_map.pop(response.request_id) catch {
+                    const pending_request = client.pending_requests_map.get(response.request_id) catch {
                         std.debug.print("No pending request found for request_id: {d}\n", .{response.request_id});
                         continue;
                     };
 
-                    pending_request.resolve(&client.deserializer, &reader, pending_request.promise) catch |err| {
+                    pending_request.resolve(pending_request, &reader) catch |err| {
                         std.debug.print("Error resolving request_id {d}: {}\n", .{ response.request_id, err });
                     };
                 },
@@ -64,3 +64,5 @@ pub const Worker = struct {
         }
     }
 };
+
+// todo: make pending requests hold raw serialized data, await deserializes it, network thread resolves, network threads only exist if there are broadcast handlers enabled in options
