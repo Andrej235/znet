@@ -6,7 +6,7 @@ const Deserializer = @import("../../serializer/deserializer.zig").Deserializer;
 const Serializer = @import("../../serializer/serializer.zig").Serializer;
 const CountingSerializer = @import("../../serializer/counting_serializer.zig").Serializer;
 const HandlerFn = @import("handler_fn.zig").HandlerFn;
-const Server = @import("../server.zig").Server;
+const Reactor = @import("../reactor.zig").Reactor;
 
 const Context = @import("../context/context.zig").Context;
 const Clients = @import("../context/clients.zig").Clients;
@@ -43,7 +43,7 @@ pub fn createHandlerFn(comptime fn_impl: anytype) HandlerFn {
     return struct {
         fn handler(
             allocator: std.mem.Allocator,
-            server: *Server,
+            reactor: *Reactor,
             initiated_by_connection_id: u32,
             request_headers: RequestHeaders,
             input_reader: *std.Io.Reader,
@@ -52,10 +52,10 @@ pub fn createHandlerFn(comptime fn_impl: anytype) HandlerFn {
         ) anyerror!void {
             var deserializer = Deserializer.init(allocator);
             const payload: TPayload = deserializer.deserialize(input_reader, TPayload) catch |err| {
-                server.input_buffer_pool.release(input_buffer_idx);
+                reactor.input_buffer_pool.release(input_buffer_idx);
                 return err;
             };
-            server.input_buffer_pool.release(input_buffer_idx);
+            reactor.input_buffer_pool.release(input_buffer_idx);
 
             const params: TParams = blk: {
                 if (!inject_context) break :blk payload;
@@ -65,10 +65,10 @@ pub fn createHandlerFn(comptime fn_impl: anytype) HandlerFn {
                     .allocator = allocator,
                     .clients = .{
                         .allocator = allocator,
-                        .client_connections = server.clients,
-                        .connected_clients = server.poll_to_client[0..server.connected],
+                        .client_connections = reactor.clients,
+                        .connected_clients = reactor.poll_to_client[0..reactor.connected],
                         .sender_id = initiated_by_connection_id,
-                        .wakeup_fd = server.wakeup_fd,
+                        .wakeup_fd = reactor.wakeup_fd,
                     },
                 };
 

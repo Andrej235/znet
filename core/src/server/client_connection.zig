@@ -1,13 +1,13 @@
 const std = @import("std");
 const posix = std.posix;
 
-const Server = @import("server.zig").Server;
+const Reactor = @import("reactor.zig").Reactor;
 const MessageHeadersByteSize = @import("../message_headers/message_headers.zig").HeadersByteSize;
 const deserializeMessageHeaders = @import("../message_headers/deserialize_message_headers.zig").deserializeMessageHeaders;
 const ConnectionId = @import("connection_id.zig").ConnectionId;
 const RequestHeaders = @import("../message_headers/request_headers.zig").RequestHeaders;
 
-const Queue = @import("../utils/mpmc_queue.zig").Queue;
+const Queue = @import("../utils/spsc_queue.zig").Queue;
 const Job = @import("./job.zig").Job;
 const OutMessage = @import("./out_message.zig").OutMessage;
 
@@ -16,7 +16,7 @@ pub const ClientConnection = struct {
     job_queue: *Queue(Job),
     out_message_queue: *Queue(OutMessage),
 
-    server: *Server,
+    reactor: *Reactor,
     dirty: std.atomic.Value(bool),
 
     reader: ConnectionReader,
@@ -29,12 +29,12 @@ pub const ClientConnection = struct {
         allocator: std.mem.Allocator,
         job_queue: *Queue(Job),
         out_message_queue: *Queue(OutMessage),
-        server: *Server,
+        reactor: *Reactor,
         socket: posix.socket_t,
         address: std.net.Address,
         id: ConnectionId,
     ) !ClientConnection {
-        const reader = ConnectionReader.init(allocator, server, max_read_per_tick, id);
+        const reader = ConnectionReader.init(allocator, reactor, max_read_per_tick, id);
         errdefer reader.deinit(allocator);
 
         return .{
@@ -45,7 +45,7 @@ pub const ClientConnection = struct {
             .allocator = allocator,
             .job_queue = job_queue,
             .out_message_queue = out_message_queue,
-            .server = server,
+            .reactor = reactor,
             .dirty = std.atomic.Value(bool).init(false),
         };
     }
@@ -55,13 +55,12 @@ pub const ClientConnection = struct {
             switch (msg.data) {
                 .single => |single| {
                     std.debug.print("deinit client, release\n", .{});
-                    self.server.output_buffer_pool.release(single.buffer_idx);
+                    self.reactor.output_buffer_pool.release(single.buffer_idx);
                 },
                 .shared => |shared| shared.release(),
             }
         }
 
-        self.out_message_queue.close();
         self.allocator.free(self.out_message_queue.buf);
         self.allocator.destroy(self.out_message_queue);
     }
@@ -72,7 +71,7 @@ pub const ClientConnection = struct {
             else => return err,
         } orelse return;
 
-        try self.job_queue.push(.{
+        try self.job_queue.tryPush(.{
             .data = msg.data,
             .buffer_idx = msg.buffer_idx,
             .client_id = self.id,
@@ -84,10 +83,10 @@ pub const ClientConnection = struct {
         if (!was_empty) return;
         if (self.dirty.swap(true, .acq_rel)) return;
 
-        _ = self.server.dirty_clients.fetchAdd(1, .release);
-        _ = try posix.write(self.server.wakeup_fd, std.mem.asBytes(&@as(u64, 1)));
+        _ = self.reactor.dirty_clients.fetchAdd(1, .release);
+        _ = try posix.write(self.reactor.wakeup_fd, std.mem.asBytes(&@as(u64, 1)));
 
-        try self.out_message_queue.push(msg);
+        try self.out_message_queue.tryPush(msg);
     }
 };
 
@@ -102,9 +101,9 @@ const ConnectionReader = struct {
 
     current_headers: ?RequestHeaders,
 
-    server: *Server,
+    reactor: *Reactor,
 
-    fn init(allocator: std.mem.Allocator, server: *Server, max_read_per_tick: usize, connection_id: ConnectionId) ConnectionReader {
+    fn init(allocator: std.mem.Allocator, reactor: *Reactor, max_read_per_tick: usize, connection_id: ConnectionId) ConnectionReader {
         return .{
             .allocator = allocator,
             .connection_id = connection_id,
@@ -116,13 +115,13 @@ const ConnectionReader = struct {
 
             .current_headers = null,
 
-            .server = server,
+            .reactor = reactor,
         };
     }
 
     fn deinit(self: *const ConnectionReader) void {
         if (self.current_buffer_idx) |idx| {
-            self.server.input_buffer_pool.release(idx);
+            self.reactor.input_buffer_pool.release(idx);
         }
     }
 
@@ -133,9 +132,9 @@ const ConnectionReader = struct {
 
     fn readMessage(self: *ConnectionReader, socket: posix.socket_t) !?MessageReadResult {
         if (self.current_buffer_idx == null) {
-            const idx = self.server.input_buffer_pool.acquire() orelse return null;
+            const idx = self.reactor.input_buffer_pool.acquire() orelse return null;
             self.current_buffer_idx = idx;
-            self.current_buffer = self.server.input_buffer_pool.buffer(idx);
+            self.current_buffer = self.reactor.input_buffer_pool.buffer(idx);
 
             self.pos = 0;
             self.current_headers = null;
@@ -194,8 +193,8 @@ const ConnectionReader = struct {
         const remaining_bytes = self.current_buffer[message_len..self.pos];
         // if there isn't a free buffer, we can't process this message yet
         // we also can't return the fully read one because then we wouldn't be able to preserve the remaining data for the next read
-        const new_buffer_idx = self.server.input_buffer_pool.acquire() orelse return null;
-        const new_buffer = self.server.input_buffer_pool.buffer(new_buffer_idx);
+        const new_buffer_idx = self.reactor.input_buffer_pool.acquire() orelse return null;
+        const new_buffer = self.reactor.input_buffer_pool.buffer(new_buffer_idx);
 
         // move the remaining bytes to the new buffer so that we can continue reading that message in this new buffer we just acquired from the pool
         @memcpy(new_buffer[0..remaining_bytes.len], remaining_bytes);
