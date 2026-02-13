@@ -20,7 +20,7 @@ pub fn main() !void {
 
     while (try reader.takeDelimiter('\n')) |message| {
         var promise = try client.fetch(EchoContract.echo, .{message});
-        const echoed_message = promise.await(.release);
+        const echoed_message = try promise.await(.release);
 
         try writer.writeAll("< ");
         try writer.writeAll(echoed_message);

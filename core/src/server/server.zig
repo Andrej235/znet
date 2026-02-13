@@ -55,6 +55,7 @@ pub const Server = struct {
     stop_flag: std.atomic.Value(bool),
 
     input_buffer_pool: *BufferPool,
+    output_buffer_pool: *BufferPool,
 
     job_queue: *Queue(Job),
 
@@ -88,6 +89,16 @@ pub const Server = struct {
             options.client_read_buffer_size,
         );
         errdefer input_buffer_pool.deinit(allocator);
+        errdefer allocator.destroy(input_buffer_pool);
+
+        const output_buffer_pool = try allocator.create(BufferPool);
+        output_buffer_pool.* = try BufferPool.init(
+            allocator,
+            options.max_jobs_in_queue,
+            options.job_result_buffer_size,
+        );
+        errdefer output_buffer_pool.deinit(allocator);
+        errdefer allocator.destroy(output_buffer_pool);
 
         const poll_to_client = try allocator.alloc(u32, options.max_clients);
         errdefer allocator.free(poll_to_client);
@@ -116,10 +127,11 @@ pub const Server = struct {
             .stop_flag = std.atomic.Value(bool).init(false),
 
             .input_buffer_pool = input_buffer_pool,
+            .output_buffer_pool = output_buffer_pool,
         };
 
         for (0..options.worker_threads) |i| {
-            workers[i] = try Worker.init(options.job_result_buffer_size, self);
+            workers[i] = Worker.init(self);
 
             workers[i].runThread() catch |err| {
                 std.debug.print("Failed to spawn worker thread {}: {}\n", .{ i, err });
@@ -144,6 +156,9 @@ pub const Server = struct {
 
         self.input_buffer_pool.deinit(self.allocator);
         self.allocator.destroy(self.input_buffer_pool);
+
+        self.output_buffer_pool.deinit(self.allocator);
+        self.allocator.destroy(self.output_buffer_pool);
 
         self.allocator.free(self.job_queue.buf);
         self.allocator.destroy(self.job_queue);
@@ -236,7 +251,7 @@ pub const Server = struct {
                     // has messages queued to send
                     if (latest_out_message) |out| {
                         const data = switch (out.data) {
-                            .single => |single| single,
+                            .single => |single| single.data,
                             .shared => |shared| shared.get(),
                         };
 
@@ -258,7 +273,7 @@ pub const Server = struct {
                             _ = client.out_message_queue.tryPop();
 
                             switch (out.data) {
-                                .single => |single| self.allocator.free(single),
+                                .single => |single| self.output_buffer_pool.release(single.buffer_idx),
                                 .shared => |shared| shared.release(),
                             }
                         }

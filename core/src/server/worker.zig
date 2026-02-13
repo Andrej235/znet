@@ -20,9 +20,11 @@ pub const Worker = struct {
     wakeup_fd: std.posix.fd_t,
 
     call_table: []const []const HandlerFn,
-    response_buffer: []u8,
 
-    pub fn init(comptime response_buffer_size: usize, server: *Server) !Worker {
+    current_buffer: []u8, // only valid if current_buffer_idx != null
+    current_buffer_idx: ?u32,
+
+    pub fn init(server: *Server) Worker {
         return .{
             .server = server,
             .allocator = server.allocator,
@@ -31,12 +33,17 @@ pub const Worker = struct {
             .wakeup_fd = server.wakeup_fd,
 
             .call_table = Server.call_table,
-            .response_buffer = try server.allocator.alloc(u8, response_buffer_size),
+
+            .current_buffer = undefined,
+            .current_buffer_idx = null,
         };
     }
 
     pub fn deinit(self: *Worker) void {
-        self.allocator.free(self.response_buffer);
+        if (self.current_buffer_idx) |idx| {
+            std.debug.print("fuck\n", .{});
+            self.server.output_buffer_pool.release(idx);
+        }
     }
 
     pub inline fn runThread(self: *Worker) !void {
@@ -46,7 +53,7 @@ pub const Worker = struct {
 
     fn run(self: *Worker) !void {
         while (true) {
-            // buffer released in handler right after deserialization
+            // input buffer released in handler right after deserialization
 
             const job = self.job_queue.pop() catch |err| {
                 switch (err) {
@@ -56,54 +63,60 @@ pub const Worker = struct {
 
             var reader: std.Io.Reader = .fixed(job.data);
             const headers = deserializeMessageHeaders(&reader) catch |err| {
-                self.server.input_buffer_pool.release(job.buffer_idx);
                 std.debug.print("Failed to deserialize message headers: {}\n", .{err});
+                self.server.input_buffer_pool.release(job.buffer_idx);
                 continue;
             };
 
-            switch (headers) {
-                .Request => |req_header| {
-                    const handler = self.call_table[req_header.contract_id][req_header.method_id];
+            if (headers != .Request) return error.UnexpectedMessageHeader;
+            const req_header = headers.Request;
 
-                    var writer: std.Io.Writer = .fixed(self.response_buffer);
-                    try handler(
-                        self.allocator,
-                        self.server,
-                        job.client_id.index,
-                        headers.Request,
-                        &reader,
-                        &writer,
-                        job.buffer_idx,
-                    );
-
-                    const response_payload_len = std.mem.readInt(u32, self.response_buffer[MessageHeadersByteSize.Response - 4 .. MessageHeadersByteSize.Response], .big);
-                    const response_data = try self.allocator.alloc(u8, response_payload_len + MessageHeadersByteSize.Response);
-                    @memcpy(response_data, self.response_buffer[0..response_data.len]);
-
-                    var client = &self.server.clients[job.client_id.index];
-                    if (client.id.gen != job.client_id.gen) {
-                        std.debug.print("Client gen mismatch: expected {}, got {}\n", .{ client.id.gen, job.client_id.gen });
-                        self.allocator.free(response_data);
-                        continue;
-                    }
-
-                    // response_data will be freed by the reactor thread after sending
-                    try client.enqueueMessage(OutMessage{
-                        .offset = 0,
-                        .data = .{
-                            .single = response_data,
-                        },
-                    });
-                },
-                .Response => {
-                    std.debug.print("Worker encountered a response message\n", .{});
-                    return error.UnexpectedResponseHeader;
-                },
-                .Broadcast => {
-                    std.debug.print("Worker encountered a broadcast message\n", .{});
-                    return error.UnexpectedBroadcastHeader;
-                },
+            var client = &self.server.clients[job.client_id.index];
+            if (client.id.gen != job.client_id.gen) {
+                std.debug.print("Client gen mismatch: expected {}, got {}\n", .{ client.id.gen, job.client_id.gen });
+                self.server.input_buffer_pool.release(job.buffer_idx);
+                continue;
             }
+
+            if (self.current_buffer_idx == null) {
+                // todo: handle output buffer exhaustion more gracefully, right now we just drop the message, which will cause the client to wait indefinitely until it hits a timeout
+                const buffer_idx = self.server.output_buffer_pool.acquire() orelse {
+                    self.server.input_buffer_pool.release(job.buffer_idx);
+                    continue;
+                };
+
+                self.current_buffer_idx = buffer_idx;
+                self.current_buffer = self.server.output_buffer_pool.buffer(buffer_idx);
+            }
+
+            const handler = self.call_table[req_header.contract_id][req_header.method_id];
+
+            var writer: std.Io.Writer = .fixed(self.current_buffer);
+            try handler(
+                self.allocator,
+                self.server,
+                job.client_id.index,
+                headers.Request,
+                &reader,
+                &writer,
+                job.buffer_idx,
+            );
+
+            const response_payload_len = std.mem.readInt(u32, self.current_buffer[MessageHeadersByteSize.Response - 4 .. MessageHeadersByteSize.Response], .big);
+            const response_data = self.current_buffer[0 .. MessageHeadersByteSize.Response + response_payload_len];
+
+            // response_data will be freed by the reactor thread after sending
+            try client.enqueueMessage(OutMessage{
+                .offset = 0,
+                .data = .{
+                    .single = .{
+                        .data = response_data,
+                        .buffer_idx = self.current_buffer_idx.?,
+                    },
+                },
+            });
+
+            self.current_buffer_idx = null; // released in reactor thread, set to null here to indicate that we don't have a current buffer anymore
         }
     }
 };

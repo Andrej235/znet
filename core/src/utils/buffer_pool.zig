@@ -63,6 +63,9 @@ pub const BufferPool = struct {
     }
 
     pub fn buffer(self: *BufferPool, idx: u32) []u8 {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
         return self.buffers[idx][0..];
     }
 };
