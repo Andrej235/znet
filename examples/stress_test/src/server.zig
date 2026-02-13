@@ -23,7 +23,6 @@ pub fn main() !void {
 
     const address = try std.net.Address.parseIp("127.0.0.1", 5000);
     try server.run(address);
-    try server.deinit();
 }
 
 pub fn listenerThread() !void {
@@ -33,7 +32,7 @@ pub fn listenerThread() !void {
 
     while (try reader.takeDelimiter('\n')) |message| {
         if (std.mem.eql(u8, message, "exit")) {
-            try server.stop();
+            try server.deinit();
             std.debug.print("Exit\n", .{});
             break;
         }

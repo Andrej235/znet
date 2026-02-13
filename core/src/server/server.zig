@@ -7,6 +7,13 @@ const HandlerFn = @import("handler_fn/handler_fn.zig").HandlerFn;
 const createHandlerFn = @import("handler_fn/create_handler_fn.zig").createHandlerFn;
 
 const Reactor = @import("reactor.zig").Reactor;
+const ReactorHandle = @import("reactor.zig").ReactorHandle;
+
+pub const ShutdownState = enum(u8) {
+    running,
+    graceful,
+    immediate,
+};
 
 pub const Server = struct {
     pub const call_table = createCallTable();
@@ -14,36 +21,57 @@ pub const Server = struct {
     options: ServerOptions,
     allocator: std.mem.Allocator,
 
-    reactor: *Reactor,
+    reactors: []ReactorHandle,
+    shutdown_state: std.atomic.Value(ShutdownState),
 
     pub fn init(allocator: std.mem.Allocator, comptime options: ServerOptions) !*Server {
-        const reactor = try Reactor.init(allocator, call_table, options);
+        const reactor_count = 1;
+        const reactors = try allocator.alloc(ReactorHandle, reactor_count);
 
         const self = try allocator.create(Server);
         self.* = .{
             .options = options,
             .allocator = allocator,
 
-            .reactor = reactor,
+            .reactors = reactors,
+
+            .shutdown_state = std.atomic.Value(ShutdownState).init(.running),
         };
 
         return self;
     }
 
     pub fn run(self: *Server, address: net.Address) !void {
-        try self.reactor.run(address);
+        for (self.reactors, 0..) |*reactor, idx| {
+            const handle = try Reactor.init(
+                self.allocator,
+                address,
+                &self.shutdown_state,
+                idx,
+                self.options,
+            );
+
+            reactor.* = handle;
+        }
+
+        for (self.reactors) |*reactor| {
+            reactor.thread.join(); // this will only end once all threads have shut down
+        }
     }
 
     pub fn deinit(self: *Server) !void {
         try self.stop();
-        try self.reactor.deinit();
 
+        self.allocator.free(self.reactors);
         self.allocator.destroy(self);
     }
 
     pub fn stop(self: *Server) !void {
-        self.reactor.stop_flag.store(true, .release);
-        _ = try posix.write(self.reactor.wakeup_fd, std.mem.asBytes(&@as(u64, 1)));
+        self.shutdown_state.store(.immediate, .release);
+
+        for (self.reactors) |reactor| {
+            _ = try posix.write(reactor.wakeup_fd, std.mem.asBytes(&@as(u64, 1)));
+        }
     }
 };
 

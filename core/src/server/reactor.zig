@@ -8,9 +8,15 @@ const Job = @import("job.zig").Job;
 const ConnectionId = @import("connection_id.zig").ConnectionId;
 const ServerOptions = @import("server_options.zig").ServerOptions;
 const OutMessage = @import("out_message.zig").OutMessage;
-const HandlerFn = @import("handler_fn/handler_fn.zig").HandlerFn;
 const deserializeMessageHeaders = @import("../message_headers/deserialize_message_headers.zig").deserializeMessageHeaders;
 const MessageHeadersByteSize = @import("../message_headers/message_headers.zig").HeadersByteSize;
+const ShutdownState = @import("server.zig").ShutdownState;
+const call_table = @import("server.zig").Server.call_table;
+
+pub const ReactorHandle = struct {
+    wakeup_fd: i32,
+    thread: std.Thread,
+};
 
 pub const Reactor = struct {
     options: ServerOptions,
@@ -42,19 +48,78 @@ pub const Reactor = struct {
     // number of clients that have messages enqueued to send but haven't been fully sent yet, used to decide when to clear the wakeup fd
     dirty_clients: std.atomic.Value(usize),
     wakeup_fd: posix.fd_t,
-    stop_flag: std.atomic.Value(bool),
+
+    // used by the server to coordinate shutdown between all reactor threads
+    shutdown_state: *std.atomic.Value(ShutdownState),
 
     input_buffer_pool: *BufferPool,
     output_buffer_pool: *BufferPool,
 
     job_queue: *Queue(Job),
 
-    call_table: []const []const HandlerFn,
-
     current_buffer: []u8, // only valid if current_buffer_idx != null
     current_buffer_idx: ?u32,
 
-    pub fn init(allocator: std.mem.Allocator, call_table: []const []const HandlerFn, comptime options: ServerOptions) !*Reactor {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        address: std.net.Address,
+        shutdown_state: *std.atomic.Value(ShutdownState),
+        core_id: usize,
+        options: ServerOptions,
+    ) !ReactorHandle {
+        const wakeup_fd = try posix.eventfd(0, posix.SOCK.NONBLOCK);
+
+        const thread = try std.Thread.spawn(.{}, startThread, .{
+            allocator,
+            address,
+            shutdown_state,
+            wakeup_fd,
+            core_id,
+            options,
+        });
+
+        return .{
+            .wakeup_fd = wakeup_fd,
+            .thread = thread,
+        };
+    }
+
+    fn stop(self: *Reactor) !void {
+        // kick the clients, release their buffers, and close their sockets
+        for (0..self.connected) |i| {
+            std.debug.print("kicked client due to shutdown {} with {} messages in queue\n", .{ self.poll_to_client[i], self.clients[self.poll_to_client[i]].out_message_queue.count });
+            self.removeClient(0);
+        }
+
+        posix.close(self.wakeup_fd);
+
+        self.input_buffer_pool.deinit(self.allocator);
+        self.allocator.destroy(self.input_buffer_pool);
+
+        self.output_buffer_pool.deinit(self.allocator);
+        self.allocator.destroy(self.output_buffer_pool);
+
+        self.allocator.free(self.job_queue.buf);
+        self.allocator.destroy(self.job_queue);
+
+        self.allocator.free(self.polls);
+        self.allocator.free(self.clients);
+        self.allocator.free(self.free_indices);
+        self.allocator.free(self.poll_to_client);
+
+        self.allocator.destroy(self);
+    }
+
+    fn startThread(
+        allocator: std.mem.Allocator,
+        address: std.net.Address,
+        shutdown_state: *std.atomic.Value(ShutdownState),
+        wakeup_fd: posix.fd_t,
+        core_id: usize,
+        options: ServerOptions,
+    ) !void {
+        _ = core_id; // todo: pin thread to core
+
         // + 2 for the listening socket and the wakeup socket
         const polls = try allocator.alloc(posix.pollfd, options.max_clients + 2);
         errdefer allocator.free(polls);
@@ -68,8 +133,6 @@ pub const Reactor = struct {
         const job_queue = try allocator.create(Queue(Job));
         job_queue.* = try Queue(Job).init(jobs_buf);
         errdefer allocator.destroy(job_queue);
-
-        const wakeup_fd = try posix.eventfd(0, posix.SOCK.NONBLOCK);
 
         var free_indices = try allocator.alloc(ConnectionId, options.max_clients);
         errdefer allocator.free(free_indices);
@@ -101,8 +164,8 @@ pub const Reactor = struct {
         // no workers for now, todo: add Task<T> or DefferedResult<T> as a tag for contract methods that should be executed on worker threads and then add workers back in
         // const workers = try allocator.alloc(Worker, options.worker_threads);
 
-        const self: *Reactor = try allocator.create(Reactor);
-        self.* = .{
+        const self = try allocator.create(Reactor);
+        self.* = Reactor{
             .options = options,
             .allocator = allocator,
 
@@ -119,46 +182,28 @@ pub const Reactor = struct {
             .dirty_clients = std.atomic.Value(usize).init(0),
 
             .wakeup_fd = wakeup_fd,
-            .stop_flag = std.atomic.Value(bool).init(false),
+            .shutdown_state = shutdown_state,
 
             .input_buffer_pool = input_buffer_pool,
             .output_buffer_pool = output_buffer_pool,
-            .call_table = call_table,
 
             .current_buffer = undefined,
             .current_buffer_idx = null,
         };
 
-        return self;
+        try self.run(address);
     }
 
-    pub fn deinit(self: *Reactor) !void {
-        posix.close(self.wakeup_fd);
+    fn run(self: *Reactor, address: std.net.Address) !void {
+        std.debug.print("run reactor thread {}\n", .{std.Thread.getCurrentId()});
 
-        self.input_buffer_pool.deinit(self.allocator);
-        self.allocator.destroy(self.input_buffer_pool);
-
-        self.output_buffer_pool.deinit(self.allocator);
-        self.allocator.destroy(self.output_buffer_pool);
-
-        self.allocator.free(self.job_queue.buf);
-        self.allocator.destroy(self.job_queue);
-
-        self.allocator.free(self.polls);
-        self.allocator.free(self.clients);
-        self.allocator.free(self.free_indices);
-        self.allocator.free(self.poll_to_client);
-
-        self.allocator.destroy(self);
-    }
-
-    pub fn run(self: *Reactor, address: std.net.Address) !void {
         const socket_type: u32 = posix.SOCK.STREAM | posix.SOCK.NONBLOCK;
         const protocol = posix.IPPROTO.TCP;
         const listener = try posix.socket(address.any.family, socket_type, protocol);
         defer posix.close(listener);
 
         try posix.setsockopt(listener, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
+        try posix.setsockopt(listener, posix.SOL.SOCKET, posix.SO.REUSEPORT, &std.mem.toBytes(@as(c_int, 1)));
         try posix.bind(listener, &address.any, address.getOsSockLen());
         try posix.listen(listener, 128);
 
@@ -180,7 +225,7 @@ pub const Reactor = struct {
             // +2 is for the listening socket and the wakeup fd, infinite/no timeout
             _ = try posix.poll(self.polls[0 .. self.connected + 2], -1);
 
-            if (self.stop_flag.load(.acquire)) break;
+            if (self.shutdown_state.load(.acquire) == .immediate) break;
 
             // new connections
             if (self.polls[0].revents != 0) {
@@ -303,7 +348,7 @@ pub const Reactor = struct {
                     self.current_buffer = self.output_buffer_pool.buffer(buffer_idx);
                 }
 
-                const handler = self.call_table[req_header.contract_id][req_header.method_id];
+                const handler = call_table[req_header.contract_id][req_header.method_id];
 
                 var writer: std.Io.Writer = .fixed(self.current_buffer);
                 try handler(
@@ -340,10 +385,7 @@ pub const Reactor = struct {
                 try self.drain_wakeup_fd();
         }
 
-        for (0..self.connected) |i| {
-            std.debug.print("kicked client due to shutdown {} with {} messages in queue\n", .{ self.poll_to_client[i], self.clients[self.poll_to_client[i]].out_message_queue.count });
-            self.removeClient(0);
-        }
+        try self.stop();
     }
 
     fn accept(self: *Reactor, listener: posix.socket_t) !void {
