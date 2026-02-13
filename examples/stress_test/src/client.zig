@@ -54,7 +54,7 @@ fn worker() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .thread_safe = true }){};
     defer _ = gpa.deinit();
 
-    var client = try znet.Client.init(std.heap.smp_allocator, .{});
+    var client = try znet.Client.init(std.heap.smp_allocator, .{ .worker_thread_count = 1 });
     defer client.deinit() catch {};
 
     const address = try std.net.Address.parseIp("127.0.0.1", 5000);

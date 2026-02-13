@@ -118,7 +118,20 @@ pub const Reactor = struct {
         core_id: usize,
         options: ServerOptions,
     ) !void {
-        _ = core_id; // todo: pin thread to core
+        const linux = std.os.linux;
+        var mask: [16]u64 = .{0} ** 16;
+
+        const idx = core_id / 64;
+        const bit = core_id % 64;
+
+        mask[idx] |= @as(usize, @intCast(1)) << @as(u6, @intCast(bit)); // equivalent to CPU_SET
+
+        const tid = linux.gettid();
+
+        try linux.sched_setaffinity(
+            tid,
+            &mask,
+        );
 
         // + 2 for the listening socket and the wakeup socket
         const polls = try allocator.alloc(posix.pollfd, options.max_clients + 2);
