@@ -20,11 +20,17 @@ pub const PendingRequest = struct {
 
     client: *Client, // used to access shared mutex and condition variable for awaiting threads and deserializer
 
+    mutex: std.Thread.Mutex = .{},
+    condition: std.Thread.Condition = .{},
+
     pub fn resolve(self: *PendingRequest, data: []const u8, inbound_buffer_idx: u32) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
         self.data = data;
         self.inbound_buffer_idx = inbound_buffer_idx;
         self.state.store(.fulfilled, .release);
-        self.client.promise_condition.broadcast();
+        self.condition.broadcast();
     }
 
     pub fn AwaitResult(comptime T: type) type {
@@ -66,11 +72,14 @@ pub const PendingRequest = struct {
             }
         }
 
-        self.client.promise_mutex.lock();
-        defer self.client.promise_mutex.unlock();
+        self.mutex.lock();
+        defer self.mutex.unlock();
 
         while (self.state.load(.acquire) == .pending) {
-            self.client.promise_condition.wait(&self.client.promise_mutex);
+            self.condition.timedWait(&self.mutex, std.time.ns_per_s) catch {
+                std.debug.print("timeout {}, {}\n", .{ self.idx, self.state.load(.acquire) });
+                continue;
+            };
         }
 
         if (self.state.load(.acquire) == .rejected) {

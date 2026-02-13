@@ -15,6 +15,7 @@ const Deserializer = @import("../serializer/deserializer.zig").Deserializer;
 const DeserializationErrors = @import("../serializer/errors.zig").DeserializationErrors;
 
 const Queue = @import("../utils/mpmc_queue.zig").Queue;
+const SPSCQueue = @import("../utils/spsc_queue.zig").Queue;
 const Promise = @import("promise.zig").Promise;
 
 const OutboundMessage = @import("outbound_message.zig").OutboundMessage;
@@ -51,22 +52,13 @@ pub const Client = struct {
 
     server_connection: *ServerConnection,
 
-    workers: []Worker = undefined,
-
     outbound_buffer: []OutboundMessage,
     outbound_queue: *Queue(OutboundMessage),
-
-    inbound_buffer: []InboundMessage,
-    inbound_queue: *Queue(InboundMessage),
 
     pub fn init(allocator: std.mem.Allocator, comptime options: ClientOptions) !*Client {
         const outbound_buffer = try allocator.alloc(OutboundMessage, options.max_outbound_messages);
         const outbound_queue = try allocator.create(Queue(OutboundMessage));
         outbound_queue.* = try Queue(OutboundMessage).init(outbound_buffer);
-
-        const inbound_buffer = try allocator.alloc(InboundMessage, options.max_inbound_messages);
-        const inbound_queue = try allocator.create(Queue(InboundMessage));
-        inbound_queue.* = try Queue(InboundMessage).init(inbound_buffer);
 
         const pending_requests_map = try allocator.create(PendingRequestsMap);
 
@@ -78,8 +70,6 @@ pub const Client = struct {
 
         const server_connection = try allocator.create(ServerConnection);
 
-        const workers = try allocator.alloc(Worker, options.worker_thread_count);
-
         const self = try allocator.create(Client);
         self.* = Client{
             .options = options,
@@ -90,15 +80,10 @@ pub const Client = struct {
             .outbound_buffer = outbound_buffer,
             .outbound_queue = outbound_queue,
 
-            .inbound_buffer = inbound_buffer,
-            .inbound_queue = inbound_queue,
-
             .pending_requests_map = pending_requests_map,
 
             .inbound_buffer_pool = inbound_buffer_pool,
             .outbound_buffer_pool = outbound_buffer_pool,
-
-            .workers = workers,
 
             .server_connection = server_connection,
         };
@@ -118,12 +103,8 @@ pub const Client = struct {
 
         self.server_connection.deinit();
 
-        self.allocator.free(self.workers);
-
         self.allocator.free(self.outbound_buffer);
         self.allocator.destroy(self.outbound_queue);
-        self.allocator.free(self.inbound_buffer);
-        self.allocator.destroy(self.inbound_queue);
 
         self.inbound_buffer_pool.deinit(self.allocator);
         self.allocator.destroy(self.inbound_buffer_pool);
@@ -142,28 +123,26 @@ pub const Client = struct {
     pub fn connect(self: *Client, address: std.net.Address) !void {
         try self.server_connection.connect(address);
 
-        for (0..self.options.worker_thread_count) |i| {
-            self.workers[i] = Worker.init(self.allocator, self);
+        // todo: reimplement for broadcasts only
+        // for (0..self.options.worker_thread_count) |i| {
+        //     self.workers[i] = Worker.init(self.allocator, self);
 
-            self.workers[i].runThread() catch |err| {
-                std.debug.print("Failed to spawn worker thread {}: {}\n", .{ i, err });
-                return err;
-            };
-        }
+        //     self.workers[i].runThread() catch |err| {
+        //         std.debug.print("Failed to spawn worker thread {}: {}\n", .{ i, err });
+        //         return err;
+        //     };
+        // }
     }
 
     pub fn disconnect(self: *Client) !void {
         try self.server_connection.disconnect();
 
-        self.inbound_queue.close();
-        for (self.workers) |*w| {
-            w.thread.join();
-        }
+        // self.inbound_queue.close();
+        // for (self.workers) |*w| {
+        //     w.thread.join();
+        // }
 
         try self.pending_requests_map.clear();
-        while (self.inbound_queue.tryPop()) |in_msg| {
-            self.allocator.free(in_msg.data);
-        }
     }
 
     pub fn fetch(self: *Client, method: anytype, args: MethodTupleArg(method)) anyerror!Promise(MethodReturnType(method)) {

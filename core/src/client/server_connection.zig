@@ -3,17 +3,17 @@ const posix = std.posix;
 
 const Client = @import("client.zig").Client;
 
-const Queue = @import("../utils//mpmc_queue.zig").Queue;
+const Queue = @import("../utils/spsc_queue.zig").Queue;
 const Job = @import("./inbound_message.zig").InboundMessage;
 
 const MessageReadResult = @import("./message_read_result.zig").MessageReadResult;
 const ConnectionReader = @import("./connection_reader.zig").ConnectionReader;
 
 const MessageHeadersByteSize = @import("../message_headers/message_headers.zig").HeadersByteSize;
+const deserializeMessageHeaders = @import("../message_headers/deserialize_message_headers.zig").deserializeMessageHeaders;
 
 pub const ServerConnection = struct {
     allocator: std.mem.Allocator,
-    job_queue: *Queue(Job),
 
     connection_socket: posix.socket_t,
     connected: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -32,7 +32,6 @@ pub const ServerConnection = struct {
 
         return ServerConnection{
             .allocator = allocator,
-            .job_queue = client.inbound_queue,
             .connection_socket = undefined,
             .client = client,
             .connection_reader = ConnectionReader.init(allocator, client),
@@ -93,16 +92,14 @@ pub const ServerConnection = struct {
         posix.close(self.wakeup_fd);
     }
 
-    pub fn readMessage(self: *ServerConnection) !void {
-        const msg = self.connection_reader.readMessage(self.connection_socket) catch |err| switch (err) {
-            error.WouldBlock, error.NotOpenForReading => return,
-            else => return err,
-        } orelse return;
-
-        try self.job_queue.push(.{
-            .data = msg.data,
-            .buffer_idx = msg.buffer_idx,
-        });
+    pub fn readMessage(self: *ServerConnection) ?MessageReadResult {
+        return self.connection_reader.readMessage(self.connection_socket) catch |err| switch (err) {
+            error.WouldBlock, error.NotOpenForReading => return null,
+            else => {
+                std.debug.print("Error reading message: {}\n", .{err});
+                return null;
+            },
+        };
     }
 
     fn networkThread(self: *ServerConnection) !void {
@@ -110,18 +107,40 @@ pub const ServerConnection = struct {
             _ = try posix.poll(self.polls, -1);
             if (!self.connected.load(.acquire)) break;
 
-            // process inbound messages
             if (self.polls[0].revents & posix.POLL.IN == posix.POLL.IN) {
-                self.readMessage() catch |err| {
-                    std.debug.print("Error reading message from server: {}\n", .{err});
-                };
+                // process inbound messages, resolve pending requests
+                if (self.readMessage()) |in_msg| {
+                    var reader = std.io.Reader.fixed(in_msg.data);
+                    const headers = try deserializeMessageHeaders(&reader);
+
+                    switch (headers) {
+                        .Request => {
+                            std.debug.print("Unexpected Request message found in inbound queue\n", .{});
+                            return;
+                        },
+                        .Response => |response| {
+                            const pending_request = self.client.pending_requests_map.get(response.request_id) catch {
+                                std.debug.print("No pending request found for request_id: {d}\n", .{response.request_id});
+                                continue;
+                            };
+
+                            pending_request.resolve(in_msg.data, in_msg.buffer_idx);
+                        },
+                        .Broadcast => |broadcast| {
+                            std.debug.print("broadcast\n", .{});
+                            _ = broadcast; // todo: implement broadcast handling on workers when enabled
+                            return error.Unimplemented;
+                        },
+                    }
+                }
             }
 
-            // process outbound messages
+            // process messages
             if (self.polls[1].revents != 0) {
+                // send outbound messages
                 while (self.client.outbound_queue.tryPop()) |out_msg| {
                     defer self.client.outbound_buffer_pool.release(out_msg.buffer_idx);
-                    
+
                     const total_len = out_msg.data.len;
                     var sent: usize = 0;
 

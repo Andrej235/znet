@@ -124,7 +124,7 @@ pub const Reactor = struct {
         const idx = core_id / 64;
         const bit = core_id % 64;
 
-        mask[idx] |= @as(usize, @intCast(1)) << @as(u6, @intCast(bit)); // equivalent to CPU_SET
+        mask[idx] |= @as(usize, @intCast(1)) << @as(u6, @intCast(bit));
 
         const tid = linux.gettid();
 

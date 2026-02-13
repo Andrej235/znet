@@ -61,5 +61,3 @@ pub const Worker = struct {
         }
     }
 };
-
-// todo: make network threads only exist if there are broadcast handlers enabled in options
