@@ -46,7 +46,7 @@ pub const PendingRequestsMap = struct {
         defer self.mutex.unlock();
 
         for (self.requests) |*req| {
-            if (req.state == .fulfilled)
+            if (req.state.load(.acquire) == .fulfilled)
                 req.release();
         }
 
@@ -71,12 +71,12 @@ pub const PendingRequestsMap = struct {
         const request_id = self.free_request_ids[self.free_count];
         const pending_request: *PendingRequest = @constCast(&self.requests[request_id]);
 
-        if (pending_request.state != .free) {
-            std.debug.print("acquired request that is not free, request_id: {d}, state: {}\n", .{ request_id, pending_request.state });
+        if (pending_request.state.load(.acquire) != .free) {
+            std.debug.print("acquired request that is not free, request_id: {d}, state: {}\n", .{ request_id, pending_request.state.load(.acquire) });
             return error.InvalidState;
         }
 
-        pending_request.state = .pending;
+        pending_request.state.store(.pending, .release);
         return pending_request;
     }
 

@@ -16,14 +16,14 @@ pub const PendingRequest = struct {
     data: []const u8 = undefined,
     inbound_buffer_idx: u32 = undefined,
 
-    state: State = .free,
+    state: std.atomic.Value(State) = std.atomic.Value(State).init(.free),
 
     client: *Client, // used to access shared mutex and condition variable for awaiting threads and deserializer
 
     pub fn resolve(self: *PendingRequest, data: []const u8, inbound_buffer_idx: u32) void {
         self.data = data;
         self.inbound_buffer_idx = inbound_buffer_idx;
-        self.state = .fulfilled;
+        self.state.store(.fulfilled, .release);
         self.client.promise_condition.broadcast();
     }
 
@@ -42,8 +42,9 @@ pub const PendingRequest = struct {
 
     pub inline fn await(self: *PendingRequest, comptime T: type) AwaitResult(T) {
         const info = @typeInfo(T);
+        const current_state = self.state.load(.acquire);
 
-        if (self.state == .fulfilled) {
+        if (current_state == .fulfilled) {
             var reader = std.io.Reader.fixed(self.data);
             _ = deserializeMessageHeaders(&reader) catch return FetchErrors.DeserializationFailed;
 
@@ -68,11 +69,11 @@ pub const PendingRequest = struct {
         self.client.promise_mutex.lock();
         defer self.client.promise_mutex.unlock();
 
-        while (self.state == .pending) {
+        while (self.state.load(.acquire) == .pending) {
             self.client.promise_condition.wait(&self.client.promise_mutex);
         }
 
-        if (self.state == .rejected) {
+        if (self.state.load(.acquire) == .rejected) {
             return FetchErrors.FetchFailed;
         }
 
@@ -97,7 +98,7 @@ pub const PendingRequest = struct {
     }
 
     pub fn release(self: *PendingRequest) void {
-        self.state = .free;
+        self.state.store(.free, .release);
 
         self.client.inbound_buffer_pool.release(self.inbound_buffer_idx);
         self.client.pending_requests_map.release(self.idx) catch {
