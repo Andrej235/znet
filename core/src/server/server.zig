@@ -25,7 +25,7 @@ pub const Server = struct {
     shutdown_state: std.atomic.Value(ShutdownState),
 
     pub fn init(allocator: std.mem.Allocator, comptime options: ServerOptions) !*Server {
-        const reactor_count = 2;
+        const reactor_count = try std.Thread.getCpuCount();
         const reactors = try allocator.alloc(ReactorHandle, reactor_count);
 
         const self = try allocator.create(Server);

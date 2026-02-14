@@ -2,6 +2,7 @@ const std = @import("std");
 
 pub const QueueErrors = error{
     Closed,
+    QueueFull,
 };
 
 /// A thread-safe multi-producer, multi-consumer queue implementation, uses a circular buffer.
@@ -42,6 +43,25 @@ pub fn Queue(comptime T: type) type {
 
             if (self.closed) {
                 return QueueErrors.Closed;
+            }
+
+            self.buf[self.tail] = job;
+            self.tail = (self.tail + 1) % self.buf.len;
+            self.count += 1;
+
+            self.cond.signal();
+        }
+
+        pub fn tryPush(self: *Self, job: T) QueueErrors!void {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+
+            if (self.closed) {
+                return QueueErrors.Closed;
+            }
+
+            if (self.count == self.buf.len) {
+                return QueueErrors.QueueFull;
             }
 
             self.buf[self.tail] = job;

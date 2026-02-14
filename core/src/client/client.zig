@@ -1,5 +1,4 @@
 const std = @import("std");
-const posix = @import("std").posix;
 
 const ClientOptions = @import("client_options.zig").ClientOptions;
 
@@ -12,26 +11,18 @@ const ServerContext = @import("../server/context/context.zig").Context;
 const Serializer = @import("../serializer/serializer.zig").Serializer;
 const CountingSerializer = @import("../serializer/counting_serializer.zig").Serializer;
 const Deserializer = @import("../serializer/deserializer.zig").Deserializer;
-const DeserializationErrors = @import("../serializer/errors.zig").DeserializationErrors;
 
-const Queue = @import("../utils/mpmc_queue.zig").Queue;
-const SPSCQueue = @import("../utils/spsc_queue.zig").Queue;
+const Queue = @import("../utils/mpsc_queue.zig").Queue;
 const Promise = @import("promise.zig").Promise;
-
 const OutboundMessage = @import("outbound_message.zig").OutboundMessage;
-const InboundMessage = @import("inbound_message.zig").InboundMessage;
 
 const PendingRequestsMap = @import("pending_requests_map.zig").PendingRequestsMap;
-
 const ServerConnection = @import("server_connection.zig").ServerConnection;
-const PendingRequest = @import("pending_request.zig").PendingRequest;
 
 const BroadcastHandlerFn = @import("handler_fn/broadcast_handler_fn.zig").BroadcastHandlerFn;
 const createBroadcastHandlerFn = @import("handler_fn/create_broadcast_handler_fn.zig").createBroadcastHandlerFn;
 
 const BufferPool = @import("../utils/buffer_pool.zig").BufferPool;
-
-const Worker = @import("worker.zig").Worker;
 
 const app_version: u8 = @import("../app_version.zig").app_version;
 
@@ -46,9 +37,6 @@ pub const Client = struct {
 
     deserializer: Deserializer,
     pending_requests_map: *PendingRequestsMap,
-
-    promise_mutex: std.Thread.Mutex = .{},
-    promise_condition: std.Thread.Condition = .{},
 
     server_connection: *ServerConnection,
 
@@ -176,7 +164,7 @@ pub const Client = struct {
         try serializeHeaders(&writer, headers);
         try Serializer.serialize(@TypeOf(args), &writer, args);
 
-        try self.outbound_queue.push(.{
+        try self.outbound_queue.tryPush(.{
             .buffer_idx = buffer_idx,
             .data = buffer[0 .. payload_len + MessageHeadersByteSize.Request],
         });
