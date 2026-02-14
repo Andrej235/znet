@@ -45,7 +45,6 @@ pub const BufferPool = struct {
         defer self.mutex.unlock();
 
         if (self.free_count == 0) {
-            std.debug.print("no free buffer\n", .{});
             return null;
         }
 
@@ -63,9 +62,6 @@ pub const BufferPool = struct {
     }
 
     pub fn buffer(self: *BufferPool, idx: u32) []u8 {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
         return self.buffers[idx][0..];
     }
 };

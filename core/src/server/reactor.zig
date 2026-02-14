@@ -259,24 +259,17 @@ pub const Reactor = struct {
                 const revents = self.client_polls[i].revents;
                 if (revents != 0) {
                     if (revents & posix.POLL.IN == posix.POLL.IN) {
-                        // this socket is ready to be read, keep reading messages until there are no more
-                        // client.readMessage() implements fairness
-                        while (true) {
-                            client.readMessage() catch |err| {
-                                if (err == error.Closed)
-                                    std.debug.print("[{f} | {}/{}] disconnected\n", .{ client.address.in, client_idx, client.id.gen })
-                                else
-                                    std.debug.print("Error reading from client {}: {}\n", .{ client_idx, err });
+                        // this socket is ready to be read, fairness is implemented in client.readMessage()
+                        client.readMessage() catch |err| {
+                            if (err == error.Closed)
+                                std.debug.print("[{f} | {}/{}] disconnected\n", .{ client.address.in, client_idx, client.id.gen })
+                            else
+                                std.debug.print("Error reading from client {}: {}\n", .{ client_idx, err });
 
-                                // removeClient will swap the last client into position i, do not increment i
-                                self.removeClient(i);
-                                break;
-                            };
-
-                            // no more messages, but this client is still connected
-                            i += 1;
-                            break;
-                        }
+                            // removeClient will swap the last client into position i, do not increment i
+                            self.removeClient(i);
+                            continue; // move on to the next client
+                        };
                     } else {
                         std.debug.print("Found unexpected event ({}) in socket for client {}\n", .{ revents, client.id.index });
                     }
@@ -284,7 +277,6 @@ pub const Reactor = struct {
                 //#endregion
 
                 if (wakeup_ready) {
-
                     //#region out: responses and broadcasts
                     const latest_out_message = client.out_message_queue.tryPeek();
 

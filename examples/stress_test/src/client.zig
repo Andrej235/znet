@@ -2,8 +2,8 @@ const std = @import("std");
 const znet = @import("znet");
 const EchoContract = @import("server/echo_contract").EchoContract;
 
-const num_workers = 16;
-const benchmark_seconds = 5;
+const num_workers = 128;
+const benchmark_seconds = 0;
 const warmup_requests = 100;
 
 var running = std.atomic.Value(bool).init(true);
