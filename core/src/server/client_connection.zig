@@ -53,13 +53,12 @@ pub const ClientConnection = struct {
     pub fn deinit(self: *const ClientConnection) void {
         while (self.out_message_queue.tryPop()) |msg| {
             switch (msg.data) {
-                .single => |single| {
-                    std.debug.print("deinit client, release\n", .{});
-                    self.reactor.output_buffer_pool.release(single.buffer_idx);
-                },
+                .single => |single| self.reactor.output_buffer_pool.release(single.buffer_idx),
                 .shared => |shared| shared.release(),
             }
         }
+
+        self.reader.deinit();
 
         self.allocator.free(self.out_message_queue.buf);
         self.allocator.destroy(self.out_message_queue);

@@ -333,6 +333,8 @@ pub const Reactor = struct {
 
             //#region handlers: handle non blocking jobs
             while (self.job_queue.tryPop()) |job| {
+                // input buffer will be released in handler right after deserialization
+
                 var reader: std.Io.Reader = .fixed(job.data);
                 const headers = deserializeMessageHeaders(&reader) catch |err| {
                     std.debug.print("Failed to deserialize message headers: {}\n", .{err});
