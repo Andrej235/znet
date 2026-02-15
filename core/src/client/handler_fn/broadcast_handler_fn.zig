@@ -1,5 +1,5 @@
 const std = @import("std");
-const Client = @import("../client.zig").Client;
+const Client = @import("../client.zig").ClientInterface;
 
 pub const BroadcastHandlerFn = *const fn (
     client: *Client,

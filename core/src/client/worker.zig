@@ -3,7 +3,7 @@ const std = @import("std");
 const deserializeMessageHeaders = @import("../message_headers/deserialize_message_headers.zig").deserializeMessageHeaders;
 const BroadcastHandlerFn = @import("handler_fn/broadcast_handler_fn.zig");
 const Queue = @import("../utils/mpmc_queue.zig").Queue;
-const Client = @import("client.zig").Client;
+const Client = @import("client.zig").ClientInterface;
 
 pub const Worker = struct {
     allocator: std.mem.Allocator,

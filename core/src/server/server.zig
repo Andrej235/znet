@@ -16,7 +16,7 @@ pub const ShutdownState = enum(u8) {
 };
 
 pub const Server = struct {
-    pub const call_table = createCallTable();
+    call_table: []const []const HandlerFn = undefined,
 
     options: ServerOptions,
     allocator: std.mem.Allocator,
@@ -24,12 +24,14 @@ pub const Server = struct {
     reactors: []ReactorHandle,
     shutdown_state: std.atomic.Value(ShutdownState),
 
-    pub fn init(allocator: std.mem.Allocator, comptime options: ServerOptions) !*Server {
+    pub fn run(allocator: std.mem.Allocator, comptime options: ServerOptions, comptime TSchema: type, address: net.Address) !*Server {
         const reactor_count = 1;
         const reactors = try allocator.alloc(ReactorHandle, reactor_count);
 
         const self = try allocator.create(Server);
         self.* = .{
+            .call_table = comptime TSchema.createServerCallTable(),
+
             .options = options,
             .allocator = allocator,
 
@@ -38,12 +40,8 @@ pub const Server = struct {
             .shutdown_state = std.atomic.Value(ShutdownState).init(.running),
         };
 
-        return self;
-    }
-
-    pub fn run(self: *Server, address: net.Address) !void {
         for (self.reactors, 0..) |*reactor, idx| {
-            const handle = try Reactor.init(
+            const handle = try Reactor(TSchema).init(
                 self.allocator,
                 address,
                 &self.shutdown_state,
@@ -54,6 +52,10 @@ pub const Server = struct {
             reactor.* = handle;
         }
 
+        return self;
+    }
+
+    pub fn wait(self: *Server) void {
         for (self.reactors) |*reactor| {
             reactor.thread.join(); // this will only end once all threads have shut down
         }

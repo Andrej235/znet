@@ -1,5 +1,5 @@
 const std = @import("std");
-const zNet = @import("zNet");
+const zNet = @import("znet");
 const testing = std.testing;
 
 fn forceRuntimeTuple(comptime tuple: anytype) StripComptimeFromTupleType(@TypeOf(tuple)) {

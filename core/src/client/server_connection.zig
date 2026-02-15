@@ -1,7 +1,7 @@
 const std = @import("std");
 const posix = std.posix;
 
-const Client = @import("client.zig").Client;
+const Client = @import("client.zig").ClientInterface;
 
 const Queue = @import("../utils/spsc_queue.zig").Queue;
 const Job = @import("./inbound_message.zig").InboundMessage;

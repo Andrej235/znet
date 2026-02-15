@@ -1,11 +1,9 @@
 const std = @import("std");
 const RequestHeaders = @import("../../message_headers/request_headers.zig").RequestHeaders;
-const Reactor = @import("../reactor.zig").Reactor;
+const ReactorContext = @import("../reactor.zig").ReactorContext;
 
 pub const HandlerFn = *const fn (
-    allocator: std.mem.Allocator,
-    reactor: *Reactor,
-    initiated_by_connection_id: u32,
+    context: ReactorContext,
     request_headers: RequestHeaders,
     input_reader: *std.Io.Reader,
     output_writer: *std.Io.Writer,

@@ -31,7 +31,7 @@ pub fn build(b: *std.Build) void {
                 },
             ),
         });
-        test_exe.root_module.addImport("zNet", znet_module);
+        test_exe.root_module.addImport("znet", znet_module);
         test_step.dependOn(&b.addRunArtifact(test_exe).step);
     }
 }

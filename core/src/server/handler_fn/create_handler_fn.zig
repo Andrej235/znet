@@ -6,7 +6,7 @@ const Deserializer = @import("../../serializer/deserializer.zig").Deserializer;
 const Serializer = @import("../../serializer/serializer.zig").Serializer;
 const CountingSerializer = @import("../../serializer/counting_serializer.zig").Serializer;
 const HandlerFn = @import("handler_fn.zig").HandlerFn;
-const Reactor = @import("../reactor.zig").Reactor;
+const ReactorContext = @import("../reactor.zig").ReactorContext;
 
 const Context = @import("../context/context.zig").Context;
 const Clients = @import("../context/clients.zig").Clients;
@@ -42,33 +42,31 @@ pub fn createHandlerFn(comptime fn_impl: anytype) HandlerFn {
 
     return struct {
         fn handler(
-            allocator: std.mem.Allocator,
-            reactor: *Reactor,
-            initiated_by_connection_id: u32,
+            context: ReactorContext,
             request_headers: RequestHeaders,
             input_reader: *std.Io.Reader,
             output_writer: *std.Io.Writer,
             input_buffer_idx: u32,
         ) anyerror!void {
-            var deserializer = Deserializer.init(allocator);
+            var deserializer = Deserializer.init(context.allocator);
             const payload: TPayload = deserializer.deserialize(input_reader, TPayload) catch |err| {
-                reactor.input_buffer_pool.release(input_buffer_idx);
+                context.input_buffer_pool.release(input_buffer_idx);
                 return err;
             };
-            reactor.input_buffer_pool.release(input_buffer_idx);
+            context.input_buffer_pool.release(input_buffer_idx);
 
             const params: TParams = blk: {
                 if (!inject_context) break :blk payload;
 
-                const ctx = try allocator.create(Context);
+                const ctx = try context.allocator.create(Context);
                 ctx.* = Context{
-                    .allocator = allocator,
+                    .allocator = context.allocator,
                     .clients = .{
-                        .allocator = allocator,
-                        .client_connections = reactor.clients,
-                        .connected_clients = reactor.poll_to_client[0..reactor.connected],
-                        .sender_id = initiated_by_connection_id,
-                        .wakeup_fd = reactor.wakeup_fd,
+                        .allocator = context.allocator,
+                        .client_connections = context.client_connections,
+                        .connected_clients = context.connected_clients,
+                        .sender_id = context.initiated_by_connection_id,
+                        .wakeup_fd = context.wakeup_fd,
                     },
                 };
 
@@ -100,7 +98,7 @@ pub fn createHandlerFn(comptime fn_impl: anytype) HandlerFn {
 
             // payload MUST be destroyed AFTER output serialization is complete in case pointers from payload are used in output
             try deserializer.destroy(payload);
-            if (inject_context) allocator.destroy(params.@"0"); // context must be destroyed explicitly to avoid deserializer trying to load in all its fields
+            if (inject_context) context.allocator.destroy(params.@"0"); // context must be destroyed explicitly to avoid deserializer trying to load in all its fields
         }
     }.handler;
 }

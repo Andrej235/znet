@@ -26,7 +26,7 @@ const BufferPool = @import("../utils/buffer_pool.zig").BufferPool;
 
 const app_version: u8 = @import("../app_version.zig").app_version;
 
-pub const Client = struct {
+pub const ClientInterface = struct {
     pub const call_table = createCallTable();
 
     options: ClientOptions = .{},
@@ -43,7 +43,7 @@ pub const Client = struct {
     outbound_buffer: []OutboundMessage,
     outbound_queue: *Queue(OutboundMessage),
 
-    pub fn init(allocator: std.mem.Allocator, comptime options: ClientOptions) !*Client {
+    pub fn init(allocator: std.mem.Allocator, comptime options: ClientOptions) !*ClientInterface {
         const outbound_buffer = try allocator.alloc(OutboundMessage, options.max_outbound_messages);
         const outbound_queue = try allocator.create(Queue(OutboundMessage));
         outbound_queue.* = try Queue(OutboundMessage).init(outbound_buffer);
@@ -58,8 +58,8 @@ pub const Client = struct {
 
         const server_connection = try allocator.create(ServerConnection);
 
-        const self = try allocator.create(Client);
-        self.* = Client{
+        const self = try allocator.create(ClientInterface);
+        self.* = ClientInterface{
             .options = options,
             .allocator = allocator,
 
@@ -86,7 +86,7 @@ pub const Client = struct {
         return self;
     }
 
-    pub fn deinit(self: *Client) !void {
+    pub fn deinit(self: *ClientInterface) !void {
         try self.disconnect();
 
         self.server_connection.deinit();
@@ -108,7 +108,7 @@ pub const Client = struct {
         self.allocator.destroy(self);
     }
 
-    pub fn connect(self: *Client, address: std.net.Address) !void {
+    pub fn connect(self: *ClientInterface, address: std.net.Address) !void {
         try self.server_connection.connect(address);
 
         // todo: reimplement for broadcasts only
@@ -122,7 +122,7 @@ pub const Client = struct {
         // }
     }
 
-    pub fn disconnect(self: *Client) !void {
+    pub fn disconnect(self: *ClientInterface) !void {
         try self.server_connection.disconnect();
 
         // self.inbound_queue.close();
@@ -133,11 +133,7 @@ pub const Client = struct {
         try self.pending_requests_map.clear();
     }
 
-    pub fn fetch(self: *Client, method: anytype, args: MethodTupleArg(method)) anyerror!Promise(MethodReturnType(method)) {
-        const ids = comptime getMethodId(method);
-        const contract_id: u16 = ids.contract_id;
-        const method_id: u16 = ids.method_id;
-
+    pub fn fetch(self: *ClientInterface, contract_id: u16, method_id: u16, method: anytype, args: MethodTupleArg(method)) anyerror!Promise(MethodReturnType(method)) {
         const TResponse = MethodReturnType(method);
         const TPromise = Promise(TResponse);
 
@@ -176,6 +172,48 @@ pub const Client = struct {
     }
 };
 
+pub fn Client(comptime TSchema: type) type {
+    return struct {
+        const Self = @This();
+
+        interface: *ClientInterface,
+
+        pub fn init(allocator: std.mem.Allocator, comptime options: ClientOptions) !Self {
+            const interface = try ClientInterface.init(allocator, options);
+
+            return Self{
+                .interface = interface,
+            };
+        }
+
+        pub fn connect(self: *const Self, address: std.net.Address) !void {
+            try self.interface.connect(address);
+        }
+
+        pub fn disconnect(self: *const Self) !void {
+            try self.interface.disconnect();
+        }
+
+        pub fn fetch(self: *const Self, method: anytype, args: MethodTupleArg(method)) anyerror!Promise(MethodReturnType(method)) {
+            const method_id = getMethodId(method);
+            return self.interface.fetch(method_id.contract_id, method_id.method_id, method, args);
+        }
+
+        fn getMethodId(comptime method: anytype) struct { contract_id: u16, method_id: u16 } {
+            inline for (TSchema.server_contracts, 0..) |TContract, contract_id| {
+                inline for (@typeInfo(TContract).@"struct".decls, 0..) |decl, method_id| {
+                    const m = @field(TContract, decl.name);
+                    if (@TypeOf(m) == @TypeOf(method) and m == method) {
+                        return .{ .contract_id = contract_id, .method_id = method_id };
+                    }
+                }
+            }
+
+            @compileError("Method not found in any of the registered contracts");
+        }
+    };
+}
+
 pub fn createCallTable() []const []const BroadcastHandlerFn {
     return comptime blk: {
         var call_table: []const []const BroadcastHandlerFn = &.{};
@@ -198,19 +236,6 @@ pub fn createCallTable() []const []const BroadcastHandlerFn {
 
         break :blk call_table;
     };
-}
-
-fn getMethodId(comptime method: anytype) struct { contract_id: u16, method_id: u16 } {
-    inline for (@import("znet_contract_registry").server_contracts, 0..) |TContract, contract_id| {
-        inline for (@typeInfo(TContract).@"struct".decls, 0..) |decl, method_id| {
-            const m = @field(TContract, decl.name);
-            if (@TypeOf(m) == @TypeOf(method) and m == method) {
-                return .{ .contract_id = contract_id, .method_id = method_id };
-            }
-        }
-    }
-
-    @compileError("Method not found in any of the registered contracts");
 }
 
 fn MethodTupleArg(comptime method: anytype) type {

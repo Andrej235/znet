@@ -1,7 +1,7 @@
 const std = @import("std");
 const Deserializer = @import("../serializer/deserializer.zig").Deserializer;
 const DeserializationErrors = @import("../serializer/errors.zig").DeserializationErrors;
-const Client = @import("client.zig").Client;
+const Client = @import("client.zig").ClientInterface;
 const deserializeMessageHeaders = @import("../message_headers/deserialize_message_headers.zig").deserializeMessageHeaders;
 
 const State = enum(u8) {

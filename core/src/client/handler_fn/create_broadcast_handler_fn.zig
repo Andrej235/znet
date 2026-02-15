@@ -1,6 +1,6 @@
 const std = @import("std");
 const BroadcastHandlerFn = @import("./broadcast_handler_fn.zig").BroadcastHandlerFn;
-const Client = @import("../client.zig").Client;
+const Client = @import("../client.zig").ClientInterface;
 const Deserializer = @import("../../serializer/deserializer.zig").Deserializer;
 
 pub fn createBroadcastHandlerFn(comptime fn_impl: anytype) BroadcastHandlerFn {

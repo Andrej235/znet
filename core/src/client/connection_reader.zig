@@ -1,7 +1,7 @@
 const std = @import("std");
 const posix = std.posix;
 
-const Client = @import("client.zig").Client;
+const Client = @import("client.zig").ClientInterface;
 const MessageReadResult = @import("./message_read_result.zig").MessageReadResult;
 
 const MessageHeadersByteSize = @import("../message_headers/message_headers.zig").HeadersByteSize;

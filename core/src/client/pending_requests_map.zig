@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const PendingRequest = @import("pending_request.zig").PendingRequest;
-const Client = @import("client.zig").Client;
+const Client = @import("client.zig").ClientInterface;
 
 pub const PendingRequestsMap = struct {
     allocator: std.mem.Allocator,

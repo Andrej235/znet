@@ -21,7 +21,7 @@ pub fn setupZnet(b: *std.Build, options: BuildOptions) !void {
             .root_source_file = b.path(options.client_main),
             .target = options.target,
             .optimize = options.optimize,
-        }),
+        }), 
     });
 
     b.installArtifact(client_exe);

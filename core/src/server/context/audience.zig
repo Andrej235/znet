@@ -8,7 +8,7 @@ const serializeHeaders = @import("../../message_headers/serialize_message_header
 const Serializer = @import("../../serializer/serializer.zig").Serializer;
 const CountingSerializer = @import("../../serializer/counting_serializer.zig").Serializer;
 
-const Client = @import("../../client//client.zig").Client;
+const Client = @import("../../client//client.zig").ClientInterface;
 
 const app_version = @import("../../app_version.zig").app_version;
 
