@@ -261,10 +261,14 @@ pub const Reactor = struct {
                     if (revents & posix.POLL.IN == posix.POLL.IN) {
                         // this socket is ready to be read, fairness is implemented in client.readMessage()
                         client.readMessage() catch |err| {
-                            if (err == error.Closed)
-                                std.debug.print("[{f} | {}/{}] disconnected\n", .{ client.address.in, client_idx, client.id.gen })
-                            else
-                                std.debug.print("Error reading from client {}: {}\n", .{ client_idx, err });
+                            switch (err) {
+                                error.Closed, error.ConnectionResetByPeer => {
+                                    std.debug.print("[{f} | {}/{}] disconnected\n", .{ client.address.in, client_idx, client.id.gen });
+                                },
+                                else => {
+                                    std.debug.print("Error reading from client {}: {}\n", .{ client_idx, err });
+                                },
+                            }
 
                             // removeClient will swap the last client into position i, do not increment i
                             self.removeClient(i);
