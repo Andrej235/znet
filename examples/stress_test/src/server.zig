@@ -14,16 +14,16 @@ pub fn main() !void {
 
     const address = try std.net.Address.parseIp("127.0.0.1", 5000);
 
-    const server = try znet.Server.run(
+    const server = try znet.Server(Schema).init(
         std.heap.smp_allocator,
         .{
             .max_clients = 128,
             .client_read_buffer_size = 4096,
             .job_result_buffer_size = 4096,
         },
-        Schema,
-        address,
     );
+
+    try server.run(address);
 
     var stdin_buf: [1024]u8 = undefined;
     var stdin_reader = std.fs.File.stdin().reader(&stdin_buf);

@@ -10,7 +10,7 @@ const ServerOptions = @import("server_options.zig").ServerOptions;
 const OutMessage = @import("out_message.zig").OutMessage;
 const deserializeMessageHeaders = @import("../message_headers/deserialize_message_headers.zig").deserializeMessageHeaders;
 const MessageHeadersByteSize = @import("../message_headers/message_headers.zig").HeadersByteSize;
-const ShutdownState = @import("server.zig").ShutdownState;
+const ShutdownState = @import("server.zig").ServerState;
 
 pub const ReactorHandle = struct {
     wakeup_fd: i32,
