@@ -25,7 +25,7 @@ pub const Server = struct {
     shutdown_state: std.atomic.Value(ShutdownState),
 
     pub fn run(allocator: std.mem.Allocator, comptime options: ServerOptions, comptime TSchema: type, address: net.Address) !*Server {
-        const reactor_count = 1;
+        const reactor_count = 8;
         const reactors = try allocator.alloc(ReactorHandle, reactor_count);
 
         const self = try allocator.create(Server);

@@ -1,6 +1,7 @@
 const std = @import("std");
 const znet = @import("znet");
-const EchoContract = @import("server/echo_contract").EchoContract;
+const Schema = @import("schema.zig").Schema;
+const EchoContract = @import("schema.zig").EchoContract;
 
 const num_workers = 16;
 const benchmark_seconds = 5;
@@ -54,7 +55,7 @@ fn worker() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .thread_safe = true }){};
     defer _ = gpa.deinit();
 
-    var client = try znet.Client.init(std.heap.smp_allocator, .{ .worker_thread_count = 1 });
+    var client = try znet.Client(Schema).init(std.heap.smp_allocator, .{ .worker_thread_count = 1 });
     defer client.deinit() catch {};
 
     const address = try std.net.Address.parseIp("127.0.0.1", 5000);

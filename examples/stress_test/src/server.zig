@@ -1,10 +1,9 @@
 const std = @import("std");
 const znet = @import("znet");
-
-var gpa = std.heap.GeneralPurposeAllocator(.{ .thread_safe = true }){};
-var server: *znet.Server = undefined;
+const Schema = @import("schema.zig").Schema;
 
 pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{ .thread_safe = true }){};
     defer {
         if (gpa.deinit() == .leak) {
             std.debug.print("MEMORY LEAK DETECTED\n", .{});
@@ -13,19 +12,19 @@ pub fn main() !void {
         }
     }
 
-    server = try znet.Server.init(std.heap.smp_allocator, .{
-        .max_clients = 128,
-        .client_read_buffer_size = 4096,
-        .job_result_buffer_size = 4096,
-    });
-
-    _ = try std.Thread.spawn(.{}, listenerThread, .{});
-
     const address = try std.net.Address.parseIp("127.0.0.1", 5000);
-    try server.run(address);
-}
 
-pub fn listenerThread() !void {
+    const server = try znet.Server.run(
+        std.heap.smp_allocator,
+        .{
+            .max_clients = 128,
+            .client_read_buffer_size = 4096,
+            .job_result_buffer_size = 4096,
+        },
+        Schema,
+        address,
+    );
+
     var stdin_buf: [1024]u8 = undefined;
     var stdin_reader = std.fs.File.stdin().reader(&stdin_buf);
     var reader = &stdin_reader.interface;

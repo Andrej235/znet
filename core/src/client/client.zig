@@ -186,6 +186,10 @@ pub fn Client(comptime TSchema: type) type {
             };
         }
 
+        pub fn deinit(self: *Self) !void {
+            try self.interface.deinit();
+        }
+
         pub fn connect(self: *const Self, address: std.net.Address) !void {
             try self.interface.connect(address);
         }
