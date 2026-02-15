@@ -9,7 +9,7 @@ const createHandlerFn = @import("handler_fn/create_handler_fn.zig").createHandle
 const Reactor = @import("reactor.zig").Reactor;
 const ReactorHandle = @import("reactor.zig").ReactorHandle;
 
-pub const ServerState = enum(u8) {
+pub const ShutdownState = enum(u8) {
     running,
     graceful,
     immediate,
@@ -25,11 +25,12 @@ const ServerInterface = struct {
     allocator: std.mem.Allocator,
 
     reactors: []ReactorHandle,
-    server_state: std.atomic.Value(ServerState),
+    shutdown_state: std.atomic.Value(ShutdownState),
+
+    reactors_ready_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
     pub fn init(allocator: std.mem.Allocator, comptime options: ServerOptions) !*ServerInterface {
-        const reactor_count = 2;
-        const reactors = try allocator.alloc(ReactorHandle, reactor_count);
+        const reactors = try allocator.alloc(ReactorHandle, options.reactor_thread_count);
 
         const self = try allocator.create(ServerInterface);
         self.* = .{
@@ -38,7 +39,7 @@ const ServerInterface = struct {
 
             .reactors = reactors,
 
-            .server_state = std.atomic.Value(ServerState).init(.running),
+            .shutdown_state = std.atomic.Value(ShutdownState).init(.running),
         };
 
         return self;
@@ -49,12 +50,17 @@ const ServerInterface = struct {
             const handle = try Reactor(TSchema).init(
                 self.allocator,
                 address,
-                &self.server_state,
+                &self.shutdown_state,
                 idx,
                 self.options,
+                &self.reactors_ready_count,
             );
 
             reactor.* = handle;
+        }
+
+        while (self.reactors_ready_count.load(.acquire) < self.options.reactor_thread_count) {
+            std.atomic.spinLoopHint();
         }
     }
 
@@ -65,7 +71,7 @@ const ServerInterface = struct {
     }
 
     pub fn deinit(self: *ServerInterface) DeinitError!void {
-        if (self.server_state.load(.acquire) == ServerState.running) {
+        if (self.shutdown_state.load(.acquire) == ShutdownState.running) {
             return DeinitError.ServerStillRunning;
         }
 
@@ -74,11 +80,11 @@ const ServerInterface = struct {
     }
 
     pub fn shutdown(self: *ServerInterface, mode: ShutdownMode) ShutdownError!void {
-        if (self.server_state.load(.acquire) != ServerState.running) {
+        if (self.shutdown_state.load(.acquire) != ShutdownState.running) {
             return ShutdownError.ServerNotRunning;
         }
 
-        self.server_state.store(if (mode == ShutdownMode.immediate) ServerState.immediate else ServerState.graceful, .release);
+        self.shutdown_state.store(if (mode == ShutdownMode.immediate) ShutdownState.immediate else ShutdownState.graceful, .release);
 
         for (self.reactors) |reactor| {
             _ = posix.write(reactor.wakeup_fd, std.mem.asBytes(&@as(u64, 1))) catch return ShutdownError.FailedToWakeReactor;
@@ -100,7 +106,7 @@ pub fn Server(comptime TSchema: type) type {
             };
         }
 
-        pub fn run(self: *const Self, address: net.Address) !void {
+        pub inline fn run(self: *const Self, address: net.Address) !void {
             try self.interface.run(TSchema, address);
         }
 
@@ -108,11 +114,11 @@ pub fn Server(comptime TSchema: type) type {
             self.interface.join();
         }
 
-        pub fn deinit(self: *const Self) DeinitError!void {
+        pub inline fn deinit(self: *const Self) DeinitError!void {
             try self.interface.deinit();
         }
 
-        pub fn shutdown(self: *const Self, mode: ShutdownMode) ShutdownError!void {
+        pub inline fn shutdown(self: *const Self, mode: ShutdownMode) ShutdownError!void {
             try self.interface.shutdown(mode);
         }
     };

@@ -14,19 +14,25 @@ const Schema = znet.Schema(.{
 });
 
 test "echo" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+
     const address = try std.net.Address.parseIp("127.0.0.1", 5000);
-    const server = try znet.Server.run(std.heap.page_allocator, .{}, Schema, address);
+    const server = try znet.Server(Schema).init(gpa.allocator(), .{});
+    try server.run(address);
 
-    std.Thread.sleep(1_000_000); // todo: make server.run block until all threads are ready
-
-    const client = try znet.Client(Schema).init(std.heap.page_allocator, .{});
+    var client = try znet.Client(Schema).init(gpa.allocator(), .{});
     try client.connect(address);
 
     var promise = try client.fetch(EchoContract.echo, .{"Hello, world!"});
     const res = try promise.await(.release);
     std.debug.print("{s}\n", .{res});
-    try client.disconnect();
 
-    std.Thread.sleep(1_000_000);
-    try server.stop();
+    promise.destroy(res);
+    try client.disconnect();
+    try client.deinit();
+
+    try server.shutdown(.immediate);
+    server.join();
+    try server.deinit();
 }

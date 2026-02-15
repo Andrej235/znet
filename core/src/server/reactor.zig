@@ -10,7 +10,7 @@ const ServerOptions = @import("server_options.zig").ServerOptions;
 const OutMessage = @import("out_message.zig").OutMessage;
 const deserializeMessageHeaders = @import("../message_headers/deserialize_message_headers.zig").deserializeMessageHeaders;
 const MessageHeadersByteSize = @import("../message_headers/message_headers.zig").HeadersByteSize;
-const ShutdownState = @import("server.zig").ServerState;
+const ShutdownState = @import("server.zig").ShutdownState;
 
 pub const ReactorHandle = struct {
     wakeup_fd: i32,
@@ -79,6 +79,7 @@ pub fn Reactor(comptime TSchema: type) type {
             shutdown_state: *std.atomic.Value(ShutdownState),
             core_id: usize,
             options: ServerOptions,
+            ready_count: *std.atomic.Value(u32),
         ) !ReactorHandle {
             const wakeup_fd = try posix.eventfd(0, posix.SOCK.NONBLOCK);
 
@@ -89,6 +90,7 @@ pub fn Reactor(comptime TSchema: type) type {
                 wakeup_fd,
                 core_id,
                 options,
+                ready_count,
             });
 
             return .{
@@ -130,6 +132,7 @@ pub fn Reactor(comptime TSchema: type) type {
             wakeup_fd: posix.fd_t,
             core_id: usize,
             options: ServerOptions,
+            ready_count: *std.atomic.Value(u32),
         ) !void {
             const linux = std.os.linux;
             var mask: [16]u64 = .{0} ** 16;
@@ -217,10 +220,10 @@ pub fn Reactor(comptime TSchema: type) type {
                 .current_output_buffer_idx = null,
             };
 
-            try self.run(address);
+            try self.run(address, ready_count);
         }
 
-        fn run(self: *Self, address: std.net.Address) !void {
+        fn run(self: *Self, address: std.net.Address, ready_count: *std.atomic.Value(u32)) !void {
             std.debug.print("run reactor thread {}\n", .{std.Thread.getCurrentId()});
 
             const socket_type: u32 = posix.SOCK.STREAM | posix.SOCK.NONBLOCK;
@@ -246,6 +249,8 @@ pub fn Reactor(comptime TSchema: type) type {
                 .revents = 0,
                 .events = posix.POLL.IN,
             };
+
+            _ = ready_count.fetchAdd(1, .release);
 
             while (true) {
                 // +2 is for the listening socket and the wakeup fd, infinite/no timeout
@@ -448,7 +453,13 @@ pub fn Reactor(comptime TSchema: type) type {
                     else => return err,
                 };
 
-                const client_id = self.popIndex();
+                const idx = self.popIndex();
+                if (idx == null) {
+                    posix.close(socket); // todo: send a "server full" message before closing the connection
+                    std.debug.print("Max clients reached, rejecting connection from {f}\n", .{address.in});
+                    return;
+                }
+                const client_id = idx.?;
                 std.debug.print("[{f}] connected as {} (gen {})\n", .{ address.in, client_id.index, client_id.gen });
 
                 const out_message_buf = try self.allocator.alloc(OutMessage, self.options.client_out_message_queue_size);
@@ -494,11 +505,9 @@ pub fn Reactor(comptime TSchema: type) type {
             self.free_count += 1;
         }
 
-        fn popIndex(self: *Self) ConnectionId {
+        fn popIndex(self: *Self) ?ConnectionId {
             if (self.free_count == 0) {
-                // this should never happen because we limit the number of clients to max_clients
-                @branchHint(.cold);
-                @panic("no free connection indices");
+                return null; // max clients reached
             }
 
             self.free_count -= 1;

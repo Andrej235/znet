@@ -87,7 +87,9 @@ pub const ClientInterface = struct {
     }
 
     pub fn deinit(self: *ClientInterface) !void {
-        try self.disconnect();
+        if (self.server_connection.connected.load(.acquire)) {
+            return error.StillConnected;
+        }
 
         self.server_connection.deinit();
 
@@ -108,7 +110,7 @@ pub const ClientInterface = struct {
         self.allocator.destroy(self);
     }
 
-    pub fn connect(self: *ClientInterface, address: std.net.Address) !void {
+    pub fn connect(self: *ClientInterface, address: std.net.Address) ServerConnection.ConnectError!void {
         try self.server_connection.connect(address);
 
         // todo: reimplement for broadcasts only
@@ -190,7 +192,7 @@ pub fn Client(comptime TSchema: type) type {
             try self.interface.deinit();
         }
 
-        pub fn connect(self: *const Self, address: std.net.Address) !void {
+        pub fn connect(self: *const Self, address: std.net.Address) ServerConnection.ConnectError!void {
             try self.interface.connect(address);
         }
 

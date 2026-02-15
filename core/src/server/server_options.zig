@@ -8,4 +8,5 @@ pub const ServerOptions = struct {
     client_out_message_queue_size: usize = 8,
     max_read_per_tick: usize = 32 * 1024,
     max_write_per_tick: usize = 32 * 1024,
+    reactor_thread_count: u32 = 2,
 };

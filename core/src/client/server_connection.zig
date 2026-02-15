@@ -47,14 +47,16 @@ pub const ServerConnection = struct {
         self.allocator.free(self.polls);
     }
 
-    pub fn connect(self: *ServerConnection, address: std.net.Address) !void {
-        self.connection_socket = try posix.socket(
+    pub fn connect(self: *ServerConnection, address: std.net.Address) ConnectError!void {
+        self.connection_socket = posix.socket(
             address.any.family,
             posix.SOCK.STREAM | posix.SOCK.NONBLOCK,
             posix.IPPROTO.TCP,
-        );
+        ) catch |err|
+            @panic(std.fmt.allocPrint(self.allocator, "Failed to obtain socket: {}", .{err}) catch unreachable);
 
-        self.wakeup_fd = try posix.eventfd(0, posix.SOCK.NONBLOCK);
+        self.wakeup_fd = posix.eventfd(0, posix.SOCK.NONBLOCK) catch |err|
+            @panic(std.fmt.allocPrint(self.allocator, "Failed to obtain wakeup fd: {}", .{err}) catch unreachable);
 
         self.polls[0] = .{
             .fd = self.connection_socket,
@@ -68,18 +70,19 @@ pub const ServerConnection = struct {
             .revents = 0,
         };
 
-        _ = try posix.poll(self.polls, -1);
+        _ = posix.poll(self.polls, -1) catch return ConnectError.PollFailed;
         while (true) {
             posix.connect(self.connection_socket, &address.any, address.getOsSockLen()) catch |err| switch (err) {
                 error.WouldBlock => continue,
-                else => return err,
+                error.ConnectionRefused => return ConnectError.ConnectionRefused,
+                else => @panic(std.fmt.allocPrint(self.allocator, "Failed to connect to server: {}", .{err}) catch unreachable),
             };
             break;
         }
 
         self.connected.store(true, .release);
 
-        self.network_thread = try std.Thread.spawn(.{}, networkThread, .{self});
+        self.network_thread = std.Thread.spawn(.{}, networkThread, .{self}) catch return ConnectError.FailedToSpawnThread;
     }
 
     pub fn disconnect(self: *ServerConnection) !void {
@@ -155,4 +158,10 @@ pub const ServerConnection = struct {
             }
         }
     }
+
+    pub const ConnectError = error{
+        ConnectionRefused,
+        FailedToSpawnThread,
+        PollFailed,
+    };
 };
