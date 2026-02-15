@@ -70,8 +70,8 @@ pub fn Reactor(comptime TSchema: type) type {
 
         job_queue: *Queue(Job),
 
-        current_buffer: []u8, // only valid if current_buffer_idx != null
-        current_buffer_idx: ?u32,
+        current_output_buffer: []u8, // only valid if current_output_buffer_idx != null
+        current_output_buffer_idx: ?u32,
 
         pub fn init(
             allocator: std.mem.Allocator,
@@ -213,8 +213,8 @@ pub fn Reactor(comptime TSchema: type) type {
                 .input_buffer_pool = input_buffer_pool,
                 .output_buffer_pool = output_buffer_pool,
 
-                .current_buffer = undefined,
-                .current_buffer_idx = null,
+                .current_output_buffer = undefined,
+                .current_output_buffer_idx = null,
             };
 
             try self.run(address);
@@ -341,13 +341,16 @@ pub fn Reactor(comptime TSchema: type) type {
                 }
 
                 //#region handlers: handle non blocking jobs
-                while (self.job_queue.tryPop()) |job| {
-                    // input buffer will be released in handler right after deserialization
+                while (self.job_queue.tryPeek()) |job| {
+                    // input buffer will be released in handler right after deserialization or in the first point of failure
 
                     var reader: std.Io.Reader = .fixed(job.data);
                     const headers = deserializeMessageHeaders(&reader) catch |err| {
-                        std.debug.print("Failed to deserialize message headers: {}\n", .{err});
+                        // invalid message, release the buffer and move on to the next job. No need to send an error response since we can't even be sure if the client sent a valid request or not
+                        _ = self.job_queue.tryPop();
                         self.input_buffer_pool.release(job.buffer_idx);
+
+                        std.debug.print("Failed to deserialize message headers: {}\n", .{err});
                         continue;
                     };
 
@@ -356,26 +359,29 @@ pub fn Reactor(comptime TSchema: type) type {
 
                     const client = &self.clients[job.client_id.index];
                     if (client.id.gen != job.client_id.gen) {
-                        std.debug.print("Client gen mismatch: expected {}, got {}\n", .{ client.id.gen, job.client_id.gen });
+                        // job was meant for a previous generation of the client, just release the buffer there is no point in processing it
+                        _ = self.job_queue.tryPop();
                         self.input_buffer_pool.release(job.buffer_idx);
+
+                        std.debug.print("Client gen mismatch: expected {}, got {}\n", .{ client.id.gen, job.client_id.gen });
                         continue;
                     }
 
-                    if (self.current_buffer_idx == null) {
-                        // todo: handle output buffer exhaustion more gracefully, right now we just drop the message, which will cause the client to wait indefinitely until it hits a timeout
+                    // acquire a new output buffer
+                    if (self.current_output_buffer_idx == null) {
                         const buffer_idx = self.output_buffer_pool.acquire() orelse {
-                            self.input_buffer_pool.release(job.buffer_idx);
-                            continue;
+                            // no output buffers available, can't process any jobs yet. Don't consume anything
+                            break;
                         };
 
-                        self.current_buffer_idx = buffer_idx;
-                        self.current_buffer = self.output_buffer_pool.buffer(buffer_idx);
+                        self.current_output_buffer_idx = buffer_idx;
+                        self.current_output_buffer = self.output_buffer_pool.buffer(buffer_idx);
                     }
 
                     const handler = call_table[req_header.contract_id][req_header.method_id];
 
-                    var writer: std.Io.Writer = .fixed(self.current_buffer);
-                    try handler(
+                    var writer: std.Io.Writer = .fixed(self.current_output_buffer);
+                    handler(
                         ReactorContext{
                             .allocator = self.allocator,
                             .input_buffer_pool = self.input_buffer_pool,
@@ -388,24 +394,39 @@ pub fn Reactor(comptime TSchema: type) type {
                         &reader,
                         &writer,
                         job.buffer_idx,
-                    );
+                    ) catch |err| {
+                        // handlers release the input buffer regardless of success or failure, so we don't need to release it here, just pop the job to consume it
+                        // keep the current output buffer avoid just re-acquiring it in the next iteration
+                        _ = self.job_queue.tryPop();
 
-                    const response_payload_len = std.mem.readInt(u32, self.current_buffer[MessageHeadersByteSize.Response - 4 .. MessageHeadersByteSize.Response], .big);
-                    const response_data = self.current_buffer[0 .. MessageHeadersByteSize.Response + response_payload_len];
+                        std.debug.print("Handler failed with error: {}\n", .{err});
+                        continue;
+                    };
+
+                    const response_payload_len = std.mem.readInt(u32, self.current_output_buffer[MessageHeadersByteSize.Response - 4 .. MessageHeadersByteSize.Response], .big);
+                    const response_data = self.current_output_buffer[0 .. MessageHeadersByteSize.Response + response_payload_len];
 
                     // response_data will be freed by the reactor thread after sending
-                    try client.enqueueMessage(OutMessage{
+                    client.enqueueMessage(OutMessage{
                         .offset = 0,
                         .data = .{
                             .single = .{
                                 .data = response_data,
-                                .buffer_idx = self.current_buffer_idx.?,
+                                .buffer_idx = self.current_output_buffer_idx.?,
                             },
                         },
-                    });
+                    }) catch |err| {
+                        // either the client's response is full or we failed to wake up the reactor
+                        // in either case we can't really do anything about it, so just consume the job, input buffer was released in the handler
+                        // keep the current output buffer avoid just re-acquiring it in the next iteration
+                        _ = self.job_queue.tryPop();
 
-                    self.current_buffer_idx = null; // released in reactor thread, set to null here to indicate that we don't have a current buffer anymore
+                        std.debug.print("Failed to enqueue message: {}\n", .{err});
+                        continue;
+                    };
 
+                    _ = self.job_queue.tryPop(); // consume the job after successfully enqueuing the message
+                    self.current_output_buffer_idx = null; // released in reactor thread, set to null here to indicate that we don't have a current buffer anymore
                 }
                 //#endregion
 
