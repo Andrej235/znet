@@ -74,7 +74,7 @@ pub const ServerConnection = struct {
         while (true) {
             posix.connect(self.connection_socket, &address.any, address.getOsSockLen()) catch |err| switch (err) {
                 error.WouldBlock => continue,
-                error.ConnectionRefused => return ConnectError.ConnectionRefused,
+                error.ConnectionRefused, error.ConnectionResetByPeer => return ConnectError.ConnectionRefused,
                 else => @panic(std.fmt.allocPrint(self.allocator, "Failed to connect to server: {}", .{err}) catch unreachable),
             };
             break;
@@ -95,13 +95,19 @@ pub const ServerConnection = struct {
         posix.close(self.wakeup_fd);
     }
 
-    pub fn readMessage(self: *ServerConnection) ?MessageReadResult {
+    fn forceDisconnectNoWait(self: *ServerConnection) void {
+        self.connected.store(false, .release);
+        _ = posix.write(self.wakeup_fd, std.mem.asBytes(&@as(u64, 1))) catch {};
+
+        posix.close(self.connection_socket);
+        posix.close(self.wakeup_fd);
+    }
+
+    pub fn readMessage(self: *ServerConnection) !?MessageReadResult {
         return self.connection_reader.readMessage(self.connection_socket) catch |err| switch (err) {
             error.WouldBlock, error.NotOpenForReading => return null,
-            else => {
-                std.debug.print("Error reading message: {}\n", .{err});
-                return null;
-            },
+            error.Closed, error.ConnectionResetByPeer => return error.Closed,
+            else => return err,
         };
     }
 
@@ -112,7 +118,20 @@ pub const ServerConnection = struct {
 
             if (self.polls[0].revents & posix.POLL.IN == posix.POLL.IN) {
                 // process inbound messages, resolve pending requests
-                if (self.readMessage()) |in_msg| {
+                const msg = self.readMessage() catch |err| {
+                    if (err == error.Closed) {
+                        std.debug.print("Connection closed by peer\n", .{});
+
+                        self.forceDisconnectNoWait();
+                        try self.client.pending_requests_map.clear();
+                        break;
+                    } else {
+                        std.debug.print("Error reading message: {}\n", .{err});
+                        continue;
+                    }
+                };
+
+                if (msg) |in_msg| {
                     var reader = std.io.Reader.fixed(in_msg.data);
                     const headers = try deserializeMessageHeaders(&reader);
 

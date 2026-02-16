@@ -15,3 +15,5 @@ pub const MessageType = @import("message_headers/message_type.zig").MessageType;
 pub const app_version: u8 = @import("app_version.zig").app_version;
 
 pub const Context = @import("server/context/context.zig").Context;
+
+pub const PendingRequest = @import("client/pending_request.zig").PendingRequest;

@@ -46,8 +46,11 @@ pub const PendingRequestsMap = struct {
         defer self.mutex.unlock();
 
         for (self.requests) |*req| {
-            if (req.state.load(.acquire) == .fulfilled)
+            if (req.state.load(.acquire) == .fulfilled) {
                 req.release();
+            } else {
+                req.reject();
+            }
         }
 
         for (self.free_request_ids, self.requests, 0..) |*id, *req, idx| {

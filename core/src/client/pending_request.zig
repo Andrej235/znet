@@ -33,6 +33,14 @@ pub const PendingRequest = struct {
         self.condition.broadcast();
     }
 
+    pub fn reject(self: *PendingRequest) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        self.state.store(.rejected, .release);
+        self.condition.broadcast();
+    }
+
     pub fn AwaitResult(comptime T: type) type {
         const info = @typeInfo(T);
         if (info != .error_union) return FetchErrors!T;
@@ -66,10 +74,14 @@ pub const PendingRequest = struct {
                     DeserializationErrors.InvalidUnionTag,
                     DeserializationErrors.OutOfMemory,
                     DeserializationErrors.UnexpectedEof,
-                    => return err,
+                    => err,
                     else => @errorCast(err),
                 };
             }
+        }
+
+        if (current_state == .rejected) {
+            return FetchErrors.FetchFailed;
         }
 
         self.mutex.lock();

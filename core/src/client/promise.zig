@@ -21,7 +21,8 @@ pub fn Promise(comptime T: type) type {
         }
 
         pub fn await(self: *Self, comptime await_mode: AwaitMode) PendingRequest.AwaitResult(T) {
-            const result = self.request.await(T);
+            const result = self.request.await(T) catch |err| return err;
+
             if (comptime await_mode == .release)
                 self.request.release();
 
