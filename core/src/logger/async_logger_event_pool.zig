@@ -108,12 +108,12 @@ fn releaseIdx(index: usize) void {
     free_index_count += 1;
 }
 
-pub fn addLog(msg: []u8) void {
-    if (msg.len > buffer_len) {
-        // message is too long, drop it
-        return;
-    }
-
+pub fn addLog(
+    comptime message_level: std.log.Level,
+    comptime scope: @TypeOf(.enum_literal),
+    comptime format: []const u8,
+    args: anytype,
+) void {
     mutex.lock();
     defer mutex.unlock();
 
@@ -122,15 +122,23 @@ pub fn addLog(msg: []u8) void {
         return;
     }
 
-    free_index_count -= 1;
-    const index = free_indices[free_index_count];
+    const index = free_indices[free_index_count - 1];
+
+    const level_txt = comptime message_level.asText();
+    const prefix2 = if (scope == .default) ": " else "(" ++ @tagName(scope) ++ "): ";
+
+    const buffer = &buffers[index];
+    const msg = std.fmt.bufPrint(buffer.data[0..], level_txt ++ prefix2 ++ format ++ "\n", args) catch {
+        // not enough space in the buffer to format the message, drop it
+        return;
+    };
 
     taken_indices[taken_tail] = index;
     taken_tail = (taken_tail + 1) % taken_indices.len;
-    taken_index_count += 1;
 
-    const buffer = &buffers[index];
-    @memcpy(buffer.data[0..msg.len], msg);
+    taken_index_count += 1;
+    free_index_count -= 1;
+
     buffer.len = msg.len;
     cond.signal();
 }

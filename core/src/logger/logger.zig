@@ -18,12 +18,7 @@ inline fn asyncLog(
 ) void {
     if (comptime !std.log.logEnabled(message_level, scope)) return;
 
-    const level_txt = comptime message_level.asText();
-    const prefix2 = if (scope == .default) ": " else "(" ++ @tagName(scope) ++ "): ";
-    var msg: [256]u8 = undefined;
-    const buf = std.fmt.bufPrint(msg[0..], level_txt ++ prefix2 ++ format ++ "\n", args) catch return;
-
-    AsyncLoggerEventPool.addLog(buf);
+    AsyncLoggerEventPool.addLog(message_level, scope, format, args);
 }
 
 const AsyncLogger = struct {
