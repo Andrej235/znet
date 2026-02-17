@@ -2,7 +2,13 @@ const std = @import("std");
 const znet = @import("znet");
 const Schema = @import("schema.zig").Schema;
 
+pub const znet_options: znet.Options = .{
+    .logger_type = .async,
+};
+
 pub fn main() !void {
+    try znet.Logger.startAsyncLogger();
+    
     var gpa = std.heap.GeneralPurposeAllocator(.{ .thread_safe = true }){};
     defer {
         if (gpa.deinit() == .leak) {

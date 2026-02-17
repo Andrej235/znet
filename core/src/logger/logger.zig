@@ -8,16 +8,22 @@ pub const logger_type = @import("../options.zig").options.logger_type;
 
 pub const Logger = if (logger_type == .async) AsyncLogger else SyncLogger;
 
-fn asyncLog(
+const AsyncLoggerEventPool = if (logger_type == .async) @import("async_logger_event_pool.zig") else undefined;
+
+inline fn asyncLog(
     comptime message_level: LogLevel,
     comptime scope: @TypeOf(.enum_literal),
     comptime format: []const u8,
     args: anytype,
 ) void {
-    _ = message_level;
-    _ = scope;
-    _ = format;
-    _ = args;
+    if (comptime !std.log.logEnabled(message_level, scope)) return;
+
+    const level_txt = comptime message_level.asText();
+    const prefix2 = if (scope == .default) ": " else "(" ++ @tagName(scope) ++ "): ";
+    var msg: [256]u8 = undefined;
+    const buf = std.fmt.bufPrint(msg[0..], level_txt ++ prefix2 ++ format ++ "\n", args) catch return;
+
+    AsyncLoggerEventPool.addLog(buf);
 }
 
 const AsyncLogger = struct {
@@ -47,6 +53,13 @@ const AsyncLogger = struct {
     /// Log a debug message using the default scope. This log level is intended to
     /// be used for messages which are only useful for debugging.
     pub const debug = default.debug;
+
+    pub fn startAsyncLogger() !void {
+        if (comptime logger_type == .sync) return error.SyncLoggerSelected;
+
+        AsyncLoggerEventPool.init();
+        try AsyncLoggerEventPool.startThread();
+    }
 };
 
 const SyncLogger = struct {
@@ -76,6 +89,10 @@ const SyncLogger = struct {
     /// Log a debug message using the default scope. This log level is intended to
     /// be used for messages which are only useful for debugging.
     pub const debug = default.debug;
+
+    pub fn startAsyncLogger() !void {
+        @compileError("Async logger cannot be started when sync logger is selected, maybe you forgot to set znet_options.logger_type to .async?");
+    }
 };
 
 fn ScopedSyncLogger(comptime scope: @Type(.enum_literal)) type {
@@ -103,8 +120,6 @@ fn ScopedSyncLogger(comptime scope: @Type(.enum_literal)) type {
 }
 
 fn ScopedAsyncLogger(comptime scope: @Type(.enum_literal)) type {
-    _ = scope;
-
     return struct {
         /// Log an error message. This log level is intended to be used
         /// when something has gone wrong. This might be recoverable or might
@@ -114,8 +129,7 @@ fn ScopedAsyncLogger(comptime scope: @Type(.enum_literal)) type {
             args: anytype,
         ) void {
             @branchHint(.cold);
-            _ = format;
-            _ = args;
+            asyncLog(.err, scope, format, args);
         }
 
         /// Log a warning message. This log level is intended to be used if
@@ -125,8 +139,7 @@ fn ScopedAsyncLogger(comptime scope: @Type(.enum_literal)) type {
             comptime format: []const u8,
             args: anytype,
         ) void {
-            _ = format;
-            _ = args;
+            asyncLog(.warn, scope, format, args);
         }
 
         /// Log an info message. This log level is intended to be used for
@@ -135,8 +148,7 @@ fn ScopedAsyncLogger(comptime scope: @Type(.enum_literal)) type {
             comptime format: []const u8,
             args: anytype,
         ) void {
-            _ = format;
-            _ = args;
+            asyncLog(.info, scope, format, args);
         }
 
         /// Log a debug message. This log level is intended to be used for
@@ -145,8 +157,7 @@ fn ScopedAsyncLogger(comptime scope: @Type(.enum_literal)) type {
             comptime format: []const u8,
             args: anytype,
         ) void {
-            _ = format;
-            _ = args;
+            asyncLog(.debug, scope, format, args);
         }
     };
 }
