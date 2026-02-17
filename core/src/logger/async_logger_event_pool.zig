@@ -18,29 +18,63 @@ var taken_tail: usize = 0;
 var mutex: std.Thread.Mutex = .{};
 var cond: std.Thread.Condition = .{};
 
-var thread: std.Thread = undefined;
-var running: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+var thread: ?std.Thread = null;
+var state: std.atomic.Value(ShutdownState) = .init(.running);
+var initialized: std.atomic.Value(bool) = .init(false);
 
-pub fn init() void {
+const ShutdownState = enum(u8) {
+    running,
+    graceful,
+    immediate,
+};
+
+pub const ShutdownMode = enum {
+    graceful,
+    immediate,
+};
+
+pub fn start() !void {
+    if (thread != null) return error.ThreadAlreadyStarted;
+
     for (0..buffer_count) |i| {
         free_indices[i] = i;
         taken_indices[i] = i;
     }
     free_index_count = buffer_count;
+
+    state.store(.running, .release);
+    thread = try std.Thread.spawn(.{}, threadFn, .{});
+
+    while (!initialized.load(.acquire)) {
+        std.atomic.spinLoopHint();
+    }
 }
 
-pub fn startThread() !void {
-    if (running.load(.seq_cst)) return error.ThreadAlreadyStarted;
+pub fn stop(mode: ShutdownMode) !void {
+    if (state.load(.acquire) != .running) return error.ThreadNotRunning;
 
-    running.store(true, .release);
-    thread = try std.Thread.spawn(.{}, threadFn, .{});
+    state.store(switch (mode) {
+        .graceful => .graceful,
+        .immediate => .immediate,
+    }, .release);
+
+    cond.signal();
+    thread.?.join();
+    thread = null;
 }
 
 fn threadFn() void {
+    initialized.store(true, .release);
+
     while (true) {
         const idx = getOldestIdx() orelse break;
-        const buffer = buffers[idx].data[0..buffers[idx].len];
-        std.debug.print("Log: {s}", .{buffer}); // todo: replace with actual log processing
+        const message = buffers[idx].data[0..buffers[idx].len];
+
+        var buffer: [64]u8 = undefined;
+        const stderr = std.debug.lockStderrWriter(&buffer);
+        defer std.debug.unlockStderrWriter();
+        nosuspend stderr.writeAll(message) catch return;
+
         releaseIdx(idx);
     }
 }
@@ -49,11 +83,12 @@ fn getOldestIdx() ?usize {
     mutex.lock();
     defer mutex.unlock();
 
-    while (taken_index_count == 0 and running.load(.acquire)) {
+    while (taken_index_count == 0 and state.load(.acquire) == .running) {
         cond.wait(&mutex);
     }
 
-    if (!running.load(.acquire)) {
+    const curr_state = state.load(.acquire);
+    if (curr_state == .immediate or (curr_state == .graceful and taken_index_count == 0)) {
         return null;
     }
 

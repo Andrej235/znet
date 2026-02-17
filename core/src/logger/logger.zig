@@ -8,7 +8,7 @@ pub const logger_type = @import("../options.zig").options.logger_type;
 
 pub const Logger = if (logger_type == .async) AsyncLogger else SyncLogger;
 
-const AsyncLoggerEventPool = if (logger_type == .async) @import("async_logger_event_pool.zig") else undefined;
+const AsyncLoggerEventPool = @import("async_logger_event_pool.zig");
 
 inline fn asyncLog(
     comptime message_level: LogLevel,
@@ -54,11 +54,12 @@ const AsyncLogger = struct {
     /// be used for messages which are only useful for debugging.
     pub const debug = default.debug;
 
-    pub fn startAsyncLogger() !void {
-        if (comptime logger_type == .sync) return error.SyncLoggerSelected;
+    pub fn start() !void {
+        try AsyncLoggerEventPool.start();
+    }
 
-        AsyncLoggerEventPool.init();
-        try AsyncLoggerEventPool.startThread();
+    pub fn shutdown(shutdown_mode: AsyncLoggerEventPool.ShutdownMode) !void {
+        try AsyncLoggerEventPool.stop(shutdown_mode);
     }
 };
 
@@ -90,8 +91,13 @@ const SyncLogger = struct {
     /// be used for messages which are only useful for debugging.
     pub const debug = default.debug;
 
-    pub fn startAsyncLogger() !void {
+    pub fn start() !void {
         @compileError("Async logger cannot be started when sync logger is selected, maybe you forgot to set znet_options.logger_type to .async?");
+    }
+
+    pub fn shutdown(shutdown_mode: AsyncLoggerEventPool.ShutdownMode) !void {
+        _ = shutdown_mode;
+        @compileError("Async logger cannot be stopped when sync logger is selected, maybe you forgot to set znet_options.logger_type to .async?");
     }
 };
 

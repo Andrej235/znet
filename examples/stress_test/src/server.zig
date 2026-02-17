@@ -7,7 +7,7 @@ pub const znet_options: znet.Options = .{
 };
 
 pub fn main() !void {
-    try znet.Logger.startAsyncLogger();
+    try znet.Logger.start();
     
     var gpa = std.heap.GeneralPurposeAllocator(.{ .thread_safe = true }){};
     defer {
