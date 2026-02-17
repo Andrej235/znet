@@ -12,6 +12,8 @@ const ConnectionReader = @import("./connection_reader.zig").ConnectionReader;
 const MessageHeadersByteSize = @import("../message_headers/message_headers.zig").HeadersByteSize;
 const deserializeMessageHeaders = @import("../message_headers/deserialize_message_headers.zig").deserializeMessageHeaders;
 
+const Logger = @import("../logger/logger.zig").Logger.scoped(.server_connection);
+
 pub const ServerConnection = struct {
     allocator: std.mem.Allocator,
 
@@ -120,13 +122,13 @@ pub const ServerConnection = struct {
                 // process inbound messages, resolve pending requests
                 const msg = self.readMessage() catch |err| {
                     if (err == error.Closed) {
-                        std.debug.print("Connection closed by peer\n", .{});
+                        Logger.info("Connection closed by peer", .{});
 
                         self.forceDisconnectNoWait();
                         try self.client.pending_requests_map.clear();
                         break;
                     } else {
-                        std.debug.print("Error reading message: {}\n", .{err});
+                        Logger.err("Error reading message: {}", .{err});
                         continue;
                     }
                 };
@@ -137,19 +139,19 @@ pub const ServerConnection = struct {
 
                     switch (headers) {
                         .Request => {
-                            std.debug.print("Unexpected Request message found in inbound queue\n", .{});
+                            Logger.err("Unexpected Request message found in inbound queue", .{});
                             return;
                         },
                         .Response => |response| {
                             const pending_request = self.client.pending_requests_map.get(response.request_id) catch {
-                                std.debug.print("No pending request found for request_id: {d}\n", .{response.request_id});
+                                Logger.err("No pending request found for request_id: {d}", .{response.request_id});
                                 continue;
                             };
 
                             pending_request.resolve(in_msg.data, in_msg.buffer_idx);
                         },
                         .Broadcast => |broadcast| {
-                            std.debug.print("broadcast\n", .{});
+                            Logger.debug("broadcast", .{});
                             _ = broadcast; // todo: implement broadcast handling on workers when enabled
                             return error.Unimplemented;
                         },

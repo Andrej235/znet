@@ -8,7 +8,5 @@ pub fn main() !void {
     });
 
     const address = try std.net.Address.parseIp("127.0.0.1", 5000);
-    std.debug.print("{}\n", .{role});
-
     try server.run(address);
 }

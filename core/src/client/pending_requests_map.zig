@@ -3,6 +3,8 @@ const std = @import("std");
 const PendingRequest = @import("pending_request.zig").PendingRequest;
 const Client = @import("client.zig").ClientInterface;
 
+const Logger = @import("../logger/logger.zig").Logger.scoped(.pending_requests_map);
+
 pub const PendingRequestsMap = struct {
     allocator: std.mem.Allocator,
 
@@ -75,7 +77,8 @@ pub const PendingRequestsMap = struct {
         const pending_request: *PendingRequest = @constCast(&self.requests[request_id]);
 
         if (pending_request.state.load(.acquire) != .free) {
-            std.debug.print("acquired request that is not free, request_id: {d}, state: {}\n", .{ request_id, pending_request.state.load(.acquire) });
+            @branchHint(.cold); // this should never happen, but if it does, it's a probably a bug in the pending request lifecycle management
+            Logger.err("acquired request that is not free, request_id: {d}, state: {}", .{ request_id, pending_request.state.load(.acquire) });
             return error.InvalidState;
         }
 

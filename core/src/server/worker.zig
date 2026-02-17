@@ -41,7 +41,6 @@ pub const Worker = struct {
 
     pub fn deinit(self: *Worker) void {
         if (self.current_buffer_idx) |idx| {
-            std.debug.print("fuck\n", .{});
             self.server.output_buffer_pool.release(idx);
         }
     }

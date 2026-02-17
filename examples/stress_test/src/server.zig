@@ -6,9 +6,9 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .thread_safe = true }){};
     defer {
         if (gpa.deinit() == .leak) {
-            std.debug.print("MEMORY LEAK DETECTED\n", .{});
+            znet.Logger.err("Memory leak detected", .{});
         } else {
-            std.debug.print("Server shut down cleanly\n", .{});
+            znet.Logger.info("Server shut down cleanly", .{});
         }
     }
 
@@ -32,7 +32,7 @@ pub fn main() !void {
     while (try reader.takeDelimiter('\n')) |message| {
         if (std.mem.eql(u8, message, "exit")) {
             try server.deinit();
-            std.debug.print("Exit\n", .{});
+            znet.Logger.info("Exiting...", .{});
             break;
         }
     }

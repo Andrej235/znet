@@ -12,6 +12,8 @@ const deserializeMessageHeaders = @import("../message_headers/deserialize_messag
 const MessageHeadersByteSize = @import("../message_headers/message_headers.zig").HeadersByteSize;
 const ShutdownState = @import("server.zig").ShutdownState;
 
+const Logger = @import("../logger/logger.zig").Logger.scoped(.reactor);
+
 pub const ReactorHandle = struct {
     wakeup_fd: i32,
     thread: std.Thread,
@@ -102,7 +104,7 @@ pub fn Reactor(comptime TSchema: type) type {
         fn stop(self: *Self) !void {
             // kick the clients, release their buffers, and close their sockets
             for (0..self.connected) |i| {
-                std.debug.print("kicked client due to shutdown {} with {} messages in queue\n", .{ self.poll_to_client[i], self.clients[self.poll_to_client[i]].out_message_queue.count });
+                Logger.info("kicked client due to shutdown {} with {} messages in queue", .{ self.poll_to_client[i], self.clients[self.poll_to_client[i]].out_message_queue.count });
                 self.removeClient(0);
             }
 
@@ -224,7 +226,7 @@ pub fn Reactor(comptime TSchema: type) type {
         }
 
         fn run(self: *Self, address: std.net.Address, ready_count: *std.atomic.Value(u32)) !void {
-            std.debug.print("run reactor thread {}\n", .{std.Thread.getCurrentId()});
+            Logger.debug("run reactor thread {}", .{std.Thread.getCurrentId()});
 
             const socket_type: u32 = posix.SOCK.STREAM | posix.SOCK.NONBLOCK;
             const protocol = posix.IPPROTO.TCP;
@@ -261,7 +263,7 @@ pub fn Reactor(comptime TSchema: type) type {
                 // new connections
                 if (self.polls[0].revents != 0) {
                     // listening socket is ready, accept new connections
-                    self.accept(listener) catch |err| std.debug.print("failed to accept: {}", .{err});
+                    self.accept(listener) catch |err| Logger.err("failed to accept: {}", .{err});
                 }
 
                 // wakeup fd is ready
@@ -281,10 +283,10 @@ pub fn Reactor(comptime TSchema: type) type {
                             client.readMessage() catch |err| {
                                 switch (err) {
                                     error.Closed, error.ConnectionResetByPeer => {
-                                        std.debug.print("[{f} | {}/{}] disconnected\n", .{ client.address.in, client_idx, client.id.gen });
+                                        Logger.info("[{f} | {}/{}] disconnected", .{ client.address.in, client_idx, client.id.gen });
                                     },
                                     else => {
-                                        std.debug.print("Error reading from client {}: {}\n", .{ client_idx, err });
+                                        Logger.err("Error reading from client {}: {}", .{ client_idx, err });
                                     },
                                 }
 
@@ -293,7 +295,7 @@ pub fn Reactor(comptime TSchema: type) type {
                                 continue; // move on to the next client
                             };
                         } else {
-                            std.debug.print("Found unexpected event ({}) in socket for client {}\n", .{ revents, client.id.index });
+                            Logger.warn("Found unexpected event ({}) in socket for client {}", .{ revents, client.id.index });
                         }
                     }
                     //#endregion
@@ -355,7 +357,7 @@ pub fn Reactor(comptime TSchema: type) type {
                         _ = self.job_queue.tryPop();
                         self.input_buffer_pool.release(job.buffer_idx);
 
-                        std.debug.print("Failed to deserialize message headers: {}\n", .{err});
+                        Logger.warn("Failed to deserialize message headers: {}", .{err});
                         continue;
                     };
 
@@ -368,7 +370,7 @@ pub fn Reactor(comptime TSchema: type) type {
                         _ = self.job_queue.tryPop();
                         self.input_buffer_pool.release(job.buffer_idx);
 
-                        std.debug.print("Client gen mismatch: expected {}, got {}\n", .{ client.id.gen, job.client_id.gen });
+                        Logger.info("Client gen mismatch: expected {}, got {}", .{ client.id.gen, job.client_id.gen });
                         continue;
                     }
 
@@ -404,7 +406,7 @@ pub fn Reactor(comptime TSchema: type) type {
                         // keep the current output buffer avoid just re-acquiring it in the next iteration
                         _ = self.job_queue.tryPop();
 
-                        std.debug.print("Handler failed with error: {}\n", .{err});
+                        Logger.warn("Handler failed with error: {}", .{err});
                         continue;
                     };
 
@@ -426,7 +428,7 @@ pub fn Reactor(comptime TSchema: type) type {
                         // keep the current output buffer avoid just re-acquiring it in the next iteration
                         _ = self.job_queue.tryPop();
 
-                        std.debug.print("Failed to enqueue message: {}\n", .{err});
+                        Logger.debug("Failed to enqueue message: {}", .{err});
                         continue;
                     };
 
@@ -456,11 +458,11 @@ pub fn Reactor(comptime TSchema: type) type {
                 const idx = self.popIndex();
                 if (idx == null) {
                     posix.close(socket); // todo: send a "server full" message before closing the connection
-                    std.debug.print("Max clients reached, rejecting connection from {f}\n", .{address.in});
+                    Logger.warn("Max clients reached, rejecting connection from {f}", .{address.in});
                     return;
                 }
                 const client_id = idx.?;
-                std.debug.print("[{f}] connected as {} (gen {})\n", .{ address.in, client_id.index, client_id.gen });
+                Logger.info("[{f}] connected as {} (gen {})", .{ address.in, client_id.index, client_id.gen });
 
                 const out_message_buf = try self.allocator.alloc(OutMessage, self.options.client_out_message_queue_size);
                 errdefer self.allocator.free(out_message_buf);
@@ -483,7 +485,7 @@ pub fn Reactor(comptime TSchema: type) type {
                     client_id,
                 ) catch |err| {
                     posix.close(socket);
-                    std.debug.print("failed to initialize client: {}", .{err});
+                    Logger.err("failed to initialize client: {}", .{err});
                     self.pushIndex(client_id);
                     return;
                 };

@@ -26,7 +26,8 @@ test "echo" {
 
     var promise = try client.fetch(EchoContract.echo, .{"Hello, world!"});
     const res = try promise.await(.release);
-    std.debug.print("{s}\n", .{res});
+
+    std.testing.expectEqualDeep("Hello, world!", res);
 
     promise.destroy(res);
     try client.disconnect();

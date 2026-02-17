@@ -17,3 +17,7 @@ pub const app_version: u8 = @import("app_version.zig").app_version;
 pub const Context = @import("server/context/context.zig").Context;
 
 pub const PendingRequest = @import("client/pending_request.zig").PendingRequest;
+
+pub const Logger = @import("logger/logger.zig").Logger;
+
+pub const Options = @import("options.zig").Options;

@@ -4,6 +4,8 @@ const DeserializationErrors = @import("../serializer/errors.zig").Deserializatio
 const Client = @import("client.zig").ClientInterface;
 const deserializeMessageHeaders = @import("../message_headers/deserialize_message_headers.zig").deserializeMessageHeaders;
 
+const Logger = @import("../logger/logger.zig").Logger.scoped(.pending_request);
+
 const State = enum(u8) {
     free,
     pending,
@@ -89,7 +91,7 @@ pub const PendingRequest = struct {
 
         while (self.state.load(.acquire) == .pending) {
             self.condition.timedWait(&self.mutex, std.time.ns_per_s) catch {
-                std.debug.print("timeout {}, {}\n", .{ self.idx, self.state.load(.acquire) });
+                Logger.debug("timeout {}, {}", .{ self.idx, self.state.load(.acquire) });
                 continue;
             };
         }
@@ -123,7 +125,7 @@ pub const PendingRequest = struct {
 
         self.client.inbound_buffer_pool.release(self.inbound_buffer_idx);
         self.client.pending_requests_map.release(self.idx) catch {
-            std.debug.print("failed to release request\n", .{});
+            Logger.err("failed to release request", .{});
         };
     }
 };

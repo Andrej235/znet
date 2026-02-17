@@ -43,7 +43,7 @@ pub fn main() !void {
     const total = total_requests.load(.acquire);
     const rps = @as(f64, @floatFromInt(total)) / elapsed_s;
 
-    std.debug.print(
+    znet.Logger.info(
         \\Duration: {d:.2}s
         \\Total requests: {}
         \\Average RPS: {d:.0}
