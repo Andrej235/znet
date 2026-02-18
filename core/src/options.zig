@@ -7,6 +7,7 @@ const LoggerType = enum {
 
 pub const Options = struct {
     logger_type: LoggerType = .sync,
+    async_logger_buffer_size: usize = 1024 * 64, // 64kb
 };
 
 /// zNet-wide options that can be overridden by the root file.

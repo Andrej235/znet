@@ -319,7 +319,6 @@ pub fn Reactor(comptime TSchema: type) type {
                                 };
 
                                 if (n == 0) break; // socket closed?
-                                Logger.info("sent {} bytes to client {}, offset {}/{}", .{ n, client.id.index, out.offset + n, data.len });
 
                                 sent += n;
                                 out.offset += n;

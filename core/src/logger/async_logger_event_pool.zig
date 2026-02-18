@@ -1,7 +1,9 @@
 const std = @import("std");
 
+const options = @import("../options.zig").options;
+
 const header_size = @sizeOf(usize);
-const buffer_size = 1024 * 64; // 64kb
+const buffer_size = options.async_logger_buffer_size;
 var buffer: [buffer_size]u8 = undefined; // layout: [message size (usize)][message bytes]...
 
 var head: usize = 0;
