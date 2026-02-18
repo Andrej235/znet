@@ -1,5 +1,6 @@
 const std = @import("std");
 const posix = std.posix;
+const linux = std.os.linux;
 
 const BufferPool = @import("../utils/buffer_pool.zig").BufferPool;
 const MessageHeadersByteSize = @import("../message_headers/message_headers.zig").HeadersByteSize;
@@ -10,16 +11,15 @@ const RequestHeaders = @import("../message_headers/request_headers.zig").Request
 const Queue = @import("../utils/spsc_queue.zig").Queue;
 const Job = @import("./job.zig").Job;
 const OutMessage = @import("./out_message.zig").OutMessage;
+const Logger = @import("../logger/logger.zig").Logger.scoped(.client_connection);
 
 pub const ClientConnection = struct {
     allocator: std.mem.Allocator,
     job_queue: *Queue(Job),
     out_message_queue: *Queue(OutMessage),
 
-    dirty_clients: *std.atomic.Value(usize),
-    dirty: std.atomic.Value(bool),
-
-    wakeup_fd: posix.fd_t,
+    wakeup_fd: i32,
+    epoll_fd: i32,
 
     output_buffer_pool: *BufferPool,
 
@@ -35,8 +35,8 @@ pub const ClientConnection = struct {
         out_message_queue: *Queue(OutMessage),
         input_buffer_pool: *BufferPool,
         output_buffer_pool: *BufferPool,
-        dirty_clients: *std.atomic.Value(usize),
-        wakeup_fd: posix.fd_t,
+        wakeup_fd: i32,
+        epoll_fd: i32,
         socket: posix.socket_t,
         address: std.net.Address,
         id: ConnectionId,
@@ -53,8 +53,7 @@ pub const ClientConnection = struct {
             .job_queue = job_queue,
             .output_buffer_pool = output_buffer_pool,
             .out_message_queue = out_message_queue,
-            .dirty_clients = dirty_clients,
-            .dirty = std.atomic.Value(bool).init(false),
+            .epoll_fd = epoll_fd,
             .wakeup_fd = wakeup_fd,
         };
     }
@@ -84,15 +83,20 @@ pub const ClientConnection = struct {
             .buffer_idx = msg.buffer_idx,
             .client_id = self.id,
         });
+        _ = posix.write(self.wakeup_fd, std.mem.asBytes(&@as(u64, 1))) catch {}; // wake up the reactor thread to process this new job
     }
 
     pub fn enqueueMessage(self: *ClientConnection, msg: OutMessage) !void {
         const was_empty = self.out_message_queue.isEmpty();
         if (!was_empty) return;
-        if (self.dirty.swap(true, .acq_rel)) return;
 
-        _ = self.dirty_clients.fetchAdd(1, .release);
-        _ = try posix.write(self.wakeup_fd, std.mem.asBytes(&@as(u64, 1)));
+        var event = linux.epoll_event{
+            .events = linux.EPOLL.IN | linux.EPOLL.OUT,
+            .data = .{
+                .u64 = @as(u64, self.id.index),
+            },
+        };
+        _ = linux.epoll_ctl(self.epoll_fd, linux.EPOLL.CTL_MOD, self.socket, &event);
 
         try self.out_message_queue.tryPush(msg);
     }

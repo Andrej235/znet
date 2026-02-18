@@ -1,9 +1,11 @@
 const std = @import("std");
 const znet = @import("znet");
-const EchoContract = @import("server/echo_contract").EchoContract;
+const EchoContract = @import("contracts/server/echo_contract.zig").EchoContract;
+
+const Schema = znet.Schema(.{ .server_contracts = &.{EchoContract} });
 
 pub fn main() !void {
-    var client = try znet.Client.init(std.heap.page_allocator, .{});
+    var client = try znet.Client(Schema).init(std.heap.page_allocator, .{});
     const address = try std.net.Address.parseIp("127.0.0.1", 5000);
     try client.connect(address);
 
