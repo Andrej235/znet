@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const options = @import("../options.zig").options;
+const Logger = @import("logger.zig").Logger;
 
 const header_size = @sizeOf(usize);
 const buffer_size = options.async_logger_buffer_size;
@@ -60,6 +61,9 @@ pub fn start() !void {
     free_space = buffer_size;
     state.store(.running, .release);
     thread = try std.Thread.spawn(.{}, threadFn, .{});
+    thread.?.setName("logger") catch |err| {
+        Logger.err("Failed to set async logger thread name: {}", .{err});
+    };
 
     while (!initialized.load(.acquire)) {
         std.atomic.spinLoopHint();

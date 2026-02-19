@@ -74,7 +74,7 @@ pub fn Reactor(comptime TSchema: type) type {
             allocator: std.mem.Allocator,
             address: std.net.Address,
             shutdown_state: *std.atomic.Value(ShutdownState),
-            core_id: usize,
+            io_thread_id: usize,
             options: ServerOptions,
             ready_count: *std.atomic.Value(u32),
         ) !ReactorHandle {
@@ -85,10 +85,16 @@ pub fn Reactor(comptime TSchema: type) type {
                 address,
                 shutdown_state,
                 wakeup_fd,
-                core_id,
+                io_thread_id,
                 options,
                 ready_count,
             });
+
+            var name_buff: [8]u8 = undefined;
+            const name = try std.fmt.bufPrint(name_buff[0..], "io-{}", .{io_thread_id});
+            thread.setName(name) catch |err| {
+                Logger.err("Failed to set thread name to {s}: {}", .{ name, err });
+            };
 
             return .{
                 .wakeup_fd = wakeup_fd,
@@ -127,14 +133,14 @@ pub fn Reactor(comptime TSchema: type) type {
             address: std.net.Address,
             shutdown_state: *std.atomic.Value(ShutdownState),
             wakeup_fd: posix.fd_t,
-            core_id: usize,
+            io_thread_id: usize,
             options: ServerOptions,
             ready_count: *std.atomic.Value(u32),
         ) !void {
             var mask: [16]u64 = .{0} ** 16;
 
-            const idx = core_id / 64;
-            const bit = core_id % 64;
+            const idx = io_thread_id / 64;
+            const bit = io_thread_id % 64;
 
             mask[idx] |= @as(usize, @intCast(1)) << @as(u6, @intCast(bit));
 
@@ -225,8 +231,6 @@ pub fn Reactor(comptime TSchema: type) type {
         }
 
         fn run(self: *Self, address: std.net.Address, ready_reactors_count: *std.atomic.Value(u32)) !void {
-            Logger.debug("Reactor thread running as {}", .{std.Thread.getCurrentId()});
-
             const socket_type: u32 = posix.SOCK.STREAM | posix.SOCK.NONBLOCK;
             const protocol = posix.IPPROTO.TCP;
             const listener = try posix.socket(address.any.family, socket_type, protocol);
