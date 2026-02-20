@@ -1,6 +1,6 @@
 const std = @import("std");
 const posix = std.posix;
-const linux = std.os.linux;
+const builtin = @import("builtin");
 
 const ClientConnection = @import("client_connection.zig").ClientConnection;
 const BufferPool = @import("../utils/buffer_pool.zig").BufferPool;
@@ -134,20 +134,25 @@ pub fn Reactor(comptime TSchema: type) type {
             options: ServerOptions,
             ready_count: *std.atomic.Value(u32),
         ) !void {
-            var mask: [16]u64 = .{0} ** 16;
+            // pin thread to a specific cpu core to improve cache locality and reduce latency
+            // this needs to be done before any allocations to ensure memory is allocated in the local NUMA node (first touch policy)
+            if (comptime builtin.os.tag == .linux) {
+                const linux = comptime std.os.linux;
+                var mask: [16]u64 = .{0} ** 16;
 
-            const idx = io_thread_id / 64;
-            const bit = io_thread_id % 64;
+                const idx = io_thread_id / 64;
+                const bit = io_thread_id % 64;
 
-            mask[idx] |= @as(usize, @intCast(1)) << @as(u6, @intCast(bit));
+                mask[idx] |= @as(usize, @intCast(1)) << @as(u6, @intCast(bit));
 
-            const tid = linux.gettid();
+                const tid = linux.gettid();
 
-            // pin thread to cpu core
-            try linux.sched_setaffinity(
-                tid,
-                &mask,
-            );
+                // pin thread to cpu core
+                try linux.sched_setaffinity(
+                    tid,
+                    &mask,
+                );
+            }
 
             const clients = try allocator.alloc(ClientConnection, options.max_clients);
             errdefer allocator.free(clients);
