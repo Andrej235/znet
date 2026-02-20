@@ -91,7 +91,7 @@ pub const ClientConnection = struct {
         if (!was_empty) return;
 
         self.out_message_queue.tryPush(msg) catch |err| {
-            Logger.warn("Failed to enqueue message for client {d}: {s}", .{ self.id.index, err });
+            Logger.warn("Failed to enqueue message for client {d}: {}", .{ self.id.index, err });
             return err;
         };
 

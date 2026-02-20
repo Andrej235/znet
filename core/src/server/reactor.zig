@@ -13,6 +13,8 @@ const deserializeMessageHeaders = @import("../message_headers/deserialize_messag
 const MessageHeadersByteSize = @import("../message_headers/message_headers.zig").HeadersByteSize;
 const ShutdownState = @import("server.zig").ShutdownState;
 
+const Listener = @import("../listener/listener.zig");
+
 const Logger = @import("../logger/logger.zig").Logger.scoped(.reactor);
 
 pub const ReactorHandle = struct {
@@ -231,15 +233,8 @@ pub fn Reactor(comptime TSchema: type) type {
         }
 
         fn run(self: *Self, address: std.net.Address, ready_reactors_count: *std.atomic.Value(u32)) !void {
-            const socket_type: u32 = posix.SOCK.STREAM | posix.SOCK.NONBLOCK;
-            const protocol = posix.IPPROTO.TCP;
-            const listener = try posix.socket(address.any.family, socket_type, protocol);
-            defer posix.close(listener);
-
-            try posix.setsockopt(listener, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
-            try posix.setsockopt(listener, posix.SOL.SOCKET, posix.SO.REUSEPORT, &std.mem.toBytes(@as(c_int, 1)));
-            try posix.bind(listener, &address.any, address.getOsSockLen());
-            try posix.listen(listener, 128);
+            var listener = try Listener.init(address);
+            defer listener.deinit();
 
             // first polling slot is reserved for the listening socket
             var listener_event: linux.epoll_event = .{
@@ -248,7 +243,7 @@ pub fn Reactor(comptime TSchema: type) type {
                 },
                 .events = linux.EPOLL.IN,
             };
-            _ = linux.epoll_ctl(self.epoll_fd, linux.EPOLL.CTL_ADD, listener, &listener_event);
+            _ = linux.epoll_ctl(self.epoll_fd, linux.EPOLL.CTL_ADD, listener.impl.listener_fd, &listener_event);
 
             // second polling slot is reserved for the wakeup fd
             var wakeup_event: linux.epoll_event = .{
@@ -274,7 +269,7 @@ pub fn Reactor(comptime TSchema: type) type {
 
                     if (idx == self.options.max_clients) { // listening socket
                         // listening socket is ready, accept new connections
-                        self.accept(listener) catch |err| Logger.err("failed to accept: {}", .{err});
+                        try listener.drainAccepts(TSchema, self);
                         continue;
                     }
 
@@ -451,60 +446,49 @@ pub fn Reactor(comptime TSchema: type) type {
             try self.stop();
         }
 
-        fn accept(self: *Self, listener: posix.socket_t) !void {
-            // the while loop will keep accepting connections until the first time posix.accept tries to block in order to wait for a new connection, i.e. there are no more pending connections
-            while (true) {
-                var address: std.net.Address = undefined;
-                var address_len: posix.socklen_t = @sizeOf(std.net.Address);
-                const socket = posix.accept(listener, &address.any, &address_len, posix.SOCK.NONBLOCK) catch |err| switch (err) {
-                    error.WouldBlock => return,
-                    else => return err,
-                };
-
-                const idx = self.popIndex();
-                if (idx == null) {
-                    posix.close(socket); // todo: send a "server full" message before closing the connection
-                    Logger.warn("Max clients reached, rejecting connection from {f}", .{address.in});
-                    return;
-                }
-                const client_id = idx.?;
-                Logger.info("[{f}] connected as {} (gen {})", .{ address.in, client_id.index, client_id.gen });
-
-                var epoll_event: linux.epoll_event = .{
-                    .data = .{ .u32 = client_id.index },
-                    .events = linux.EPOLL.IN,
-                };
-                _ = linux.epoll_ctl(self.epoll_fd, linux.EPOLL.CTL_ADD, socket, &epoll_event);
-
-                const out_message_buf = try self.allocator.alloc(OutMessage, self.options.client_out_message_queue_size);
-                errdefer self.allocator.free(out_message_buf);
-
-                const out_message_queue = try self.allocator.create(Queue(OutMessage));
-                out_message_queue.* = try Queue(OutMessage).init(out_message_buf);
-                errdefer self.allocator.destroy(out_message_queue);
-
-                const client = ClientConnection.init(
-                    self.options.max_read_per_tick,
-                    self.allocator,
-                    self.job_queue,
-                    out_message_queue,
-                    self.input_buffer_pool,
-                    self.output_buffer_pool,
-                    self.wakeup_fd,
-                    self.epoll_fd,
-                    socket,
-                    address,
-                    client_id,
-                ) catch |err| {
-                    posix.close(socket);
-                    Logger.err("failed to initialize client: {}", .{err});
-                    self.pushIndex(client_id);
-                    return;
-                };
-
-                self.clients[client_id.index] = client;
-                self.connected += 1;
+        pub fn attachClientSocket(self: *Self, socket: posix.socket_t, address: std.net.Address) !void {
+            const idx = self.popIndex();
+            if (idx == null) {
+                // todo: send a "server full" message before closing the connection
+                Logger.warn("Max clients reached, rejecting connection from {f}", .{address.in});
+                return error.ReactorFull; // socket will be closed in the caller
             }
+            const client_id = idx.?;
+            Logger.info("[{f}] connected as {} (gen {})", .{ address.in, client_id.index, client_id.gen });
+
+            var epoll_event: linux.epoll_event = .{
+                .data = .{ .u32 = client_id.index },
+                .events = linux.EPOLL.IN,
+            };
+            _ = linux.epoll_ctl(self.epoll_fd, linux.EPOLL.CTL_ADD, socket, &epoll_event);
+
+            const out_message_buf = try self.allocator.alloc(OutMessage, self.options.client_out_message_queue_size);
+            errdefer self.allocator.free(out_message_buf);
+
+            const out_message_queue = try self.allocator.create(Queue(OutMessage));
+            out_message_queue.* = try Queue(OutMessage).init(out_message_buf);
+            errdefer self.allocator.destroy(out_message_queue);
+
+            const client = ClientConnection.init(
+                self.options.max_read_per_tick,
+                self.allocator,
+                self.job_queue,
+                out_message_queue,
+                self.input_buffer_pool,
+                self.output_buffer_pool,
+                self.wakeup_fd,
+                self.epoll_fd,
+                socket,
+                address,
+                client_id,
+            ) catch |err| {
+                Logger.err("failed to initialize client: {}", .{err});
+                self.pushIndex(client_id);
+                return err;
+            };
+
+            self.clients[client_id.index] = client;
+            self.connected += 1;
         }
 
         fn pushIndex(self: *Self, index: ConnectionId) void {

@@ -8,7 +8,7 @@ pub const znet_options: znet.Options = .{
 
 pub fn main() !void {
     try znet.Logger.start();
-    
+
     var gpa = std.heap.GeneralPurposeAllocator(.{ .thread_safe = true }){};
     defer {
         if (gpa.deinit() == .leak) {
@@ -37,6 +37,7 @@ pub fn main() !void {
 
     while (try reader.takeDelimiter('\n')) |message| {
         if (std.mem.eql(u8, message, "exit")) {
+            try server.shutdown(.immediate);
             try server.deinit();
             znet.Logger.info("Exiting...", .{});
             break;
