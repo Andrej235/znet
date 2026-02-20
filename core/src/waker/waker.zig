@@ -16,8 +16,8 @@ pub fn init() !Self {
     };
 }
 
-pub fn register(self: *Self, poller: *Poller) !void {
-    try self.impl.register(poller);
+pub fn register(self: *Self, poller: *Poller, index: u32) !void {
+    try self.impl.register(poller, index);
 }
 
 pub fn wake(self: *Self) !void {

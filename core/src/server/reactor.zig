@@ -220,10 +220,10 @@ pub fn Reactor(comptime TSchema: type) type {
             defer listener.deinit();
 
             // polling slot with index self.options.max_clients is reserved for the listening socket
-            try self.poller.add(listener.impl.listener_fd, self.options.max_clients, true, false);
+            try listener.register(&self.poller, self.options.max_clients);
 
             // polling slot with index self.options.max_clients + 1 is reserved for the wakeup fd
-            try self.poller.add(self.waker.impl.wakeup_fd, self.options.max_clients + 1, true, false);
+            try self.waker.register(&self.poller, self.options.max_clients + 1);
 
             // signal to the server that this reactor thread is ready to accept connections and process jobs
             // this is used to coordinate the startup of multiple reactor threads
@@ -231,12 +231,10 @@ pub fn Reactor(comptime TSchema: type) type {
 
             while (true) {
                 // no timeout
-                const ready_count = self.poller.wait(-1);
+                var iterator = self.poller.wait(-1);
 
-                for (self.poller.impl.epoll_events[0..ready_count]) |event| {
-                    const events = event.events;
-                    if (events == 0) continue;
-                    const idx = event.data.u32;
+                while (iterator.next()) |event| {
+                    const idx = event.index;
 
                     if (idx == self.options.max_clients) { // listening socket
                         // listening socket is ready, accept new connections
@@ -347,7 +345,7 @@ pub fn Reactor(comptime TSchema: type) type {
                     const client_idx = idx;
                     var client = &self.clients[client_idx];
 
-                    if (events & linux.EPOLL.IN == linux.EPOLL.IN) {
+                    if (event.in) {
                         // this socket is ready to be read, fairness is implemented in client.readMessage()
                         client.readMessage() catch |err| {
                             switch (err) {
@@ -365,7 +363,7 @@ pub fn Reactor(comptime TSchema: type) type {
                         };
                     }
 
-                    if (events & linux.EPOLL.OUT == linux.EPOLL.OUT) {
+                    if (event.out) {
                         // has messages to send and can accept being written to
                         const latest_out_message = client.out_message_queue.tryPeek();
 

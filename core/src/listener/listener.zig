@@ -24,8 +24,8 @@ pub fn deinit(self: *Self) void {
 }
 
 /// Register listener with poller
-pub fn register(self: *Self, poller: *Poller) !void {
-    try self.impl.register(poller);
+pub fn register(self: *Self, poller: *Poller, index: u32) !void {
+    try self.impl.register(poller, index);
 }
 
 /// Called for all pending connections.

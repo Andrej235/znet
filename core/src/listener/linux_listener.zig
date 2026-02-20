@@ -30,10 +30,8 @@ pub const LinuxListener = struct {
     }
 
     /// Register listener with poller
-    pub fn register(self: *LinuxListener, poller: *Poller) !void {
-        // todo: implement after implementing poller
-        _ = self;
-        _ = poller;
+    pub fn register(self: *LinuxListener, poller: *Poller, index: u32) !void {
+        try poller.add(self.listener_fd, index, true, false);
     }
 
     /// Called for all pending connections.

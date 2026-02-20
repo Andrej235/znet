@@ -14,10 +14,8 @@ pub const LinuxWaker = struct {
         };
     }
 
-    pub fn register(self: *LinuxWaker, poller: *Poller) !void {
-        // todo: implement after implementing poller
-        _ = self;
-        _ = poller;
+    pub fn register(self: *LinuxWaker, poller: *Poller, index: u32) !void {
+        try poller.add(self.wakeup_fd, index, true, false);
     }
 
     pub fn wake(self: *LinuxWaker) !void {

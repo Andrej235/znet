@@ -2,6 +2,9 @@ const std = @import("std");
 const linux = std.os.linux;
 const posix = std.posix;
 
+const EventIterator = @import("event_iterator/event_iterator.zig");
+const LinuxEventIterator = @import("event_iterator/linux_event_iterator.zig").LinuxEventIterator;
+
 pub const LinuxPoller = struct {
     epoll_events: []linux.epoll_event,
     epoll_fd: i32,
@@ -30,8 +33,16 @@ pub const LinuxPoller = struct {
         self.allocator.free(self.epoll_events);
     }
 
-    pub fn wait(self: *LinuxPoller, timeout_ms: i32) usize {
-        return linux.epoll_wait(self.epoll_fd, self.epoll_events.ptr, @intCast(self.epoll_events.len), timeout_ms);
+    pub fn wait(self: *LinuxPoller, timeout_ms: i32) EventIterator {
+        const count = linux.epoll_wait(self.epoll_fd, self.epoll_events.ptr, @intCast(self.epoll_events.len), timeout_ms);
+
+        return EventIterator{
+            .impl = LinuxEventIterator{
+                .epoll_events = self.epoll_events,
+                .index = 0,
+                .count = count,
+            },
+        };
     }
 
     pub fn add(

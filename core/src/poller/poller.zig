@@ -2,6 +2,8 @@ const std = @import("std");
 const posix = std.posix;
 const builtin = @import("builtin");
 
+const EventIterator = @import("event_iterator/event_iterator.zig");
+
 const LinuxPoller = @import("linux_poller.zig").LinuxPoller;
 
 const Self = @This();
@@ -21,12 +23,9 @@ pub fn deinit(self: *Self) void {
 }
 
 /// Wait for events, optionally with a timeout in milliseconds
-pub fn wait(self: *Self, timeout_ms: i32) usize {
+pub fn wait(self: *Self, timeout_ms: i32) EventIterator {
     return self.impl.wait(timeout_ms);
 }
-
-// /// Iterate over all events that became ready
-// fn events(self: *Self) EventIterator {}
 
 /// Add a file descriptor / handle to the poller
 pub fn add(
