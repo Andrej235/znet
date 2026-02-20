@@ -14,11 +14,12 @@ const MessageHeadersByteSize = @import("../message_headers/message_headers.zig")
 const ShutdownState = @import("server.zig").ShutdownState;
 
 const Listener = @import("../listener/listener.zig");
+const Waker = @import("../waker/waker.zig");
 
 const Logger = @import("../logger/logger.zig").Logger.scoped(.reactor);
 
 pub const ReactorHandle = struct {
-    wakeup_fd: i32,
+    waker: Waker,
     thread: std.Thread,
 };
 
@@ -28,7 +29,7 @@ pub const ReactorContext = struct {
     initiated_by_connection_id: u32,
     client_connections: []const ClientConnection,
     connected_clients: []const u32,
-    wakeup_fd: posix.fd_t,
+    waker: Waker,
 };
 
 pub fn Reactor(comptime TSchema: type) type {
@@ -56,8 +57,7 @@ pub fn Reactor(comptime TSchema: type) type {
         // list of clients, only those with indices in epoll_to_client[] are connected
         clients: []ClientConnection,
 
-        // number of clients that have messages enqueued to send but haven't been fully sent yet, used to decide when to clear the wakeup fd
-        wakeup_fd: posix.fd_t,
+        waker: Waker,
 
         // used by the server to coordinate shutdown between all reactor threads
         shutdown_state: *std.atomic.Value(ShutdownState),
@@ -80,13 +80,13 @@ pub fn Reactor(comptime TSchema: type) type {
             options: ServerOptions,
             ready_count: *std.atomic.Value(u32),
         ) !ReactorHandle {
-            const wakeup_fd = try posix.eventfd(0, posix.SOCK.NONBLOCK);
+            const waker = try Waker.init();
 
             const thread = try std.Thread.spawn(.{}, startThread, .{
                 allocator,
                 address,
                 shutdown_state,
-                wakeup_fd,
+                waker,
                 io_thread_id,
                 options,
                 ready_count,
@@ -99,7 +99,7 @@ pub fn Reactor(comptime TSchema: type) type {
             };
 
             return .{
-                .wakeup_fd = wakeup_fd,
+                .waker = waker,
                 .thread = thread,
             };
         }
@@ -111,7 +111,7 @@ pub fn Reactor(comptime TSchema: type) type {
                 self.removeClient(0);
             }
 
-            posix.close(self.wakeup_fd);
+            self.waker.deinit();
 
             self.input_buffer_pool.deinit(self.allocator);
             self.allocator.destroy(self.input_buffer_pool);
@@ -134,7 +134,7 @@ pub fn Reactor(comptime TSchema: type) type {
             allocator: std.mem.Allocator,
             address: std.net.Address,
             shutdown_state: *std.atomic.Value(ShutdownState),
-            wakeup_fd: posix.fd_t,
+            waker: Waker,
             io_thread_id: usize,
             options: ServerOptions,
             ready_count: *std.atomic.Value(u32),
@@ -217,7 +217,7 @@ pub fn Reactor(comptime TSchema: type) type {
 
                 .epoll_events = epoll_events,
 
-                .wakeup_fd = wakeup_fd,
+                .waker = waker,
                 .shutdown_state = shutdown_state,
 
                 .input_buffer_pool = input_buffer_pool,
@@ -252,7 +252,7 @@ pub fn Reactor(comptime TSchema: type) type {
                 },
                 .events = linux.EPOLL.IN,
             };
-            _ = linux.epoll_ctl(self.epoll_fd, linux.EPOLL.CTL_ADD, self.wakeup_fd, &wakeup_event);
+            _ = linux.epoll_ctl(self.epoll_fd, linux.EPOLL.CTL_ADD, self.waker.impl.wakeup_fd, &wakeup_event);
 
             // signal to the server that this reactor thread is ready to accept connections and process jobs
             // this is used to coordinate the startup of multiple reactor threads
@@ -326,7 +326,7 @@ pub fn Reactor(comptime TSchema: type) type {
                                     .initiated_by_connection_id = job.client_id.index,
                                     .client_connections = self.clients[0..self.connected],
                                     .connected_clients = &.{},
-                                    .wakeup_fd = self.wakeup_fd,
+                                    .waker = self.waker,
                                 },
                                 headers.Request,
                                 &reader,
@@ -367,7 +367,7 @@ pub fn Reactor(comptime TSchema: type) type {
 
                         // nothing left to send, clear the eventfd
                         if (self.job_queue.isEmpty())
-                            try self.drain_wakeup_fd();
+                            try self.waker.drain();
 
                         continue;
                     }
@@ -476,7 +476,7 @@ pub fn Reactor(comptime TSchema: type) type {
                 out_message_queue,
                 self.input_buffer_pool,
                 self.output_buffer_pool,
-                self.wakeup_fd,
+                self.waker,
                 self.epoll_fd,
                 socket,
                 address,
@@ -514,16 +514,6 @@ pub fn Reactor(comptime TSchema: type) type {
             client.deinit();
 
             self.connected -= 1;
-        }
-
-        fn drain_wakeup_fd(self: *Self) !void {
-            var buf: [8]u8 = undefined;
-            while (true) {
-                _ = posix.read(self.wakeup_fd, &buf) catch |err| switch (err) {
-                    error.WouldBlock => return,
-                    else => return err,
-                };
-            }
         }
     };
 }

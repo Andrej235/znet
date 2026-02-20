@@ -13,12 +13,14 @@ const Job = @import("./job.zig").Job;
 const OutMessage = @import("./out_message.zig").OutMessage;
 const Logger = @import("../logger/logger.zig").Logger.scoped(.client_connection);
 
+const Waker = @import("../waker/waker.zig");
+
 pub const ClientConnection = struct {
     allocator: std.mem.Allocator,
     job_queue: *Queue(Job),
     out_message_queue: *Queue(OutMessage),
 
-    wakeup_fd: i32,
+    waker: Waker,
     epoll_fd: i32,
 
     output_buffer_pool: *BufferPool,
@@ -35,7 +37,7 @@ pub const ClientConnection = struct {
         out_message_queue: *Queue(OutMessage),
         input_buffer_pool: *BufferPool,
         output_buffer_pool: *BufferPool,
-        wakeup_fd: i32,
+        waker: Waker,
         epoll_fd: i32,
         socket: posix.socket_t,
         address: std.net.Address,
@@ -54,7 +56,7 @@ pub const ClientConnection = struct {
             .output_buffer_pool = output_buffer_pool,
             .out_message_queue = out_message_queue,
             .epoll_fd = epoll_fd,
-            .wakeup_fd = wakeup_fd,
+            .waker = waker,
         };
     }
 
@@ -83,7 +85,9 @@ pub const ClientConnection = struct {
             .buffer_idx = msg.buffer_idx,
             .client_id = self.id,
         });
-        _ = posix.write(self.wakeup_fd, std.mem.asBytes(&@as(u64, 1))) catch {}; // wake up the reactor thread to process this new job
+
+        // wake up the reactor thread to process this new job
+        try self.waker.wake();
     }
 
     pub fn enqueueMessage(self: *ClientConnection, msg: OutMessage) !void {

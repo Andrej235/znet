@@ -66,7 +66,7 @@ pub fn createHandlerFn(comptime fn_impl: anytype) HandlerFn {
                         .client_connections = context.client_connections,
                         .connected_clients = context.connected_clients,
                         .sender_id = context.initiated_by_connection_id,
-                        .wakeup_fd = context.wakeup_fd,
+                        .waker = context.waker,
                     },
                 };
 

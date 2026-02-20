@@ -7,6 +7,7 @@ const MessageHeadersByteSize = @import("../../message_headers/message_headers.zi
 const serializeHeaders = @import("../../message_headers/serialize_message_headers.zig").serializeMessageHeaders;
 const Serializer = @import("../../serializer/serializer.zig").Serializer;
 const CountingSerializer = @import("../../serializer/counting_serializer.zig").Serializer;
+const Waker = @import("../../waker/waker.zig");
 
 const Client = @import("../../client//client.zig").ClientInterface;
 
@@ -24,7 +25,7 @@ pub const Audience = struct {
     connected_clients: []const u32,
     sender_id: u32,
     audience_type: AudienceType,
-    wakeup_fd: std.posix.fd_t,
+    waker: Waker,
 
     pub fn broadcast(self: *Audience, method: anytype, args: MethodTupleArg(method)) !void {
         const ids = comptime getMethodId(method);
@@ -89,7 +90,7 @@ pub const Audience = struct {
         shared_slice.release();
 
         // wake up the server to process the broadcast job
-        _ = try std.posix.write(self.wakeup_fd, std.mem.asBytes(&@as(u64, 1)));
+        try self.waker.wake();
     }
 };
 

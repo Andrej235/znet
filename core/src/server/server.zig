@@ -86,8 +86,8 @@ const ServerInterface = struct {
 
         self.shutdown_state.store(if (mode == ShutdownMode.immediate) ShutdownState.immediate else ShutdownState.graceful, .release);
 
-        for (self.reactors) |reactor| {
-            _ = posix.write(reactor.wakeup_fd, std.mem.asBytes(&@as(u64, 1))) catch return ShutdownError.FailedToWakeReactor;
+        for (self.reactors) |*reactor| {
+            reactor.waker.wake() catch return ShutdownError.FailedToWakeReactor;
         }
     }
 };
