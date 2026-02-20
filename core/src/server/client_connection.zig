@@ -90,6 +90,11 @@ pub const ClientConnection = struct {
         const was_empty = self.out_message_queue.isEmpty();
         if (!was_empty) return;
 
+        self.out_message_queue.tryPush(msg) catch |err| {
+            Logger.warn("Failed to enqueue message for client {d}: {s}", .{ self.id.index, err });
+            return err;
+        };
+
         var event = linux.epoll_event{
             .events = linux.EPOLL.IN | linux.EPOLL.OUT,
             .data = .{
@@ -97,8 +102,6 @@ pub const ClientConnection = struct {
             },
         };
         _ = linux.epoll_ctl(self.epoll_fd, linux.EPOLL.CTL_MOD, self.socket, &event);
-
-        try self.out_message_queue.tryPush(msg);
     }
 };
 

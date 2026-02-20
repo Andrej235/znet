@@ -259,6 +259,8 @@ pub fn Reactor(comptime TSchema: type) type {
             };
             _ = linux.epoll_ctl(self.epoll_fd, linux.EPOLL.CTL_ADD, self.wakeup_fd, &wakeup_event);
 
+            // signal to the server that this reactor thread is ready to accept connections and process jobs
+            // this is used to coordinate the startup of multiple reactor threads
             _ = ready_reactors_count.fetchAdd(1, .release);
 
             while (true) {
@@ -356,13 +358,11 @@ pub fn Reactor(comptime TSchema: type) type {
                                         .buffer_idx = self.current_output_buffer_idx.?,
                                     },
                                 },
-                            }) catch |err| {
-                                // either the client's response is full or we failed to wake up the reactor
-                                // in either case we can't really do anything about it, so just consume the job, input buffer was released in the handler
+                            }) catch {
+                                // client's response queue is full
+                                // we can't really do anything about it, so just consume the job, input buffer was released in the handler
                                 // keep the current output buffer avoid just re-acquiring it in the next iteration
                                 _ = self.job_queue.tryPop();
-
-                                Logger.debug("Failed to enqueue message: {}", .{err});
                                 continue;
                             };
 
