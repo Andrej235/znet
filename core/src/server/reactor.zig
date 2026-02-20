@@ -15,6 +15,7 @@ const ShutdownState = @import("server.zig").ShutdownState;
 
 const Listener = @import("../listener/listener.zig");
 const Waker = @import("../waker/waker.zig");
+const Poller = @import("../poller/poller.zig");
 
 const Logger = @import("../logger/logger.zig").Logger.scoped(.reactor);
 
@@ -44,9 +45,7 @@ pub fn Reactor(comptime TSchema: type) type {
         // number of connected clients
         connected: usize,
 
-        // max_clients + 2 for the listening socket and the wakeup socket
-        // listening socket has index max_clients, wakeup socket has index max_clients + 1, the rest are clients
-        epoll_events: []linux.epoll_event,
+        poller: Poller,
 
         // stack of free connection indices, LIFO
         free_indices: []ConnectionId,
@@ -54,7 +53,6 @@ pub fn Reactor(comptime TSchema: type) type {
         // number of free indices in free_indices
         free_count: u32,
 
-        // list of clients, only those with indices in epoll_to_client[] are connected
         clients: []ClientConnection,
 
         waker: Waker,
@@ -69,8 +67,6 @@ pub fn Reactor(comptime TSchema: type) type {
 
         current_output_buffer: []u8, // only valid if current_output_buffer_idx != null
         current_output_buffer_idx: ?u32,
-
-        epoll_fd: i32,
 
         pub fn init(
             allocator: std.mem.Allocator,
@@ -107,7 +103,7 @@ pub fn Reactor(comptime TSchema: type) type {
         fn stop(self: *Self) !void {
             // kick the clients, release their buffers, and close their sockets
             for (0..self.connected) |i| {
-                Logger.info("kicked client due to shutdown {} with {} messages in queue", .{ self.epoll_to_client[i], self.clients[self.epoll_to_client[i]].out_message_queue.count });
+                Logger.info("kicked client due to shutdown {}", .{i});
                 self.removeClient(0);
             }
 
@@ -122,10 +118,9 @@ pub fn Reactor(comptime TSchema: type) type {
             self.allocator.free(self.job_queue.buf);
             self.allocator.destroy(self.job_queue);
 
-            self.allocator.free(self.epoll_events);
             self.allocator.free(self.clients);
             self.allocator.free(self.free_indices);
-            self.allocator.free(self.epoll_to_client);
+            self.poller.deinit();
 
             self.allocator.destroy(self);
         }
@@ -154,18 +149,11 @@ pub fn Reactor(comptime TSchema: type) type {
                 &mask,
             );
 
-            // + 2 for the listening socket and the wakeup socket
-            const epoll_events = try allocator.alloc(linux.epoll_event, options.max_clients + 2);
-            for (epoll_events) |*e| {
-                e.* = .{
-                    .data = .{ .fd = -1 },
-                    .events = 0,
-                };
-            }
-            errdefer allocator.free(epoll_events);
-
             const clients = try allocator.alloc(ClientConnection, options.max_clients);
             errdefer allocator.free(clients);
+
+            var poller = try Poller.init(allocator, options.max_clients + 2); // +2 for the listening socket and the wakeup socket
+            errdefer poller.deinit();
 
             const jobs_buf = try allocator.alloc(Job, options.max_jobs_in_queue);
             errdefer allocator.free(jobs_buf);
@@ -198,9 +186,7 @@ pub fn Reactor(comptime TSchema: type) type {
             errdefer output_buffer_pool.deinit(allocator);
             errdefer allocator.destroy(output_buffer_pool);
 
-            const epoll_fd = linux.epoll_create();
-
-            // no workers for now, todo: add Task<T> or DefferedResult<T> as a tag for contract methods that should be executed on worker threads and then add workers back in
+            // no workers for now, todo: add Task<T> or DeferredResult<T> as a tag for contract methods that should be executed on worker threads and then add workers back in
             // const workers = try allocator.alloc(Worker, options.worker_threads);
 
             const self = try allocator.create(Self);
@@ -215,9 +201,8 @@ pub fn Reactor(comptime TSchema: type) type {
 
                 .job_queue = job_queue,
 
-                .epoll_events = epoll_events,
-
                 .waker = waker,
+                .poller = poller,
                 .shutdown_state = shutdown_state,
 
                 .input_buffer_pool = input_buffer_pool,
@@ -225,8 +210,6 @@ pub fn Reactor(comptime TSchema: type) type {
 
                 .current_output_buffer = undefined,
                 .current_output_buffer_idx = null,
-
-                .epoll_fd = @intCast(epoll_fd),
             };
 
             try self.run(address, ready_count);
@@ -236,33 +219,21 @@ pub fn Reactor(comptime TSchema: type) type {
             var listener = try Listener.init(address);
             defer listener.deinit();
 
-            // first polling slot is reserved for the listening socket
-            var listener_event: linux.epoll_event = .{
-                .data = .{
-                    .u32 = self.options.max_clients,
-                },
-                .events = linux.EPOLL.IN,
-            };
-            _ = linux.epoll_ctl(self.epoll_fd, linux.EPOLL.CTL_ADD, listener.impl.listener_fd, &listener_event);
+            // polling slot with index self.options.max_clients is reserved for the listening socket
+            try self.poller.add(listener.impl.listener_fd, self.options.max_clients, true, false);
 
-            // second polling slot is reserved for the wakeup fd
-            var wakeup_event: linux.epoll_event = .{
-                .data = .{
-                    .u32 = self.options.max_clients + 1,
-                },
-                .events = linux.EPOLL.IN,
-            };
-            _ = linux.epoll_ctl(self.epoll_fd, linux.EPOLL.CTL_ADD, self.waker.impl.wakeup_fd, &wakeup_event);
+            // polling slot with index self.options.max_clients + 1 is reserved for the wakeup fd
+            try self.poller.add(self.waker.impl.wakeup_fd, self.options.max_clients + 1, true, false);
 
             // signal to the server that this reactor thread is ready to accept connections and process jobs
             // this is used to coordinate the startup of multiple reactor threads
             _ = ready_reactors_count.fetchAdd(1, .release);
 
             while (true) {
-                // +2 is for the listening socket and the wakeup fd, infinite/no timeout
-                const ready_count = linux.epoll_wait(self.epoll_fd, self.epoll_events.ptr, @intCast(self.connected + 2), -1);
+                // no timeout
+                const ready_count = self.poller.wait(-1);
 
-                for (self.epoll_events[0..ready_count]) |event| {
+                for (self.poller.impl.epoll_events[0..ready_count]) |event| {
                     const events = event.events;
                     if (events == 0) continue;
                     const idx = event.data.u32;
@@ -430,13 +401,9 @@ pub fn Reactor(comptime TSchema: type) type {
 
                             if (client.out_message_queue.isEmpty()) {
                                 // no more messages left to send to this client
-                                var event_listener = linux.epoll_event{
-                                    .events = linux.EPOLL.IN,
-                                    .data = .{
-                                        .u32 = client_idx,
-                                    },
+                                self.poller.modify(client.socket, client_idx, true, false) catch |err| {
+                                    Logger.err("Failed to modify poller for client {}: {}", .{ client_idx, err });
                                 };
-                                _ = linux.epoll_ctl(self.epoll_fd, linux.EPOLL.CTL_MOD, client.socket, &event_listener);
                             }
                         }
                     }
@@ -456,11 +423,7 @@ pub fn Reactor(comptime TSchema: type) type {
             const client_id = idx.?;
             Logger.info("[{f}] connected as {} (gen {})", .{ address.in, client_id.index, client_id.gen });
 
-            var epoll_event: linux.epoll_event = .{
-                .data = .{ .u32 = client_id.index },
-                .events = linux.EPOLL.IN,
-            };
-            _ = linux.epoll_ctl(self.epoll_fd, linux.EPOLL.CTL_ADD, socket, &epoll_event);
+            try self.poller.add(socket, client_id.index, true, false);
 
             const out_message_buf = try self.allocator.alloc(OutMessage, self.options.client_out_message_queue_size);
             errdefer self.allocator.free(out_message_buf);
@@ -477,7 +440,7 @@ pub fn Reactor(comptime TSchema: type) type {
                 self.input_buffer_pool,
                 self.output_buffer_pool,
                 self.waker,
-                self.epoll_fd,
+                self.poller,
                 socket,
                 address,
                 client_id,
@@ -509,7 +472,7 @@ pub fn Reactor(comptime TSchema: type) type {
             var client = self.clients[idx];
             self.pushIndex(.{ .index = idx, .gen = client.id.gen + 1 });
 
-            _ = linux.epoll_ctl(self.epoll_fd, linux.EPOLL.CTL_DEL, client.socket, null);
+            try self.poller.remove(client.socket);
             posix.close(client.socket);
             client.deinit();
 

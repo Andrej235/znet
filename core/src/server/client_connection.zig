@@ -14,6 +14,7 @@ const OutMessage = @import("./out_message.zig").OutMessage;
 const Logger = @import("../logger/logger.zig").Logger.scoped(.client_connection);
 
 const Waker = @import("../waker/waker.zig");
+const Poller = @import("../poller/poller.zig");
 
 pub const ClientConnection = struct {
     allocator: std.mem.Allocator,
@@ -21,7 +22,7 @@ pub const ClientConnection = struct {
     out_message_queue: *Queue(OutMessage),
 
     waker: Waker,
-    epoll_fd: i32,
+    poller: Poller,
 
     output_buffer_pool: *BufferPool,
 
@@ -38,7 +39,7 @@ pub const ClientConnection = struct {
         input_buffer_pool: *BufferPool,
         output_buffer_pool: *BufferPool,
         waker: Waker,
-        epoll_fd: i32,
+        poller: Poller,
         socket: posix.socket_t,
         address: std.net.Address,
         id: ConnectionId,
@@ -55,7 +56,7 @@ pub const ClientConnection = struct {
             .job_queue = job_queue,
             .output_buffer_pool = output_buffer_pool,
             .out_message_queue = out_message_queue,
-            .epoll_fd = epoll_fd,
+            .poller = poller,
             .waker = waker,
         };
     }
@@ -99,13 +100,7 @@ pub const ClientConnection = struct {
             return err;
         };
 
-        var event = linux.epoll_event{
-            .events = linux.EPOLL.IN | linux.EPOLL.OUT,
-            .data = .{
-                .u64 = @as(u64, self.id.index),
-            },
-        };
-        _ = linux.epoll_ctl(self.epoll_fd, linux.EPOLL.CTL_MOD, self.socket, &event);
+        try self.poller.modify(self.socket, self.id.index, true, true);
     }
 };
 
