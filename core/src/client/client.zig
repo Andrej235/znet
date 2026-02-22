@@ -168,7 +168,7 @@ pub const ClientInterface = struct {
         });
 
         // notify the network thread that a new outbound message is available
-        _ = try std.posix.write(self.server_connection.wakeup_fd, std.mem.asBytes(&@as(u64, 1)));
+        try self.server_connection.waker.wake();
 
         return promise;
     }

@@ -55,48 +55,6 @@ pub const Deserializer = struct {
         };
     }
 
-    pub fn AllocResult(comptime T: type) type {
-        const info = @typeInfo(T);
-        if (info == .pointer and info.pointer.size == .one)
-            return DeserializationErrors!T;
-
-        return DeserializationErrors!*T;
-    }
-
-    pub fn SafeAllocResult(comptime T: type) type {
-        const info = @typeInfo(T);
-        if (info == .pointer and info.pointer.size == .one)
-            return T;
-
-        return *T;
-    }
-
-    pub fn deserializeAlloc(self: *Deserializer, reader: *std.Io.Reader, comptime T: type) AllocResult(T) {
-        const info = @typeInfo(T);
-
-        const deserialized = try self.deserialize(reader, T);
-
-        const result: T = if (info != .error_union) deserialized else deserialized catch |err| switch (err) {
-            DeserializationErrors.AllocationFailed,
-            DeserializationErrors.BooleanDeserializationFailed,
-            DeserializationErrors.EndOfStream,
-            DeserializationErrors.IntegerDeserializationFailed,
-            DeserializationErrors.InvalidBooleanValue,
-            DeserializationErrors.InvalidUnionTag,
-            DeserializationErrors.OutOfMemory,
-            DeserializationErrors.UnexpectedEof,
-            => return err,
-            else => @errorCast(err),
-        };
-
-        if (info == .pointer and info.pointer.size == .one)
-            return result;
-
-        const allocated = try self.allocator.create(T);
-        allocated.* = result;
-        return allocated;
-    }
-
     inline fn deserializeStruct(self: *Deserializer, reader: *std.Io.Reader, comptime TStruct: type) DeserializationErrors!TStruct {
         const info = @typeInfo(TStruct).@"struct";
         var instance: TStruct = undefined;

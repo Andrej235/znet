@@ -12,6 +12,9 @@ const ConnectionReader = @import("./connection_reader.zig").ConnectionReader;
 const MessageHeadersByteSize = @import("../message_headers/message_headers.zig").HeadersByteSize;
 const deserializeMessageHeaders = @import("../message_headers/deserialize_message_headers.zig").deserializeMessageHeaders;
 
+const Waker = @import("../waker/waker.zig");
+const Poller = @import("../poller/poller.zig");
+
 const Logger = @import("../logger/logger.zig").Logger.scoped(.server_connection);
 
 pub const ServerConnection = struct {
@@ -23,14 +26,13 @@ pub const ServerConnection = struct {
     client: *Client,
     connection_reader: ConnectionReader,
 
-    // 0 is server, 1 is wakeup fd
-    polls: []posix.pollfd,
-    wakeup_fd: posix.fd_t,
+    waker: Waker,
+    poller: Poller,
 
     network_thread: std.Thread = undefined,
 
     pub fn init(allocator: std.mem.Allocator, client: *Client) !ServerConnection {
-        const polls = try allocator.alloc(posix.pollfd, 2);
+        const poller = try Poller.init(allocator, 2);
 
         return ServerConnection{
             .allocator = allocator,
@@ -38,15 +40,14 @@ pub const ServerConnection = struct {
             .client = client,
             .connection_reader = ConnectionReader.init(allocator, client),
 
-            .polls = polls,
-            .wakeup_fd = undefined,
+            .poller = poller,
+            .waker = undefined,
         };
     }
 
     pub fn deinit(self: *ServerConnection) void {
         self.connection_reader.deinit();
-
-        self.allocator.free(self.polls);
+        self.poller.deinit();
     }
 
     pub fn connect(self: *ServerConnection, address: std.net.Address) ConnectError!void {
@@ -54,33 +55,26 @@ pub const ServerConnection = struct {
             address.any.family,
             posix.SOCK.STREAM | posix.SOCK.NONBLOCK,
             posix.IPPROTO.TCP,
-        ) catch |err|
-            @panic(std.fmt.allocPrint(self.allocator, "Failed to obtain socket: {}", .{err}) catch unreachable);
-
-        self.wakeup_fd = posix.eventfd(0, posix.SOCK.NONBLOCK) catch |err|
-            @panic(std.fmt.allocPrint(self.allocator, "Failed to obtain wakeup fd: {}", .{err}) catch unreachable);
-
-        self.polls[0] = .{
-            .fd = self.connection_socket,
-            .events = posix.POLL.IN,
-            .revents = 0,
+        ) catch |err| {
+            var buff: [128]u8 = undefined;
+            const msg = std.fmt.bufPrint(buff[0..], "Failed to obtain socket: {}", .{err}) catch unreachable;
+            @panic(msg);
         };
 
-        self.polls[1] = .{
-            .fd = self.wakeup_fd,
-            .events = posix.POLL.IN,
-            .revents = 0,
+        self.waker = Waker.init() catch |err| {
+            var buff: [128]u8 = undefined;
+            const msg = std.fmt.bufPrint(buff[0..], "Failed to initialize waker: {}", .{err}) catch unreachable;
+            @panic(msg);
         };
 
-        _ = posix.poll(self.polls, -1) catch return ConnectError.PollFailed;
-        while (true) {
-            posix.connect(self.connection_socket, &address.any, address.getOsSockLen()) catch |err| switch (err) {
-                error.WouldBlock => continue,
-                error.ConnectionRefused, error.ConnectionResetByPeer => return ConnectError.ConnectionRefused,
-                else => @panic(std.fmt.allocPrint(self.allocator, "Failed to connect to server: {}", .{err}) catch unreachable),
-            };
-            break;
-        }
+        try self.poller.add(self.connection_socket, 0, true, false);
+        try self.waker.register(&self.poller, 1);
+
+        posix.connect(self.connection_socket, &address.any, address.getOsSockLen()) catch |err| switch (err) {
+            error.WouldBlock => {},
+            error.ConnectionRefused, error.ConnectionResetByPeer => return ConnectError.ConnectionRefused,
+            else => @panic(std.fmt.allocPrint(self.allocator, "Failed to connect to server: {}", .{err}) catch unreachable),
+        };
 
         self.connected.store(true, .release);
 
@@ -89,20 +83,24 @@ pub const ServerConnection = struct {
 
     pub fn disconnect(self: *ServerConnection) !void {
         self.connected.store(false, .release);
-        _ = try posix.write(self.wakeup_fd, std.mem.asBytes(&@as(u64, 1)));
+        self.waker.wake() catch {
+            Logger.err("Failed to wake up the network thread during disconnect", .{});
+        };
 
         self.network_thread.join();
 
         posix.close(self.connection_socket);
-        posix.close(self.wakeup_fd);
+        self.waker.deinit();
     }
 
     fn forceDisconnectNoWait(self: *ServerConnection) void {
         self.connected.store(false, .release);
-        _ = posix.write(self.wakeup_fd, std.mem.asBytes(&@as(u64, 1))) catch {};
+        self.waker.wake() catch {
+            Logger.err("Failed to wake up the network thread during force disconnect", .{});
+        };
 
         posix.close(self.connection_socket);
-        posix.close(self.wakeup_fd);
+        self.waker.deinit(); // todo: this is probably a bug? closing the waker before the network thread has a chance to clean up will likely cause issues
     }
 
     pub fn readMessage(self: *ServerConnection) !?MessageReadResult {
@@ -114,68 +112,69 @@ pub const ServerConnection = struct {
     }
 
     fn networkThread(self: *ServerConnection) !void {
-        while (true) {
-            _ = try posix.poll(self.polls, -1);
-            if (!self.connected.load(.acquire)) break;
+        while (true) event_loop: {
+            var it = self.poller.wait(-1);
 
-            if (self.polls[0].revents & posix.POLL.IN == posix.POLL.IN) {
-                // process inbound messages, resolve pending requests
-                const msg = self.readMessage() catch |err| {
-                    if (err == error.Closed) {
-                        Logger.info("Connection closed by peer", .{});
+            while (it.next()) |event| {
+                if (event.index == 0 and event.in) { // server sent a message or closed the connection
+                    // process inbound messages, resolve pending requests
+                    const msg = self.readMessage() catch |err| {
+                        if (err == error.Closed) {
+                            Logger.info("Connection closed by peer", .{});
 
-                        self.forceDisconnectNoWait();
-                        try self.client.pending_requests_map.clear();
-                        break;
-                    } else {
-                        Logger.err("Error reading message: {}", .{err});
-                        continue;
-                    }
-                };
+                            self.forceDisconnectNoWait();
+                            try self.client.pending_requests_map.clear();
+                            break :event_loop;
+                        } else {
+                            Logger.err("Error reading message: {}", .{err});
+                            continue;
+                        }
+                    };
 
-                if (msg) |in_msg| {
-                    var reader = std.io.Reader.fixed(in_msg.data);
-                    const headers = try deserializeMessageHeaders(&reader);
+                    if (msg) |in_msg| {
+                        var reader = std.io.Reader.fixed(in_msg.data);
+                        const headers = try deserializeMessageHeaders(&reader);
 
-                    switch (headers) {
-                        .Request => {
-                            Logger.err("Unexpected Request message found in inbound queue", .{});
-                            return;
-                        },
-                        .Response => |response| {
-                            const pending_request = self.client.pending_requests_map.get(response.request_id) catch {
-                                Logger.err("No pending request found for request_id: {d}", .{response.request_id});
-                                continue;
-                            };
+                        switch (headers) {
+                            .Request => {
+                                Logger.err("Unexpected Request message found in inbound queue", .{});
+                                return;
+                            },
+                            .Response => |response| {
+                                const pending_request = self.client.pending_requests_map.get(response.request_id) catch {
+                                    Logger.err("No pending request found for request_id: {d}", .{response.request_id});
+                                    continue;
+                                };
 
-                            pending_request.resolve(in_msg.data, in_msg.buffer_idx);
-                        },
-                        .Broadcast => |broadcast| {
-                            Logger.debug("broadcast", .{});
-                            _ = broadcast; // todo: implement broadcast handling on workers when enabled
-                            return error.Unimplemented;
-                        },
-                    }
-                }
-            }
-
-            // process messages
-            if (self.polls[1].revents != 0) {
-                // send outbound messages
-                while (self.client.outbound_queue.tryPop()) |out_msg| {
-                    defer self.client.outbound_buffer_pool.release(out_msg.buffer_idx);
-
-                    const total_len = out_msg.data.len;
-                    var sent: usize = 0;
-
-                    while (sent < total_len) {
-                        sent += try posix.write(self.connection_socket, out_msg.data[sent..total_len]);
+                                pending_request.resolve(in_msg.data, in_msg.buffer_idx);
+                            },
+                            .Broadcast => |broadcast| {
+                                Logger.debug("broadcast", .{});
+                                _ = broadcast; // todo: implement broadcast handling on workers when enabled
+                                return error.Unimplemented;
+                            },
+                        }
                     }
                 }
 
-                // clear the wakeup event
-                var buf: u64 = 0;
-                _ = try posix.read(self.wakeup_fd, std.mem.asBytes(&buf));
+                if (event.index == 1 and event.in) { // waker was signaled, either a new outbound message is available or the connection is being closed by the consumer
+                    if (!self.connected.load(.acquire)) break :event_loop;
+
+                    // send outbound messages
+                    while (self.client.outbound_queue.tryPop()) |out_msg| {
+                        defer self.client.outbound_buffer_pool.release(out_msg.buffer_idx);
+
+                        const total_len = out_msg.data.len;
+                        var sent: usize = 0;
+
+                        while (sent < total_len) {
+                            sent += try posix.write(self.connection_socket, out_msg.data[sent..total_len]);
+                        }
+                    }
+
+                    // clear the wakeup event
+                    try self.waker.drain();
+                }
             }
         }
     }
