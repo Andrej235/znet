@@ -5,12 +5,13 @@ const builtin = @import("builtin");
 const EventIterator = @import("event_iterator/event_iterator.zig");
 
 const LinuxPoller = @import("linux_poller.zig").LinuxPoller;
+const WindowsPoller = @import("windows_poller.zig").WindowsPoller;
 
 const Self = @This();
 
 impl: Impl = undefined,
 
-const Impl = if (builtin.os.tag == .linux) LinuxPoller else @compileError("Unsupported OS");
+const Impl = if (builtin.os.tag == .linux) LinuxPoller else if (builtin.os.tag == .windows) WindowsPoller else @compileError("Unsupported OS");
 
 pub fn init(allocator: std.mem.Allocator, max_events_count: usize) !Self {
     return Self{

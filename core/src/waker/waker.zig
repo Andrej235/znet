@@ -3,12 +3,13 @@ const builtin = @import("builtin");
 const Poller = @import("../poller/poller.zig");
 
 const LinuxWaker = @import("linux_waker.zig").LinuxWaker;
+const WindowsWaker = @import("windows_waker.zig").WindowsWaker;
 
 const Self = @This();
 
 impl: Impl = undefined,
 
-const Impl = if (builtin.os.tag == .linux) LinuxWaker else @compileError("Unsupported OS");
+const Impl = if (builtin.os.tag == .linux) LinuxWaker else if (builtin.os.tag == .windows) WindowsWaker else @compileError("Unsupported OS");
 
 pub fn init() !Self {
     return Self{
