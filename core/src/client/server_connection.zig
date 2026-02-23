@@ -67,8 +67,17 @@ pub const ServerConnection = struct {
             @panic(msg);
         };
 
-        try self.poller.add(self.connection_socket, 0, true, false);
-        try self.waker.register(&self.poller, 1);
+        self.poller.add(self.connection_socket, 0, true, false) catch |err| {
+            var buff: [128]u8 = undefined;
+            const msg = std.fmt.bufPrint(buff[0..], "Failed to add socket to poller: {}", .{err}) catch unreachable;
+            @panic(msg);
+        };
+
+        self.waker.register(&self.poller, 1) catch |err| {
+            var buff: [128]u8 = undefined;
+            const msg = std.fmt.bufPrint(buff[0..], "Failed to register waker with poller: {}", .{err}) catch unreachable;
+            @panic(msg);
+        };
 
         posix.connect(self.connection_socket, &address.any, address.getOsSockLen()) catch |err| switch (err) {
             error.WouldBlock => {},
@@ -105,7 +114,7 @@ pub const ServerConnection = struct {
 
     pub fn readMessage(self: *ServerConnection) !?MessageReadResult {
         return self.connection_reader.readMessage(self.connection_socket) catch |err| switch (err) {
-            error.WouldBlock, error.NotOpenForReading => return null,
+            error.WouldBlock => return null,
             error.Closed, error.ConnectionResetByPeer => return error.Closed,
             else => return err,
         };
@@ -168,7 +177,7 @@ pub const ServerConnection = struct {
                         var sent: usize = 0;
 
                         while (sent < total_len) {
-                            sent += try posix.write(self.connection_socket, out_msg.data[sent..total_len]);
+                            sent += try posix.send(self.connection_socket, out_msg.data[sent..total_len], 0);
                         }
                     }
 

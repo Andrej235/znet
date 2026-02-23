@@ -29,8 +29,12 @@ pub const WindowsPoller = struct {
         self.indices.deinit(self.allocator);
     }
 
-    pub fn wait(self: *WindowsPoller, timeout_ms: i32) !EventIterator {
-        const count = try posix.poll(self.poll_fds.items, timeout_ms);
+    pub fn wait(self: *WindowsPoller, timeout_ms: i32) EventIterator {
+        const count = posix.poll(self.poll_fds.items, timeout_ms) catch |err| {
+            var buff: [128]u8 = undefined;
+            const msg = std.fmt.bufPrint(buff[0..], "Failed to poll: {}", .{err}) catch unreachable;
+            @panic(msg);
+        };
 
         return EventIterator{
             .impl = WindowsEventIterator{

@@ -381,8 +381,8 @@ pub fn Reactor(comptime TSchema: type) type {
 
                             var sent: usize = 0;
                             while (out.offset < data.len and sent < self.options.max_write_per_tick) {
-                                const n = posix.write(client.socket, data[out.offset..]) catch |err| switch (err) {
-                                    error.NotOpenForWriting, error.WouldBlock => break,
+                                const n = posix.send(client.socket, data[out.offset..], 0) catch |err| switch (err) {
+                                    error.WouldBlock => break,
                                     else => return err,
                                 };
 

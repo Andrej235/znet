@@ -18,7 +18,7 @@ pub fn main() !void {
         }
     }
 
-    const address = try std.net.Address.parseIp("127.0.0.1", 5000);
+    const address = try std.net.Address.parseIp("127.0.0.1", 5001);
 
     const server = try znet.Server(Schema).init(
         std.heap.smp_allocator,

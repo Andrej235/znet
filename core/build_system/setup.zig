@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const BuildOptions = @import("build_options.zig").BuildOptions;
 
 pub fn setupZnet(b: *std.Build, options: BuildOptions) !void {
@@ -7,6 +8,7 @@ pub fn setupZnet(b: *std.Build, options: BuildOptions) !void {
         .optimize = options.optimize,
     });
     const znet_module = znet.module("znet");
+    znet_module.link_libc = if (builtin.os.tag == .windows) true else false;
 
     const run_step = b.step("run", "Run the client app");
 
@@ -18,6 +20,7 @@ pub fn setupZnet(b: *std.Build, options: BuildOptions) !void {
             .root_source_file = b.path(options.client_main),
             .target = options.target,
             .optimize = options.optimize,
+            .link_libc = if (builtin.os.tag == .windows) true else false,
         }),
     });
 
