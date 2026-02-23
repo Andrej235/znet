@@ -21,3 +21,7 @@ pub const PendingRequest = @import("client/pending_request.zig").PendingRequest;
 pub const Logger = @import("logger/logger.zig").Logger;
 
 pub const Options = @import("options.zig").Options;
+
+pub const App = @import("app/app.zig").App;
+pub const Scope = @import("app/scope.zig").Scope;
+pub const Action = @import("app/action.zig").Action;
