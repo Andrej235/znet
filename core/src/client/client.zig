@@ -174,7 +174,7 @@ pub const ClientInterface = struct {
     }
 };
 
-pub fn Client(comptime TSchema: type) type {
+pub fn Client(comptime TApp: type) type {
     return struct {
         const Self = @This();
 
@@ -201,21 +201,8 @@ pub fn Client(comptime TSchema: type) type {
         }
 
         pub fn fetch(self: *const Self, method: anytype, args: MethodTupleArg(method)) anyerror!Promise(MethodReturnType(method)) {
-            const method_id = getMethodId(method);
-            return self.interface.fetch(method_id.contract_id, method_id.method_id, method, args);
-        }
-
-        fn getMethodId(comptime method: anytype) struct { contract_id: u16, method_id: u16 } {
-            inline for (TSchema.server_contracts, 0..) |TContract, contract_id| {
-                inline for (@typeInfo(TContract).@"struct".decls, 0..) |decl, method_id| {
-                    const m = @field(TContract, decl.name);
-                    if (@TypeOf(m) == @TypeOf(method) and m == method) {
-                        return .{ .contract_id = contract_id, .method_id = method_id };
-                    }
-                }
-            }
-
-            @compileError("Method not found in any of the registered contracts");
+            const method_id = comptime TApp.actionToId(method);
+            return self.interface.fetch(method_id.scope_idx, method_id.action_idx, method, args);
         }
     };
 }

@@ -12,7 +12,7 @@ pub const ActionOptions = struct {
     executor: ActionExecutor = .io,
 };
 
-pub fn Action(comptime name: []const u8, comptime handler: anytype, comptime options: ActionOptions) type {
+pub fn Action(comptime name: []const u8, comptime handler_fn: anytype, comptime options: ActionOptions) type {
     _ = options;
 
     return struct {
@@ -21,8 +21,17 @@ pub fn Action(comptime name: []const u8, comptime handler: anytype, comptime opt
         pub fn compile(scope_options: ResolvedScopeOptions) RuntimeAction {
             return RuntimeAction{
                 .path = scope_options.path ++ "/" ++ name,
-                .handler = createHandlerFn(handler),
+                .handler = createHandlerFn(handler_fn),
             };
+        }
+
+        pub fn compare(other_handler_fn: anytype) bool {
+            return comptime handler_fn == other_handler_fn;
         }
     };
 }
+
+pub const ActionId = struct {
+    scope_idx: u16,
+    action_idx: u16,
+};

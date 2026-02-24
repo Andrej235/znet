@@ -1,6 +1,6 @@
 const std = @import("std");
 const znet = @import("znet");
-const Schema = @import("schema.zig").Schema;
+const App = @import("app.zig").App;
 
 pub const znet_options: znet.Options = .{
     .logger_type = .async,
@@ -20,7 +20,7 @@ pub fn main() !void {
 
     const address = try std.net.Address.parseIp("127.0.0.1", 5000);
 
-    const server = try znet.Server(Schema).init(
+    const server = try znet.Server(App).init(
         std.heap.smp_allocator,
         .{
             .max_clients = 128,

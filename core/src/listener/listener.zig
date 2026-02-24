@@ -31,8 +31,8 @@ pub fn register(self: *Self, poller: *Poller, index: u32) !void {
 /// Called for all pending connections.
 pub fn drainAccepts(
     self: *Self,
-    comptime TSchema: type,
-    reactor: *Reactor(TSchema),
+    comptime TApp: type,
+    reactor: *Reactor(TApp),
 ) !void {
-    try self.impl.drainAccepts(TSchema, reactor);
+    try self.impl.drainAccepts(TApp, reactor);
 }

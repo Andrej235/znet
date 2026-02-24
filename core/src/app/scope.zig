@@ -4,6 +4,7 @@ const RuntimeScope = @import("runtime_scope.zig").RuntimeScope;
 const RuntimeAction = @import("runtime_action.zig").RuntimeAction;
 const ActionExecutor = @import("action.zig").ActionExecutor;
 const AppOptions = @import("app.zig").AppOptions;
+const ActionId = @import("action.zig").ActionId;
 
 pub const ScopeOptions = struct {
     default_action_executor: ?ActionExecutor = null,
@@ -30,14 +31,8 @@ pub const ResolvedScopeOptions = struct {
 };
 
 pub fn Scope(comptime name: []const u8, comptime children: anytype, comptime options: ScopeOptions) type {
-    const childern_type_info = @typeInfo(@TypeOf(children));
-    if (childern_type_info != .@"struct" or !childern_type_info.@"struct".is_tuple) {
-        @compileError("Scope children must be a tuple containing scope and action definitions");
-    }
-
-    const children_fields = childern_type_info.@"struct".fields;
-    for (children_fields, 0..) |field, i| {
-        const Child = @field(children, field.name);
+    const children_arr = childrenToArray(children);
+    for (children_arr, 0..) |Child, i| {
         const child_name = getName(Child) orelse @compileError(std.fmt.comptimePrint("Child at index {} of scope {s} does not have a name", .{ i, name }));
 
         if (!@hasDecl(Child, "compile"))
@@ -49,8 +44,7 @@ pub fn Scope(comptime name: []const u8, comptime children: anytype, comptime opt
             // ok
         } else @compileError(std.fmt.comptimePrint("Child at index {} of scope {s} is neither a scope nor an action", .{ i, name }));
 
-        for (children_fields[i + 1 ..], i + 1..) |other_field, j| {
-            const OtherChild = @field(children, other_field.name);
+        for (children_arr[i + 1 ..], i + 1..) |OtherChild, j| {
             const other_name = getName(OtherChild) orelse @compileError(std.fmt.comptimePrint("Child at index {} of scope {s} does not have a name", .{ j, name }));
 
             if (std.mem.eql(u8, child_name, other_name)) {
@@ -62,38 +56,68 @@ pub fn Scope(comptime name: []const u8, comptime children: anytype, comptime opt
     return struct {
         pub const scope_name = name;
 
-        pub fn compile(parent_options: ResolvedScopeOptions) []const RuntimeScope {
-            const resolved_options = ResolvedScopeOptions.resolve(parent_options, options, name);
+        pub fn compile(comptime parent_options: ResolvedScopeOptions) []const RuntimeScope {
+            comptime {
+                const resolved_options = ResolvedScopeOptions.resolve(parent_options, options, name);
 
-            var self: RuntimeScope = &[_]RuntimeAction{};
-            var runtime_scopes: []const RuntimeScope = &[_]RuntimeScope{};
-            for (children_fields) |field| {
-                const Child = @field(children, field.name);
+                var self: RuntimeScope = &[_]RuntimeAction{};
+                var runtime_scopes: []const RuntimeScope = &[_]RuntimeScope{};
+                for (children_arr) |Child| {
+                    if (isScope(Child)) {
+                        const child_runtime_scopes = Child.compile(resolved_options);
+                        runtime_scopes = runtime_scopes ++ child_runtime_scopes;
+                    } else if (isAction(Child)) {
+                        const runtime_action = Child.compile(resolved_options);
+                        self = self ++ @as(RuntimeScope, &.{runtime_action});
+                    } else unreachable;
+                }
 
-                if (isScope(Child)) {
-                    const child_runtime_scopes = Child.compile(resolved_options);
-                    runtime_scopes = runtime_scopes ++ child_runtime_scopes;
-                } else if (isAction(Child)) {
-                    const runtime_action = Child.compile(resolved_options);
-                    self = self ++ @as(RuntimeScope, &.{runtime_action});
-                } else unreachable;
+                return &[_]RuntimeScope{self} ++ runtime_scopes;
             }
+        }
 
-            return &[_]RuntimeScope{self} ++ runtime_scopes;
+        pub fn flatten() []const type {
+            comptime {
+                var child_scopes: []const type = &[_]type{};
+                var child_actions: []const type = &[_]type{};
+
+                for (children_arr) |Child| {
+                    if (isScope(Child)) {
+                        child_scopes = child_scopes ++ Child.flatten();
+                    } else if (isAction(Child)) {
+                        child_actions = child_actions ++ &[_]type{Child};
+                    } else unreachable;
+                }
+
+                return &[_]type{Scope(name, child_actions, options)} ++ child_scopes;
+            }
+        }
+
+        /// Can ONLY be used on a flat scope, assumes all children are actions
+        pub fn lookupAction(handler: anytype) ?u16 {
+            comptime {
+                for (children_arr, 0..) |TChild, i| {
+                    const lookup_fn = @field(TChild, "compare");
+                    if (lookup_fn(handler))
+                        return i;
+                }
+
+                return null;
+            }
         }
     };
 }
 
-fn getName(comptime Child: type) ?[]const u8 {
-    if (@hasDecl(Child, "scope_name")) {
-        const scope_name = @field(Child, "scope_name");
+fn getName(comptime TChild: type) ?[]const u8 {
+    if (@hasDecl(TChild, "scope_name")) {
+        const scope_name = @field(TChild, "scope_name");
         if (@TypeOf(scope_name) == []const u8) {
             return scope_name;
         }
     }
 
-    if (@hasDecl(Child, "action_name")) {
-        const action_name = @field(Child, "action_name");
+    if (@hasDecl(TChild, "action_name")) {
+        const action_name = @field(TChild, "action_name");
         if (@TypeOf(action_name) == []const u8) {
             return action_name;
         }
@@ -102,8 +126,8 @@ fn getName(comptime Child: type) ?[]const u8 {
     return null;
 }
 
-fn isScope(comptime Child: type) bool {
-    const compile_fn = @field(Child, "compile");
+fn isScope(comptime T: type) bool {
+    const compile_fn = @field(T, "compile");
     const compile_fn_type_info = @typeInfo(@TypeOf(compile_fn));
 
     if (compile_fn_type_info != .@"fn")
@@ -115,22 +139,54 @@ fn isScope(comptime Child: type) bool {
     if (compile_fn_type_info.@"fn".params.len != 1)
         return false;
 
-    const param_types = compile_fn_type_info.@"fn".params;
-    if (param_types[0].type != ResolvedScopeOptions)
+    if (compile_fn_type_info.@"fn".params[0].type != ResolvedScopeOptions)
         return false;
 
-    if (!@hasDecl(Child, "scope_name"))
+    if (!@hasDecl(T, "flatten"))
         return false;
 
-    const scope_name = @field(Child, "scope_name");
+    const flatten_fn = @field(T, "flatten");
+    const flatten_fn_type_info = @typeInfo(@TypeOf(flatten_fn));
+
+    if (flatten_fn_type_info != .@"fn")
+        return false;
+
+    if (flatten_fn_type_info.@"fn".return_type != []const type)
+        return false;
+
+    if (flatten_fn_type_info.@"fn".params.len != 0)
+        return false;
+
+    if (!@hasDecl(T, "lookupAction"))
+        return false;
+
+    const lookup_fn = @field(T, "lookupAction");
+    const lookup_fn_type_info = @typeInfo(@TypeOf(lookup_fn));
+
+    if (lookup_fn_type_info != .@"fn")
+        return false;
+
+    if (lookup_fn_type_info.@"fn".return_type != ?u16)
+        return false;
+
+    if (lookup_fn_type_info.@"fn".params.len != 1)
+        return false;
+
+    if (!@hasDecl(Scope, "scope_name"))
+        return false;
+
+    if (!@hasDecl(T, "scope_name"))
+        return false;
+
+    const scope_name = @field(T, "scope_name");
     if (@TypeOf(scope_name) != []const u8)
         return false;
 
     return true;
 }
 
-fn isAction(comptime Child: type) bool {
-    const compile_fn = @field(Child, "compile");
+fn isAction(comptime T: type) bool {
+    const compile_fn = @field(T, "compile");
     const compile_fn_type_info = @typeInfo(@TypeOf(compile_fn));
 
     if (compile_fn_type_info != .@"fn")
@@ -146,12 +202,29 @@ fn isAction(comptime Child: type) bool {
     if (param_types[0].type != ResolvedScopeOptions)
         return false;
 
-    if (!@hasDecl(Child, "action_name"))
+    if (!@hasDecl(T, "action_name"))
         return false;
 
-    const action_name = @field(Child, "action_name");
+    const action_name = @field(T, "action_name");
     if (@TypeOf(action_name) != []const u8)
         return false;
 
     return true;
+}
+
+fn childrenToArray(comptime children: anytype) []const type {
+    var arr: []const type = &[_]type{};
+
+    const childern_type_info = @typeInfo(@TypeOf(children));
+    if ((childern_type_info != .@"struct" or !childern_type_info.@"struct".is_tuple) and childern_type_info != .array and (childern_type_info != .pointer or @typeInfo(@TypeOf(children)).pointer.size != .slice)) {
+        @compileError("Scope children must be a tuple, array, or a slice containing scope and action definitions");
+    }
+
+    const children_iterable = if (childern_type_info == .@"struct") childern_type_info.@"struct".fields else children;
+    for (children_iterable, 0..) |field, i| {
+        const Child = if (childern_type_info == .@"struct") @field(children, field.name) else children[i];
+        arr = arr ++ &[_]type{Child};
+    }
+
+    return arr;
 }

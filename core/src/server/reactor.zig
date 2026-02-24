@@ -13,6 +13,8 @@ const deserializeMessageHeaders = @import("../message_headers/deserialize_messag
 const MessageHeadersByteSize = @import("../message_headers/message_headers.zig").HeadersByteSize;
 const ShutdownState = @import("server.zig").ShutdownState;
 
+const RuntimeScope = @import("../app/runtime_scope.zig").RuntimeScope;
+
 const Listener = @import("../listener/listener.zig");
 const Waker = @import("../waker/waker.zig");
 const Poller = @import("../poller/poller.zig");
@@ -33,8 +35,8 @@ pub const ReactorContext = struct {
     waker: Waker,
 };
 
-pub fn Reactor(comptime TSchema: type) type {
-    const call_table = TSchema.createServerCallTable();
+pub fn Reactor(comptime TApp: type) type {
+    const call_table: []const RuntimeScope = TApp.compileServerCallTable();
 
     return struct {
         const Self = @This();
@@ -243,7 +245,7 @@ pub fn Reactor(comptime TSchema: type) type {
 
                     if (idx == self.options.max_clients) { // listening socket
                         // listening socket is ready, accept new connections
-                        try listener.drainAccepts(TSchema, self);
+                        try listener.drainAccepts(TApp, self);
                         continue;
                     }
 
@@ -290,10 +292,10 @@ pub fn Reactor(comptime TSchema: type) type {
                                 self.current_output_buffer = self.output_buffer_pool.buffer(buffer_idx);
                             }
 
-                            const handler = call_table[req_header.contract_id][req_header.method_id];
+                            const action = call_table[req_header.contract_id][req_header.method_id];
 
                             var writer: std.Io.Writer = .fixed(self.current_output_buffer);
-                            handler(
+                            action.handler(
                                 ReactorContext{
                                     .allocator = self.allocator,
                                     .input_buffer_pool = self.input_buffer_pool,
@@ -311,7 +313,7 @@ pub fn Reactor(comptime TSchema: type) type {
                                 // keep the current output buffer avoid just re-acquiring it in the next iteration
                                 _ = self.job_queue.tryPop();
 
-                                Logger.warn("Handler failed with error: {}", .{err});
+                                Logger.warn("Action at {s} failed with error: {}", .{ action.path, err });
                                 continue;
                             };
 

@@ -1,7 +1,7 @@
 const std = @import("std");
 const znet = @import("znet");
-const Schema = @import("schema.zig").Schema;
-const EchoContract = @import("schema.zig").EchoContract;
+const App = @import("app.zig").App;
+const echo = @import("app.zig").echo;
 
 const num_workers = 16;
 const benchmark_seconds = 5;
@@ -55,7 +55,7 @@ fn worker() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .thread_safe = true }){};
     defer _ = gpa.deinit();
 
-    var client = try znet.Client(Schema).init(std.heap.smp_allocator, .{ .worker_thread_count = 1 });
+    var client = try znet.Client(App).init(std.heap.smp_allocator, .{ .worker_thread_count = 1 });
     defer client.deinit() catch {};
 
     const address = try std.net.Address.parseIp("127.0.0.1", 5000);
@@ -63,7 +63,7 @@ fn worker() !void {
 
     // ---- Warmup ----
     for (0..warmup_requests) |_| {
-        var p = try client.fetch(EchoContract.echo, .{&message});
+        var p = try client.fetch(echo, .{&message});
         const result = try p.await(.release);
         p.destroy(result);
     }
@@ -78,7 +78,7 @@ fn worker() !void {
 
     // ---- Timed benchmark ----
     while (running.load(.acquire)) {
-        var p = try client.fetch(EchoContract.echo, .{&message});
+        var p = try client.fetch(echo, .{&message});
         const result = try p.await(.release);
         p.destroy(result);
 
