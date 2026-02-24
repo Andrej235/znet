@@ -2,6 +2,7 @@ const std = @import("std");
 
 const ActionExecutor = @import("action.zig").ActionExecutor;
 const RuntimeScope = @import("runtime_scope.zig").RuntimeScope;
+const ResolvedScopeOptions = @import("scope.zig").ResolvedScopeOptions;
 
 pub const AppOptions = struct {
     default_action_executor: ActionExecutor = .worker_pool,
@@ -28,12 +29,17 @@ pub fn App(comptime scopes: anytype, comptime options: AppOptions) type {
             @compileError(std.fmt.comptimePrint("Scope at index {} has a compile declaration that is not a function", .{i}));
         }
 
-        if (compile_fn_type_info.@"fn".return_type != RuntimeScope) {
+        if (compile_fn_type_info.@"fn".return_type != []const RuntimeScope) {
             @compileError(std.fmt.comptimePrint("Scope at index {} has a compile function that does not return RuntimeScope", .{i}));
         }
 
-        if (compile_fn_type_info.@"fn".params.len != 1 or compile_fn_type_info.@"fn".params[0].type != AppOptions) {
-            @compileError(std.fmt.comptimePrint("Scope at index {} has a compile function that does not take exactly one parameter of type AppOptions", .{i}));
+        if (compile_fn_type_info.@"fn".params.len != 1) {
+            @compileError(std.fmt.comptimePrint("Scope at index {} has a compile function that does not take exactly one parameter", .{i}));
+        }
+
+        const param_types = compile_fn_type_info.@"fn".params;
+        if (param_types[0].type != ResolvedScopeOptions) {
+            @compileError(std.fmt.comptimePrint("Scope at index {} has a compile function whose parameter is not of type ResolvedScopeOptions", .{i}));
         }
 
         if (!@hasDecl(Scope, "scope_name")) {
@@ -63,15 +69,18 @@ pub fn App(comptime scopes: anytype, comptime options: AppOptions) type {
     }
 
     return struct {
-        pub fn compileServerCallTable() []RuntimeScope {
-            var runtime_scopes: [scope_fields.len]RuntimeScope = undefined;
+        pub fn compileServerCallTable() []const RuntimeScope {
+            comptime {
+                var runtime_scopes: []const RuntimeScope = &[_]RuntimeScope{};
 
-            for (scope_fields, 0..) |Scope, i| {
-                const compile_fn = @field(Scope, "compile");
-                runtime_scopes[i] = compile_fn(options);
+                for (scope_fields) |field| {
+                    const Scope = @field(scopes, field.name);
+                    const compile_fn = @field(Scope, "compile");
+                    runtime_scopes = runtime_scopes ++ compile_fn(ResolvedScopeOptions.fromAppOptions(options));
+                }
+
+                return runtime_scopes[0..];
             }
-
-            return runtime_scopes[0..];
         }
     };
 }

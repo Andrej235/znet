@@ -5,7 +5,6 @@
 const HandlerFn = @import("../server/handler_fn/handler_fn.zig").HandlerFn;
 
 pub const RuntimeAction = struct {
-    name: []const u8,
-    resolved_path: []const u8,
+    path: []const u8,
     handler: HandlerFn,
 };

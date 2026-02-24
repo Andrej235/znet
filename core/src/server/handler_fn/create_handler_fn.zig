@@ -16,7 +16,7 @@ pub fn createHandlerFn(comptime fn_impl: anytype) HandlerFn {
     const fn_info = @typeInfo(TFn);
     if (fn_info != .@"fn") @compileError("Expected function type");
 
-    const inject_context: bool = fn_info.@"fn".params[0].type == *Context;
+    const inject_context: bool = fn_info.@"fn".params.len > 0 and fn_info.@"fn".params[0].type == *Context;
     const TParams = comptime @Type(.{
         .@"struct" = .{
             .backing_integer = null,
