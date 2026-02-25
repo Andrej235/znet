@@ -13,5 +13,7 @@ pub const App = znet.App(
         },
         .{},
     )},
-    .{},
+    .{
+        .default_action_executor = .io,
+    },
 );

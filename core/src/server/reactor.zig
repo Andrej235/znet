@@ -293,6 +293,9 @@ pub fn Reactor(comptime TApp: type) type {
                             }
 
                             const action = call_table[req_header.contract_id][req_header.method_id];
+                            if (action.executor == .worker_pool) {
+                                Logger.warn("Found action intended for worker pool", .{});
+                            }
 
                             var writer: std.Io.Writer = .fixed(self.current_output_buffer);
                             action.handler(

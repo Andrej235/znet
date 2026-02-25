@@ -4,7 +4,10 @@
 // another option is to split this into two different handler types, one for server and one for broadcast, but that would be less elegant and more code to maintain
 const HandlerFn = @import("../server/handler_fn/handler_fn.zig").HandlerFn;
 
+const ActionExecutor = @import("action.zig").ActionExecutor;
+
 pub const RuntimeAction = struct {
     path: []const u8,
+    executor: ActionExecutor,
     handler: HandlerFn,
 };

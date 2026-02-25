@@ -119,15 +119,17 @@ pub fn App(comptime scopes: anytype, comptime options: AppOptions) type {
 
     return struct {
         pub fn compileServerCallTable() []const RuntimeScope {
-            var runtime_scopes: []const RuntimeScope = &[_]RuntimeScope{};
+            comptime {
+                var runtime_scopes: []const RuntimeScope = &[_]RuntimeScope{};
 
-            for (scope_fields) |field| {
-                const Scope = @field(scopes, field.name);
-                const compile_fn = @field(Scope, "compile");
-                runtime_scopes = runtime_scopes ++ compile_fn(ResolvedScopeOptions.fromAppOptions(options));
+                for (scope_fields) |field| {
+                    const Scope = @field(scopes, field.name);
+                    const compile_fn = @field(Scope, "compile");
+                    runtime_scopes = runtime_scopes ++ compile_fn(ResolvedScopeOptions.fromAppOptions(options));
+                }
+
+                return runtime_scopes;
             }
-
-            return runtime_scopes;
         }
 
         pub fn actionToId(comptime action_fn: anytype) ActionId {

@@ -198,8 +198,22 @@ fn isAction(comptime T: type) bool {
     if (compile_fn_type_info.@"fn".params.len != 1)
         return false;
 
-    const param_types = compile_fn_type_info.@"fn".params;
-    if (param_types[0].type != ResolvedScopeOptions)
+    if (compile_fn_type_info.@"fn".params[0].type != ResolvedScopeOptions)
+        return false;
+
+    if (!@hasDecl(T, "compare"))
+        return false;
+
+    const compare_fn = @field(T, "compare");
+    const compare_fn_type_info = @typeInfo(@TypeOf(compare_fn));
+
+    if (compare_fn_type_info != .@"fn")
+        return false;
+
+    if (compare_fn_type_info.@"fn".return_type != bool)
+        return false;
+
+    if (compare_fn_type_info.@"fn".params.len != 1)
         return false;
 
     if (!@hasDecl(T, "action_name"))

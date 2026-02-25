@@ -9,12 +9,10 @@ pub const ActionExecutor = enum {
 };
 
 pub const ActionOptions = struct {
-    executor: ActionExecutor = .io,
+    executor: ?ActionExecutor = null,
 };
 
 pub fn Action(comptime name: []const u8, comptime handler_fn: anytype, comptime options: ActionOptions) type {
-    _ = options;
-
     return struct {
         pub const action_name = name;
 
@@ -22,6 +20,7 @@ pub fn Action(comptime name: []const u8, comptime handler_fn: anytype, comptime 
             return RuntimeAction{
                 .path = scope_options.path ++ "/" ++ name,
                 .handler = createHandlerFn(handler_fn),
+                .executor = options.executor orelse scope_options.default_action_executor,
             };
         }
 
