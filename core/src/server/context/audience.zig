@@ -5,8 +5,8 @@ const SharedSlice = @import("../../utils/shared_slice.zig").SharedSlice;
 
 const MessageHeadersByteSize = @import("../../message_headers/message_headers.zig").HeadersByteSize;
 const serializeHeaders = @import("../../message_headers/serialize_message_headers.zig").serializeMessageHeaders;
-const Serializer = @import("../../serialization/serializer.zig").Serializer;
-const CountingSerializer = @import("../../serialization/counting_serializer.zig").Serializer;
+const Serializer = @import("../../serialization/binary/serializer.zig").Serializer;
+const CountingSerializer = @import("../../serialization/binary/counting_serializer.zig").Serializer;
 const Waker = @import("../../waker/waker.zig");
 
 const Client = @import("../../client//client.zig").ClientInterface;

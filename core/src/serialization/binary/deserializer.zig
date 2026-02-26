@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const DeserializationErrors = @import("errors.zig").DeserializationErrors;
+const DeserializationErrors = @import("../errors.zig").DeserializationErrors;
 
 pub const Deserializer = struct {
     allocator: std.mem.Allocator,

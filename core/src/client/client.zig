@@ -8,9 +8,9 @@ const serializeHeaders = @import("../message_headers/serialize_message_headers.z
 
 const ServerContext = @import("../server/context/context.zig").Context;
 
-const Serializer = @import("../serialization/serializer.zig").Serializer;
-const CountingSerializer = @import("../serialization/counting_serializer.zig").Serializer;
-const Deserializer = @import("../serialization/deserializer.zig").Deserializer;
+const Serializer = @import("../serialization/binary/serializer.zig").Serializer;
+const CountingSerializer = @import("../serialization/binary/counting_serializer.zig").Serializer;
+const Deserializer = @import("../serialization/binary/deserializer.zig").Deserializer;
 
 const Queue = @import("../utils/mpsc_queue.zig").Queue;
 const Promise = @import("promise.zig").Promise;

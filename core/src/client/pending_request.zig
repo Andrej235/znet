@@ -1,5 +1,5 @@
 const std = @import("std");
-const Deserializer = @import("../serialization/deserializer.zig").Deserializer;
+const Deserializer = @import("../serialization/binary/deserializer.zig").Deserializer;
 const DeserializationErrors = @import("../serialization/errors.zig").DeserializationErrors;
 const Client = @import("client.zig").ClientInterface;
 const deserializeMessageHeaders = @import("../message_headers/deserialize_message_headers.zig").deserializeMessageHeaders;

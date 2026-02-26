@@ -1,5 +1,5 @@
 const std = @import("std");
-const SerializationErrors = @import("errors.zig").CountingSerializationErrors;
+const SerializationErrors = @import("../errors.zig").CountingSerializationErrors;
 
 pub const Serializer = struct {
     pub fn serialize(comptime T: type, data: T) SerializationErrors!u32 {
