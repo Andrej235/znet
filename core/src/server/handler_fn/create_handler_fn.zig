@@ -2,9 +2,9 @@ const std = @import("std");
 
 const RequestHeaders = @import("../../message_headers/request_headers.zig").RequestHeaders;
 const serializeMessageHeaders = @import("../../message_headers/serialize_message_headers.zig").serializeMessageHeaders;
-const Deserializer = @import("../../serializer/deserializer.zig").Deserializer;
-const Serializer = @import("../../serializer/serializer.zig").Serializer;
-const CountingSerializer = @import("../../serializer/counting_serializer.zig").Serializer;
+const Deserializer = @import("../../serialization/deserializer.zig").Deserializer;
+const Serializer = @import("../../serialization/serializer.zig").Serializer;
+const CountingSerializer = @import("../../serialization/counting_serializer.zig").Serializer;
 const HandlerFn = @import("handler_fn.zig").HandlerFn;
 const ReactorContext = @import("../reactor.zig").ReactorContext;
 

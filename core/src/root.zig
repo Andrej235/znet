@@ -1,6 +1,6 @@
-pub const Serializer = @import("serializer/serializer.zig").Serializer;
-pub const CountingSerializer = @import("serializer/counting_serializer.zig").Serializer;
-pub const Deserializer = @import("serializer/deserializer.zig").Deserializer;
+pub const Serializer = @import("serialization/serializer.zig").Serializer;
+pub const CountingSerializer = @import("serialization/counting_serializer.zig").Serializer;
+pub const Deserializer = @import("serialization/deserializer.zig").Deserializer;
 
 pub const Schema = @import("schema.zig").Schema;
 pub const Client = @import("client/client.zig").Client;

@@ -1,5 +1,5 @@
 const std = @import("std");
-const Deserializer = @import("../serializer/deserializer.zig").Deserializer;
+const Deserializer = @import("../serialization/deserializer.zig").Deserializer;
 const Client = @import("client.zig").ClientInterface;
 const PendingRequest = @import("pending_request.zig").PendingRequest;
 const Timer = @import("../utils/timer.zig").Timer;
