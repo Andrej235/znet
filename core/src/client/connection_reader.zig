@@ -57,7 +57,7 @@ pub const ConnectionReader = struct {
                 return msg;
 
             // read more data from the socket, fills up the buffer from pos to the end
-            const n = try posix.read(socket, self.current_buffer[self.pos..]);
+            const n = try posix.recv(socket, self.current_buffer[self.pos..], 0);
 
             if (n == 0) // no more data, connection closed or EOF
                 return error.Closed;

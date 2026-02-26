@@ -4,12 +4,13 @@ const Poller = @import("../poller/poller.zig");
 const Reactor = @import("../server/reactor.zig").Reactor;
 
 const LinuxListener = @import("linux_listener.zig").LinuxListener;
+const WindowsListener = @import("windows_listener.zig").WindowsListener;
 
 const Self = @This();
 
 impl: Impl = undefined,
 
-const Impl = if (builtin.os.tag == .linux) LinuxListener else @compileError("Unsupported OS");
+const Impl = if (builtin.os.tag == .linux) LinuxListener else if (builtin.os.tag == .windows) WindowsListener else @compileError("Unsupported OS");
 
 /// Create listening socket
 pub fn init(address: std.net.Address) !Self {
