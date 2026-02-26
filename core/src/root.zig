@@ -21,3 +21,5 @@ pub const PendingRequest = @import("client/pending_request.zig").PendingRequest;
 pub const Logger = @import("logger/logger.zig").Logger;
 
 pub const Options = @import("options.zig").Options;
+
+test "Run all tests" {}
