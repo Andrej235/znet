@@ -30,35 +30,39 @@ pub const ResolvedScopeOptions = struct {
     }
 };
 
-pub fn Scope(comptime name: []const u8, comptime children: anytype, comptime options: ScopeOptions) type {
+pub const ScopeName = @Type(.enum_literal);
+
+pub fn Scope(comptime name: ScopeName, comptime children: anytype, comptime options: ScopeOptions) type {
+    const string_name: []const u8 = @tagName(name);
+
     const children_arr = childrenToArray(children);
     for (children_arr, 0..) |Child, i| {
-        const child_name = getName(Child) orelse @compileError(std.fmt.comptimePrint("Child at index {} of scope {s} does not have a name", .{ i, name }));
+        const child_name = getName(Child) orelse @compileError(std.fmt.comptimePrint("Child at index {} of scope {s} does not have a name", .{ i, string_name }));
 
         if (!@hasDecl(Child, "compile"))
-            @compileError(std.fmt.comptimePrint("Child at index {} of scope {s} does not have a compile() function, did you forget to make it public?", .{ i, name }));
+            @compileError(std.fmt.comptimePrint("Child at index {} of scope {s} does not have a compile() function, did you forget to make it public?", .{ i, string_name }));
 
         if (isScope(Child)) {
             // ok
         } else if (isAction(Child)) {
             // ok
-        } else @compileError(std.fmt.comptimePrint("Child at index {} of scope {s} is neither a scope nor an action", .{ i, name }));
+        } else @compileError(std.fmt.comptimePrint("Child at index {} of scope {s} is neither a scope nor an action", .{ i, string_name }));
 
         for (children_arr[i + 1 ..], i + 1..) |OtherChild, j| {
-            const other_name = getName(OtherChild) orelse @compileError(std.fmt.comptimePrint("Child at index {} of scope {s} does not have a name", .{ j, name }));
+            const other_name = getName(OtherChild) orelse @compileError(std.fmt.comptimePrint("Child at index {} of scope {s} does not have a name", .{ j, string_name }));
 
             if (std.mem.eql(u8, child_name, other_name)) {
-                @compileError(std.fmt.comptimePrint("Children of {s} at index {} and {} have the same name '{s}'", .{ name, i, j, child_name }));
+                @compileError(std.fmt.comptimePrint("Children of {s} at index {} and {} have the same name '{s}'", .{ string_name, i, j, child_name }));
             }
         }
     }
 
     return struct {
-        pub const scope_name = name;
+        pub const scope_name = string_name;
 
         pub fn compile(comptime parent_options: ResolvedScopeOptions) []const RuntimeScope {
             comptime {
-                const resolved_options = ResolvedScopeOptions.resolve(parent_options, options, name);
+                const resolved_options = ResolvedScopeOptions.resolve(parent_options, options, string_name);
 
                 var self: RuntimeScope = &[_]RuntimeAction{};
                 var runtime_scopes: []const RuntimeScope = &[_]RuntimeScope{};
@@ -170,9 +174,6 @@ fn isScope(comptime T: type) bool {
         return false;
 
     if (lookup_fn_type_info.@"fn".params.len != 1)
-        return false;
-
-    if (!@hasDecl(Scope, "scope_name"))
         return false;
 
     if (!@hasDecl(T, "scope_name"))

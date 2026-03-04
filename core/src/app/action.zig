@@ -12,13 +12,17 @@ pub const ActionOptions = struct {
     executor: ?ActionExecutor = null,
 };
 
-pub fn Action(comptime name: []const u8, comptime handler_fn: anytype, comptime options: ActionOptions) type {
+pub const ActionName = @Type(.enum_literal);
+
+pub fn Action(comptime name: ActionName, comptime handler_fn: anytype, comptime options: ActionOptions) type {
+    const string_name: []const u8 = @tagName(name);
+
     return struct {
-        pub const action_name = name;
+        pub const action_name = string_name;
 
         pub fn compile(scope_options: ResolvedScopeOptions) RuntimeAction {
             return RuntimeAction{
-                .path = scope_options.path ++ "/" ++ name,
+                .path = scope_options.path ++ "/" ++ string_name,
                 .handler = createHandlerFn(handler_fn),
                 .executor = options.executor orelse scope_options.default_action_executor,
             };

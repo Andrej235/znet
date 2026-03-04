@@ -2,12 +2,12 @@ const std = @import("std");
 const z = @import("znet");
 
 const App = z.App(.{
-    z.Scope("user", .{
-        z.Action("register", helloWorld, .{}),
-        z.Action("login", helloWorld, .{}),
-        z.Scope("me", .{
-            z.Action("details", hello, .{}),
-            z.Action("settings", hello, .{}),
+    z.Scope(.user, .{
+        z.Action(.register, helloWorld, .{}),
+        z.Action(.login, helloWorld, .{}),
+        z.Scope(.me, .{
+            z.Action(.details, hello, .{}),
+            z.Action(.settings, hello, .{}),
         }, .{}),
     }, .{}),
 }, .{});
