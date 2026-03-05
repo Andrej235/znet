@@ -29,9 +29,6 @@ pub const ReactorHandle = struct {
 pub const ReactorContext = struct {
     allocator: std.mem.Allocator,
     input_buffer_pool: *BufferPool,
-    initiated_by_connection_id: u32,
-    client_connections: []const ClientConnection,
-    connected_clients: []const u32,
     waker: Waker,
 };
 
@@ -299,9 +296,6 @@ pub fn Reactor(comptime TApp: type) type {
                                         ReactorContext{
                                             .allocator = self.allocator,
                                             .input_buffer_pool = self.input_buffer_pool,
-                                            .initiated_by_connection_id = job.client_id.index,
-                                            .client_connections = self.clients[0..self.connected],
-                                            .connected_clients = &.{},
                                             .waker = self.waker,
                                         },
                                         headers.Request,
