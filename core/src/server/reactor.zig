@@ -251,7 +251,7 @@ pub fn Reactor(comptime TApp: type) type {
 
                         if (self.shutdown_state.load(.acquire) == .immediate) break;
 
-                        // handle non blocking jobs
+                        // handle new jobs
                         while (self.job_queue.tryPop()) |job| {
                             // input buffer will be released in handler right after deserialization or in the first point of failure
 
@@ -280,8 +280,10 @@ pub fn Reactor(comptime TApp: type) type {
                             // acquire a new output buffer
                             if (self.current_output_buffer_idx == null) {
                                 const buffer_idx = self.output_buffer_pool.acquire() orelse {
-                                    // no output buffers available, drop the message
-                                    // todo: release?
+                                    // no output buffers available, drop the message and release the input buffer
+                                    self.input_buffer_pool.release(job.buffer_idx);
+
+                                    Logger.info("No output buffers available, dropping message", .{});
                                     break;
                                 };
 
@@ -290,53 +292,58 @@ pub fn Reactor(comptime TApp: type) type {
                             }
 
                             const action = call_table[req_header.contract_id][req_header.method_id];
-                            if (action.executor == .worker_pool) {
-                                Logger.warn("Found action intended for worker pool", .{});
+                            switch (action.executor) {
+                                .io => { // execute the contract method on the reactor thread
+                                    var writer: std.Io.Writer = .fixed(self.current_output_buffer);
+                                    action.handler(
+                                        ReactorContext{
+                                            .allocator = self.allocator,
+                                            .input_buffer_pool = self.input_buffer_pool,
+                                            .initiated_by_connection_id = job.client_id.index,
+                                            .client_connections = self.clients[0..self.connected],
+                                            .connected_clients = &.{},
+                                            .waker = self.waker,
+                                        },
+                                        headers.Request,
+                                        &reader,
+                                        &writer,
+                                        job.buffer_idx,
+                                    ) catch |err| {
+                                        // handlers release the input buffer regardless of success or failure, so we don't need to release it here
+                                        // keep the current output buffer to avoid just re-acquiring it in the next iteration
+
+                                        Logger.warn("Action at {s} failed with error: {}", .{ action.path, err });
+                                        continue;
+                                    };
+
+                                    const response_payload_len = std.mem.readInt(u32, self.current_output_buffer[MessageHeadersByteSize.Response - 4 .. MessageHeadersByteSize.Response], .big);
+                                    const response_data = self.current_output_buffer[0 .. MessageHeadersByteSize.Response + response_payload_len];
+
+                                    // response_data will be freed by the reactor thread after sending
+                                    client.enqueueMessage(OutMessage{
+                                        .offset = 0,
+                                        .data = .{
+                                            .single = .{
+                                                .data = response_data,
+                                                .buffer_idx = self.current_output_buffer_idx.?,
+                                            },
+                                        },
+                                    }) catch {
+                                        // client's response queue is full
+                                        // we can't really do anything about it, so just move on to the next job, input buffer was released in the handler
+                                        // keep the current output buffer to avoid just re-acquiring it in the next iteration
+                                        continue;
+                                    };
+
+                                    // released in reactor thread, set to null here to indicate that we don't have a current buffer anymore
+                                    self.current_output_buffer_idx = null;
+                                },
+                                .worker_pool => { // pass the job over to the worker pool
+                                    // todo: implement
+                                    Logger.err("Found action intended for worker pool, unimplemented", .{});
+                                    self.input_buffer_pool.release(job.buffer_idx);
+                                },
                             }
-
-                            var writer: std.Io.Writer = .fixed(self.current_output_buffer);
-                            action.handler(
-                                ReactorContext{
-                                    .allocator = self.allocator,
-                                    .input_buffer_pool = self.input_buffer_pool,
-                                    .initiated_by_connection_id = job.client_id.index,
-                                    .client_connections = self.clients[0..self.connected],
-                                    .connected_clients = &.{},
-                                    .waker = self.waker,
-                                },
-                                headers.Request,
-                                &reader,
-                                &writer,
-                                job.buffer_idx,
-                            ) catch |err| {
-                                // handlers release the input buffer regardless of success or failure, so we don't need to release it here
-                                // keep the current output buffer to avoid just re-acquiring it in the next iteration
-
-                                Logger.warn("Action at {s} failed with error: {}", .{ action.path, err });
-                                continue;
-                            };
-
-                            const response_payload_len = std.mem.readInt(u32, self.current_output_buffer[MessageHeadersByteSize.Response - 4 .. MessageHeadersByteSize.Response], .big);
-                            const response_data = self.current_output_buffer[0 .. MessageHeadersByteSize.Response + response_payload_len];
-
-                            // response_data will be freed by the reactor thread after sending
-                            client.enqueueMessage(OutMessage{
-                                .offset = 0,
-                                .data = .{
-                                    .single = .{
-                                        .data = response_data,
-                                        .buffer_idx = self.current_output_buffer_idx.?,
-                                    },
-                                },
-                            }) catch {
-                                // client's response queue is full
-                                // we can't really do anything about it, so just move on to the next job, input buffer was released in the handler
-                                // keep the current output buffer to avoid just re-acquiring it in the next iteration
-                                continue;
-                            };
-
-                            // released in reactor thread, set to null here to indicate that we don't have a current buffer anymore
-                            self.current_output_buffer_idx = null;
                         }
 
                         // nothing left to send, clear the eventfd
