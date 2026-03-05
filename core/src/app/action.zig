@@ -12,17 +12,17 @@ pub const ActionOptions = struct {
     executor: ?ActionExecutor = null,
 };
 
-pub const ActionName = @Type(.enum_literal);
+pub const ActionName = ?@Type(.enum_literal);
 
 pub fn Action(comptime name: ActionName, comptime handler_fn: anytype, comptime options: ActionOptions) type {
-    const string_name: []const u8 = @tagName(name);
+    const string_name: []const u8 = if (name) |n| @tagName(n) else "";
 
     return struct {
         pub const action_name = string_name;
 
         pub fn compile(comptime scope_options: ResolvedScopeOptions) RuntimeAction {
             return RuntimeAction{
-                .path = scope_options.path ++ "/" ++ string_name,
+                .path = concatPathSegment(scope_options.path, string_name),
                 .handler = createHandlerFn(handler_fn),
                 .executor = options.executor orelse scope_options.default_action_executor,
             };
@@ -32,6 +32,13 @@ pub fn Action(comptime name: ActionName, comptime handler_fn: anytype, comptime 
             return comptime handler_fn == other_handler_fn;
         }
     };
+}
+
+fn concatPathSegment(comptime prefix: []const u8, comptime segment: []const u8) []const u8 {
+    if (prefix.len == 0) return segment;
+    if (segment.len == 0) return prefix;
+
+    return prefix ++ "/" ++ segment;
 }
 
 pub const ActionId = struct {
@@ -50,7 +57,7 @@ const ActionValidationError = error{
     ActionCompareFnNotFunction,
     ActionCompareFnInvalidReturnType,
     ActionCompareFnInvalidParameterCount,
-    
+
     ActionMissingActionName,
     ActionInvalidActionNameType,
 };

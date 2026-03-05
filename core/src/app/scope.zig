@@ -20,7 +20,7 @@ pub const ResolvedScopeOptions = struct {
     pub fn resolve(parent_options: ResolvedScopeOptions, options: ScopeOptions, name: []const u8) ResolvedScopeOptions {
         return ResolvedScopeOptions{
             .default_action_executor = options.default_action_executor orelse parent_options.default_action_executor,
-            .path = parent_options.path ++ "/" ++ name,
+            .path = concatPathSegment(parent_options.path, name),
         };
     }
 
@@ -32,10 +32,19 @@ pub const ResolvedScopeOptions = struct {
     }
 };
 
-pub const ScopeName = @Type(.enum_literal);
+fn concatPathSegment(path: []const u8, segment: []const u8) []const u8 {
+    if (path.len == 0) // root path
+        return "/" ++ segment;
+
+    if (segment.len == 0) return path;
+
+    return std.fmt.comptimePrint("{s}/{s}", .{ path, segment });
+}
+
+pub const ScopeName = ?@Type(.enum_literal);
 
 pub fn Scope(comptime name: ScopeName, comptime children: anytype, comptime options: ScopeOptions) type {
-    const string_name: []const u8 = @tagName(name);
+    const string_name: []const u8 = if (name) |n| @tagName(n) else "";
 
     const children_arr = childrenToArray(children);
     for (children_arr, 0..) |Child, i| {
@@ -46,7 +55,7 @@ pub fn Scope(comptime name: ScopeName, comptime children: anytype, comptime opti
         };
 
         const child_name = getName(Child) orelse @compileError(std.fmt.comptimePrint("Child at index {} of scope {s} does not have a name", .{ i, string_name }));
-        
+
         for (children_arr[i + 1 ..], i + 1..) |OtherChild, j| {
             const other_name = getName(OtherChild) orelse @compileError(std.fmt.comptimePrint("Child at index {} of scope {s} does not have a name", .{ j, string_name }));
 
