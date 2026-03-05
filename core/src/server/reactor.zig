@@ -117,7 +117,7 @@ pub fn Reactor(comptime TApp: type) type {
             self.output_buffer_pool.deinit(self.allocator);
             self.allocator.destroy(self.output_buffer_pool);
 
-            self.allocator.free(self.job_queue.buf);
+            self.job_queue.deinit(self.allocator);
             self.allocator.destroy(self.job_queue);
 
             self.allocator.free(self.clients);
@@ -162,11 +162,8 @@ pub fn Reactor(comptime TApp: type) type {
             var poller = try Poller.init(allocator, options.max_clients + 2); // +2 for the listening socket and the wakeup socket
             errdefer poller.deinit();
 
-            const jobs_buf = try allocator.alloc(Job, options.max_jobs_in_queue);
-            errdefer allocator.free(jobs_buf);
-
             const job_queue = try allocator.create(Queue(Job));
-            job_queue.* = try Queue(Job).init(jobs_buf);
+            job_queue.* = try Queue(Job).init(allocator, options.max_jobs_in_queue);
             errdefer allocator.destroy(job_queue);
 
             var free_indices = try allocator.alloc(ConnectionId, options.max_clients);
@@ -255,13 +252,13 @@ pub fn Reactor(comptime TApp: type) type {
                         if (self.shutdown_state.load(.acquire) == .immediate) break;
 
                         // handle non blocking jobs
-                        while (self.job_queue.tryPeek()) |job| {
+                        while (self.job_queue.tryPop()) |job| {
                             // input buffer will be released in handler right after deserialization or in the first point of failure
 
                             var reader: std.Io.Reader = .fixed(job.data);
                             const headers = deserializeMessageHeaders(&reader) catch |err| {
-                                // invalid message, release the buffer and move on to the next job. No need to send an error response since we can't even be sure if the client sent a valid request or not
-                                _ = self.job_queue.tryPop();
+                                // invalid message, release the buffer and move on to the next job
+                                // no need to send an error response since we can't even be sure if the client sent a valid request or not
                                 self.input_buffer_pool.release(job.buffer_idx);
 
                                 Logger.warn("Failed to deserialize message headers: {}", .{err});
@@ -273,8 +270,7 @@ pub fn Reactor(comptime TApp: type) type {
 
                             const client = &self.clients[job.client_id.index];
                             if (client.id.gen != job.client_id.gen) {
-                                // job was meant for a previous generation of the client, just release the buffer there is no point in processing it
-                                _ = self.job_queue.tryPop();
+                                // job was meant for a previous generation of the client, just release the buffer as there is no point in processing it
                                 self.input_buffer_pool.release(job.buffer_idx);
 
                                 Logger.info("Client gen mismatch: expected {}, got {}", .{ client.id.gen, job.client_id.gen });
@@ -284,7 +280,8 @@ pub fn Reactor(comptime TApp: type) type {
                             // acquire a new output buffer
                             if (self.current_output_buffer_idx == null) {
                                 const buffer_idx = self.output_buffer_pool.acquire() orelse {
-                                    // no output buffers available, can't process any jobs yet. Don't consume anything
+                                    // no output buffers available, drop the message
+                                    // todo: release?
                                     break;
                                 };
 
@@ -312,9 +309,8 @@ pub fn Reactor(comptime TApp: type) type {
                                 &writer,
                                 job.buffer_idx,
                             ) catch |err| {
-                                // handlers release the input buffer regardless of success or failure, so we don't need to release it here, just pop the job to consume it
-                                // keep the current output buffer avoid just re-acquiring it in the next iteration
-                                _ = self.job_queue.tryPop();
+                                // handlers release the input buffer regardless of success or failure, so we don't need to release it here
+                                // keep the current output buffer to avoid just re-acquiring it in the next iteration
 
                                 Logger.warn("Action at {s} failed with error: {}", .{ action.path, err });
                                 continue;
@@ -334,14 +330,13 @@ pub fn Reactor(comptime TApp: type) type {
                                 },
                             }) catch {
                                 // client's response queue is full
-                                // we can't really do anything about it, so just consume the job, input buffer was released in the handler
-                                // keep the current output buffer avoid just re-acquiring it in the next iteration
-                                _ = self.job_queue.tryPop();
+                                // we can't really do anything about it, so just move on to the next job, input buffer was released in the handler
+                                // keep the current output buffer to avoid just re-acquiring it in the next iteration
                                 continue;
                             };
 
-                            _ = self.job_queue.tryPop(); // consume the job after successfully enqueuing the message
-                            self.current_output_buffer_idx = null; // released in reactor thread, set to null here to indicate that we don't have a current buffer anymore
+                            // released in reactor thread, set to null here to indicate that we don't have a current buffer anymore
+                            self.current_output_buffer_idx = null;
                         }
 
                         // nothing left to send, clear the eventfd
@@ -433,11 +428,8 @@ pub fn Reactor(comptime TApp: type) type {
 
             try self.poller.add(socket, client_id.index, true, false);
 
-            const out_message_buf = try self.allocator.alloc(OutMessage, self.options.client_out_message_queue_size);
-            errdefer self.allocator.free(out_message_buf);
-
             const out_message_queue = try self.allocator.create(Queue(OutMessage));
-            out_message_queue.* = try Queue(OutMessage).init(out_message_buf);
+            out_message_queue.* = try Queue(OutMessage).init(self.allocator, self.options.client_out_message_queue_size);
             errdefer self.allocator.destroy(out_message_queue);
 
             const client = ClientConnection.init(

@@ -7,9 +7,9 @@ pub fn echo(message: []const u8) []const u8 {
 
 pub const App = znet.App(
     .{znet.Scope(
-        "echo",
+        .echo,
         .{
-            znet.Action("", echo, .{}),
+            znet.Action(null, echo, .{}),
         },
         .{},
     )},

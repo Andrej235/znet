@@ -71,7 +71,7 @@ pub const ClientConnection = struct {
 
         self.reader.deinit();
 
-        self.allocator.free(self.out_message_queue.buf);
+        self.out_message_queue.deinit(self.allocator);
         self.allocator.destroy(self.out_message_queue);
     }
 
