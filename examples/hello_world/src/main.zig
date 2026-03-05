@@ -7,6 +7,7 @@ const App = z.App(.{
         z.Action(.login, helloWorld, .{}),
         z.Scope(.me, .{
             z.Action(.details, hello, .{}),
+            z.Action(.@"details/profile_pic", hello, .{}),
             z.Action(.settings, hello, .{}),
         }, .{}),
     }, .{}),

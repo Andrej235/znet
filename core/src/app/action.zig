@@ -20,7 +20,7 @@ pub fn Action(comptime name: ActionName, comptime handler_fn: anytype, comptime 
     return struct {
         pub const action_name = string_name;
 
-        pub fn compile(scope_options: ResolvedScopeOptions) RuntimeAction {
+        pub fn compile(comptime scope_options: ResolvedScopeOptions) RuntimeAction {
             return RuntimeAction{
                 .path = scope_options.path ++ "/" ++ string_name,
                 .handler = createHandlerFn(handler_fn),
@@ -28,7 +28,7 @@ pub fn Action(comptime name: ActionName, comptime handler_fn: anytype, comptime 
             };
         }
 
-        pub fn compare(other_handler_fn: anytype) bool {
+        pub fn compare(comptime other_handler_fn: anytype) bool {
             return comptime handler_fn == other_handler_fn;
         }
     };
@@ -38,3 +38,74 @@ pub const ActionId = struct {
     scope_idx: u16,
     action_idx: u16,
 };
+
+const ActionValidationError = error{
+    ActionMissingCompileFn,
+    ActionCompileFnNotFunction,
+    ActionCompileFnInvalidReturnType,
+    ActionCompileFnInvalidParameterCount,
+    ActionCompileFnInvalidParameterType,
+
+    ActionMissingCompareFn,
+    ActionCompareFnNotFunction,
+    ActionCompareFnInvalidReturnType,
+    ActionCompareFnInvalidParameterCount,
+    
+    ActionMissingActionName,
+    ActionInvalidActionNameType,
+};
+
+pub fn validateAction(comptime TAction: type) !void {
+    comptime {
+        if (!@hasDecl(TAction, "compile")) {
+            return ActionValidationError.ActionMissingCompileFn;
+        }
+
+        const compile_fn = @field(TAction, "compile");
+        const compile_fn_type_info = @typeInfo(@TypeOf(compile_fn));
+
+        if (compile_fn_type_info != .@"fn") {
+            return ActionValidationError.ActionCompileFnNotFunction;
+        }
+
+        if (compile_fn_type_info.@"fn".return_type != RuntimeAction) {
+            return ActionValidationError.ActionCompileFnInvalidReturnType;
+        }
+
+        if (compile_fn_type_info.@"fn".params.len != 1) {
+            return ActionValidationError.ActionCompileFnInvalidParameterCount;
+        }
+
+        if (compile_fn_type_info.@"fn".params[0].type != ResolvedScopeOptions) {
+            return ActionValidationError.ActionCompileFnInvalidParameterType;
+        }
+
+        if (!@hasDecl(TAction, "compare")) {
+            return ActionValidationError.ActionMissingCompareFn;
+        }
+
+        const compare_fn = @field(TAction, "compare");
+        const compare_fn_type_info = @typeInfo(@TypeOf(compare_fn));
+
+        if (compare_fn_type_info != .@"fn") {
+            return ActionValidationError.ActionCompareFnNotFunction;
+        }
+
+        if (compare_fn_type_info.@"fn".return_type != bool) {
+            return ActionValidationError.ActionCompareFnInvalidReturnType;
+        }
+
+        if (compare_fn_type_info.@"fn".params.len != 1) {
+            return ActionValidationError.ActionCompareFnInvalidParameterCount;
+        }
+
+        if (!@hasDecl(TAction, "action_name")) {
+            return ActionValidationError.ActionMissingActionName;
+        }
+
+        const action_name = @field(TAction, "action_name");
+        if (@TypeOf(action_name) != []const u8) {
+            return ActionValidationError.ActionInvalidActionNameType;
+        }
+    }
+}

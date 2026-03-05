@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const validateAction = @import("action.zig").validateAction;
+
 const RuntimeScope = @import("runtime_scope.zig").RuntimeScope;
 const RuntimeAction = @import("runtime_action.zig").RuntimeAction;
 const ActionExecutor = @import("action.zig").ActionExecutor;
@@ -37,17 +39,14 @@ pub fn Scope(comptime name: ScopeName, comptime children: anytype, comptime opti
 
     const children_arr = childrenToArray(children);
     for (children_arr, 0..) |Child, i| {
+        validateScope(Child) catch |scope_err| { // not a scope
+            validateAction(Child) catch |action_err| { // not an action
+                @compileError(std.fmt.comptimePrint("Child at index {} of scope {s} is invalid: {s} is not a scope ({s}) nor an action ({s})", .{ i, string_name, @errorName(scope_err), @errorName(action_err) }));
+            };
+        };
+
         const child_name = getName(Child) orelse @compileError(std.fmt.comptimePrint("Child at index {} of scope {s} does not have a name", .{ i, string_name }));
-
-        if (!@hasDecl(Child, "compile"))
-            @compileError(std.fmt.comptimePrint("Child at index {} of scope {s} does not have a compile() function, did you forget to make it public?", .{ i, string_name }));
-
-        if (isScope(Child)) {
-            // ok
-        } else if (isAction(Child)) {
-            // ok
-        } else @compileError(std.fmt.comptimePrint("Child at index {} of scope {s} is neither a scope nor an action", .{ i, string_name }));
-
+        
         for (children_arr[i + 1 ..], i + 1..) |OtherChild, j| {
             const other_name = getName(OtherChild) orelse @compileError(std.fmt.comptimePrint("Child at index {} of scope {s} does not have a name", .{ j, string_name }));
 
@@ -70,10 +69,10 @@ pub fn Scope(comptime name: ScopeName, comptime children: anytype, comptime opti
                     if (isScope(Child)) {
                         const child_runtime_scopes = Child.compile(resolved_options);
                         runtime_scopes = runtime_scopes ++ child_runtime_scopes;
-                    } else if (isAction(Child)) {
+                    } else {
                         const runtime_action = Child.compile(resolved_options);
                         self = self ++ @as(RuntimeScope, &.{runtime_action});
-                    } else unreachable;
+                    }
                 }
 
                 return &[_]RuntimeScope{self} ++ runtime_scopes;
@@ -88,9 +87,9 @@ pub fn Scope(comptime name: ScopeName, comptime children: anytype, comptime opti
                 for (children_arr) |Child| {
                     if (isScope(Child)) {
                         child_scopes = child_scopes ++ Child.flatten();
-                    } else if (isAction(Child)) {
+                    } else {
                         child_actions = child_actions ++ &[_]type{Child};
-                    } else unreachable;
+                    }
                 }
 
                 return &[_]type{Scope(name, child_actions, options)} ++ child_scopes;
@@ -98,7 +97,7 @@ pub fn Scope(comptime name: ScopeName, comptime children: anytype, comptime opti
         }
 
         /// Can ONLY be used on a flat scope, assumes all children are actions
-        pub fn lookupAction(handler: anytype) ?u16 {
+        pub fn lookupAction(comptime handler: anytype) ?u16 {
             comptime {
                 for (children_arr, 0..) |TChild, i| {
                     const lookup_fn = @field(TChild, "compare");
@@ -110,6 +109,108 @@ pub fn Scope(comptime name: ScopeName, comptime children: anytype, comptime opti
             }
         }
     };
+}
+
+pub const ScopeValidationError = error{
+    ScopeMissingCompileFn,
+    ScopeCompileFnNotFunction,
+    ScopeCompileFnInvalidReturnType,
+    ScopeCompileFnInvalidParameterCount,
+    ScopeCompileFnInvalidParameterType,
+
+    ScopeMissingFlattenFn,
+    ScopeFlattenFnNotFunction,
+    ScopeFlattenFnInvalidReturnType,
+    ScopeFlattenFnInvalidParameterCount,
+
+    ScopeMissingLookupActionFn,
+    ScopeLookupActionFnNotFunction,
+    ScopeLookupActionFnInvalidReturnType,
+    ScopeLookupActionFnInvalidParameterCount,
+
+    ScopeMissingScopeName,
+    ScopeInvalidScopeNameType,
+};
+
+pub fn validateScope(comptime TScope: type) !void {
+    comptime {
+        if (!@hasDecl(TScope, "compile")) {
+            return ScopeValidationError.ScopeMissingCompileFn;
+        }
+
+        const compile_fn = @field(TScope, "compile");
+        const compile_fn_type_info = @typeInfo(@TypeOf(compile_fn));
+
+        if (compile_fn_type_info != .@"fn") {
+            return ScopeValidationError.ScopeCompileFnNotFunction;
+        }
+
+        if (compile_fn_type_info.@"fn".return_type != []const RuntimeScope) {
+            return ScopeValidationError.ScopeCompileFnInvalidReturnType;
+        }
+
+        if (compile_fn_type_info.@"fn".params.len != 1) {
+            return ScopeValidationError.ScopeCompileFnInvalidParameterCount;
+        }
+
+        if (compile_fn_type_info.@"fn".params[0].type != ResolvedScopeOptions) {
+            return ScopeValidationError.ScopeCompileFnInvalidParameterType;
+        }
+
+        if (!@hasDecl(TScope, "flatten")) {
+            return ScopeValidationError.ScopeMissingFlattenFn;
+        }
+
+        const flatten_fn = @field(TScope, "flatten");
+        const flatten_fn_type_info = @typeInfo(@TypeOf(flatten_fn));
+
+        if (flatten_fn_type_info != .@"fn") {
+            return ScopeValidationError.ScopeFlattenFnNotFunction;
+        }
+
+        if (flatten_fn_type_info.@"fn".return_type != []const type) {
+            return ScopeValidationError.ScopeFlattenFnInvalidReturnType;
+        }
+
+        if (flatten_fn_type_info.@"fn".params.len != 0) {
+            return ScopeValidationError.ScopeFlattenFnInvalidParameterCount;
+        }
+
+        if (!@hasDecl(TScope, "lookupAction")) {
+            return ScopeValidationError.ScopeMissingLookupActionFn;
+        }
+
+        const lookup_fn = @field(TScope, "lookupAction");
+        const lookup_fn_type_info = @typeInfo(@TypeOf(lookup_fn));
+
+        if (lookup_fn_type_info != .@"fn") {
+            return ScopeValidationError.ScopeLookupActionFnNotFunction;
+        }
+
+        if (lookup_fn_type_info.@"fn".return_type != ?u16) {
+            return ScopeValidationError.ScopeLookupActionFnInvalidReturnType;
+        }
+
+        if (lookup_fn_type_info.@"fn".params.len != 1) {
+            return ScopeValidationError.ScopeLookupActionFnInvalidParameterCount;
+        }
+
+        if (!@hasDecl(TScope, "scope_name")) {
+            return ScopeValidationError.ScopeMissingScopeName;
+        }
+
+        const scope_name = @field(TScope, "scope_name");
+        if (@TypeOf(scope_name) != []const u8) {
+            return ScopeValidationError.ScopeInvalidScopeNameType;
+        }
+    }
+}
+
+pub fn isScope(comptime T: type) bool {
+    comptime {
+        validateScope(T) catch return false;
+        return true;
+    }
 }
 
 fn getName(comptime TChild: type) ?[]const u8 {
@@ -128,103 +229,6 @@ fn getName(comptime TChild: type) ?[]const u8 {
     }
 
     return null;
-}
-
-fn isScope(comptime T: type) bool {
-    const compile_fn = @field(T, "compile");
-    const compile_fn_type_info = @typeInfo(@TypeOf(compile_fn));
-
-    if (compile_fn_type_info != .@"fn")
-        return false;
-
-    if (compile_fn_type_info.@"fn".return_type != []const RuntimeScope)
-        return false;
-
-    if (compile_fn_type_info.@"fn".params.len != 1)
-        return false;
-
-    if (compile_fn_type_info.@"fn".params[0].type != ResolvedScopeOptions)
-        return false;
-
-    if (!@hasDecl(T, "flatten"))
-        return false;
-
-    const flatten_fn = @field(T, "flatten");
-    const flatten_fn_type_info = @typeInfo(@TypeOf(flatten_fn));
-
-    if (flatten_fn_type_info != .@"fn")
-        return false;
-
-    if (flatten_fn_type_info.@"fn".return_type != []const type)
-        return false;
-
-    if (flatten_fn_type_info.@"fn".params.len != 0)
-        return false;
-
-    if (!@hasDecl(T, "lookupAction"))
-        return false;
-
-    const lookup_fn = @field(T, "lookupAction");
-    const lookup_fn_type_info = @typeInfo(@TypeOf(lookup_fn));
-
-    if (lookup_fn_type_info != .@"fn")
-        return false;
-
-    if (lookup_fn_type_info.@"fn".return_type != ?u16)
-        return false;
-
-    if (lookup_fn_type_info.@"fn".params.len != 1)
-        return false;
-
-    if (!@hasDecl(T, "scope_name"))
-        return false;
-
-    const scope_name = @field(T, "scope_name");
-    if (@TypeOf(scope_name) != []const u8)
-        return false;
-
-    return true;
-}
-
-fn isAction(comptime T: type) bool {
-    const compile_fn = @field(T, "compile");
-    const compile_fn_type_info = @typeInfo(@TypeOf(compile_fn));
-
-    if (compile_fn_type_info != .@"fn")
-        return false;
-
-    if (compile_fn_type_info.@"fn".return_type != RuntimeAction)
-        return false;
-
-    if (compile_fn_type_info.@"fn".params.len != 1)
-        return false;
-
-    if (compile_fn_type_info.@"fn".params[0].type != ResolvedScopeOptions)
-        return false;
-
-    if (!@hasDecl(T, "compare"))
-        return false;
-
-    const compare_fn = @field(T, "compare");
-    const compare_fn_type_info = @typeInfo(@TypeOf(compare_fn));
-
-    if (compare_fn_type_info != .@"fn")
-        return false;
-
-    if (compare_fn_type_info.@"fn".return_type != bool)
-        return false;
-
-    if (compare_fn_type_info.@"fn".params.len != 1)
-        return false;
-
-    if (!@hasDecl(T, "action_name"))
-        return false;
-
-    const action_name = @field(T, "action_name");
-    if (@TypeOf(action_name) != []const u8)
-        return false;
-
-    return true;
 }
 
 fn childrenToArray(comptime children: anytype) []const type {
