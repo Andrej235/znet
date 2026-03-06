@@ -2,7 +2,6 @@ pub const Serializer = @import("serializer/serializer.zig").Serializer;
 pub const CountingSerializer = @import("serializer/counting_serializer.zig").Serializer;
 pub const Deserializer = @import("serializer/deserializer.zig").Deserializer;
 
-pub const Schema = @import("schema.zig").Schema;
 pub const Client = @import("client/client.zig").Client;
 pub const Server = @import("server/server.zig").Server;
 
@@ -21,3 +20,7 @@ pub const PendingRequest = @import("client/pending_request.zig").PendingRequest;
 pub const Logger = @import("logger/logger.zig").Logger;
 
 pub const Options = @import("options.zig").Options;
+
+pub const App = @import("app/app.zig").App;
+pub const Scope = @import("app/scope.zig").Scope;
+pub const Action = @import("app/action.zig").Action;
