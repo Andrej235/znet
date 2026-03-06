@@ -26,6 +26,7 @@ pub fn main() !void {
             .max_clients = 128,
             .client_read_buffer_size = 4096,
             .job_result_buffer_size = 4096,
+            .worker_pool_size_per_io = 2,
         },
     );
 

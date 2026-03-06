@@ -2,9 +2,13 @@ const std = @import("std");
 const posix = std.posix;
 const builtin = @import("builtin");
 
+const SPSCQueue = @import("../utils/spsc_queue.zig").Queue;
+const SPMCQueue = @import("../utils/spmc_queue.zig").Queue;
+
+const Worker = @import("worker.zig").Worker;
+
 const ClientConnection = @import("client_connection.zig").ClientConnection;
 const BufferPool = @import("../utils/buffer_pool.zig").BufferPool;
-const Queue = @import("../utils/spsc_queue.zig").Queue;
 const Job = @import("job.zig").Job;
 const ConnectionId = @import("connection_id.zig").ConnectionId;
 const ServerOptions = @import("server_options.zig").ServerOptions;
@@ -18,6 +22,7 @@ const RuntimeScope = @import("../app/runtime_scope.zig").RuntimeScope;
 const Listener = @import("../listener/listener.zig");
 const Waker = @import("../waker/waker.zig");
 const Poller = @import("../poller/poller.zig");
+const Semaphore = @import("../semaphore/semaphore.zig").Semaphore;
 
 const Logger = @import("../logger/logger.zig").Logger.scoped(.reactor);
 
@@ -62,10 +67,15 @@ pub fn Reactor(comptime TApp: type) type {
         input_buffer_pool: *BufferPool,
         output_buffer_pool: *BufferPool,
 
-        job_queue: *Queue(Job),
+        job_queue: *SPSCQueue(Job),
 
         current_output_buffer: []u8, // only valid if current_output_buffer_idx != null
         current_output_buffer_idx: ?u32,
+
+        // worker pool
+        workers: []Worker(TApp),
+        worker_pool_job_queue: *SPMCQueue(Job),
+        worker_pool_semaphore: Semaphore,
 
         pub fn init(
             allocator: std.mem.Allocator,
@@ -159,8 +169,8 @@ pub fn Reactor(comptime TApp: type) type {
             var poller = try Poller.init(allocator, options.max_clients + 2); // +2 for the listening socket and the wakeup socket
             errdefer poller.deinit();
 
-            const job_queue = try allocator.create(Queue(Job));
-            job_queue.* = try Queue(Job).init(allocator, options.max_jobs_in_queue);
+            const job_queue = try allocator.create(SPSCQueue(Job));
+            job_queue.* = try SPSCQueue(Job).init(allocator, options.max_jobs_in_queue);
             errdefer allocator.destroy(job_queue);
 
             var free_indices = try allocator.alloc(ConnectionId, options.max_clients);
@@ -187,8 +197,15 @@ pub fn Reactor(comptime TApp: type) type {
             errdefer output_buffer_pool.deinit(allocator);
             errdefer allocator.destroy(output_buffer_pool);
 
-            // no workers for now, todo: add Task<T> or DeferredResult<T> as a tag for contract methods that should be executed on worker threads and then add workers back in
-            // const workers = try allocator.alloc(Worker, options.worker_threads);
+            // worker pool
+            const workers = try allocator.alloc(Worker(TApp), options.worker_pool_size_per_io);
+            errdefer allocator.free(workers);
+
+            const worker_pool_job_queue = try allocator.create(SPMCQueue(Job));
+            worker_pool_job_queue.* = try SPMCQueue(Job).init(allocator, options.max_jobs_in_queue);
+            errdefer allocator.destroy(worker_pool_job_queue);
+
+            const worker_pool_semaphore = Semaphore.init(0);
 
             const self = try allocator.create(Self);
             self.* = Self{
@@ -211,7 +228,26 @@ pub fn Reactor(comptime TApp: type) type {
 
                 .current_output_buffer = undefined,
                 .current_output_buffer_idx = null,
+
+                .workers = workers,
+                .worker_pool_job_queue = worker_pool_job_queue,
+                .worker_pool_semaphore = worker_pool_semaphore,
             };
+
+            for (workers) |*w| {
+                w.* = Worker(TApp).init(
+                    allocator,
+                    worker_pool_job_queue,
+                    &self.worker_pool_semaphore,
+                    waker,
+                    clients,
+                    input_buffer_pool,
+                    output_buffer_pool,
+                );
+                try w.runThread();
+            }
+
+            // todo: shutdown workers in case self.run throws an error
 
             try self.run(address, ready_count);
         }
@@ -274,23 +310,23 @@ pub fn Reactor(comptime TApp: type) type {
                                 continue;
                             }
 
-                            // acquire a new output buffer
-                            if (self.current_output_buffer_idx == null) {
-                                const buffer_idx = self.output_buffer_pool.acquire() orelse {
-                                    // no output buffers available, drop the message and release the input buffer
-                                    self.input_buffer_pool.release(job.buffer_idx);
-
-                                    Logger.info("No output buffers available, dropping message", .{});
-                                    break;
-                                };
-
-                                self.current_output_buffer_idx = buffer_idx;
-                                self.current_output_buffer = self.output_buffer_pool.buffer(buffer_idx);
-                            }
-
                             const action = call_table[req_header.contract_id][req_header.method_id];
                             switch (action.executor) {
                                 .io => { // execute the contract method on the reactor thread
+                                    // acquire a new output buffer
+                                    if (self.current_output_buffer_idx == null) {
+                                        const buffer_idx = self.output_buffer_pool.acquire() orelse {
+                                            // no output buffers available, drop the message and release the input buffer
+                                            self.input_buffer_pool.release(job.buffer_idx);
+
+                                            Logger.info("No output buffers available, dropping message", .{});
+                                            continue;
+                                        };
+
+                                        self.current_output_buffer_idx = buffer_idx;
+                                        self.current_output_buffer = self.output_buffer_pool.buffer(buffer_idx);
+                                    }
+
                                     var writer: std.Io.Writer = .fixed(self.current_output_buffer);
                                     action.handler(
                                         ReactorContext{
@@ -332,10 +368,17 @@ pub fn Reactor(comptime TApp: type) type {
                                     // released in reactor thread, set to null here to indicate that we don't have a current buffer anymore
                                     self.current_output_buffer_idx = null;
                                 },
-                                .worker_pool => { // pass the job over to the worker pool
+                                .worker_pool => { // pass the job over to the worker pool, guaranteed to be a valid request
                                     // todo: implement
-                                    Logger.err("Found action intended for worker pool, unimplemented", .{});
-                                    self.input_buffer_pool.release(job.buffer_idx);
+                                    self.worker_pool_job_queue.tryPush(job) catch {
+                                        // queue full, drop the message and release the input buffer
+                                        self.input_buffer_pool.release(job.buffer_idx);
+
+                                        Logger.info("Worker pool job queue full, dropping message", .{});
+                                        continue;
+                                    };
+
+                                    self.worker_pool_semaphore.release();
                                 },
                             }
                         }
@@ -429,8 +472,8 @@ pub fn Reactor(comptime TApp: type) type {
 
             try self.poller.add(socket, client_id.index, true, false);
 
-            const out_message_queue = try self.allocator.create(Queue(OutMessage));
-            out_message_queue.* = try Queue(OutMessage).init(self.allocator, self.options.client_out_message_queue_size);
+            const out_message_queue = try self.allocator.create(SPSCQueue(OutMessage));
+            out_message_queue.* = try SPSCQueue(OutMessage).init(self.allocator, self.options.client_out_message_queue_size);
             errdefer self.allocator.destroy(out_message_queue);
 
             const client = ClientConnection.init(

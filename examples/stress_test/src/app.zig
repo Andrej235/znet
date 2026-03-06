@@ -14,6 +14,6 @@ pub const App = znet.App(
         .{},
     )},
     .{
-        .default_action_executor = .io,
+        .default_action_executor = .worker_pool,
     },
 );

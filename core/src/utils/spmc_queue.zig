@@ -17,15 +17,13 @@ pub fn Queue(comptime T: type) type {
         head: std.atomic.Value(usize) align(64) = .init(0),
         tail: std.atomic.Value(usize) align(64) = .init(0),
 
-        pub fn init(allocator: std.mem.Allocator, comptime count: usize) !Self {
-            comptime {
-                if (count <= 0) {
-                    @compileError("Queue capacity must be greater than 0");
-                }
+        pub fn init(allocator: std.mem.Allocator, count: usize) !Self {
+            if (count <= 0) {
+                return error.InvalidCapacity;
+            }
 
-                if ((count & (count - 1)) != 0) {
-                    @compileError("Queue capacity must be a power of 2");
-                }
+            if ((count & (count - 1)) != 0) {
+                return error.CountNotPowerOfTwo;
             }
 
             const buffer = try allocator.alloc(CellT, count);
