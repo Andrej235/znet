@@ -3,7 +3,7 @@ const posix = std.posix;
 
 const Client = @import("client.zig").ClientInterface;
 
-const Queue = @import("../utils/spsc_queue.zig").Queue;
+const Queue = @import("../queues/spsc_queue.zig").Queue;
 const Job = @import("./inbound_message.zig").InboundMessage;
 
 const MessageReadResult = @import("./message_read_result.zig").MessageReadResult;

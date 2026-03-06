@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const Queue = @import("../utils/spmc_queue.zig").Queue;
+const Queue = @import("../queues/spmc_queue.zig").Queue;
 const Job = @import("job.zig").Job;
 const OutMessage = @import("out_message.zig").OutMessage;
 

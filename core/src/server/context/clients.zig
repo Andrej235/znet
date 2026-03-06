@@ -1,7 +1,7 @@
 const std = @import("std");
 const Audience = @import("audience.zig").Audience;
 const ClientConnection = @import("../client_connection.zig").ClientConnection;
-const Queue = @import("../../utils/mpmc_queue.zig").Queue;
+const Queue = @import("../../queues/mpmc_queue.zig").Queue;
 const Waker = @import("../../waker/waker.zig");
 
 pub const Clients = struct {

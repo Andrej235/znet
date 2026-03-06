@@ -2,8 +2,8 @@ const std = @import("std");
 const posix = std.posix;
 const builtin = @import("builtin");
 
-const SPSCQueue = @import("../utils/spsc_queue.zig").Queue;
-const SPMCQueue = @import("../utils/spmc_queue.zig").Queue;
+const SPSCQueue = @import("../queues/spsc_queue.zig").Queue;
+const SPMCQueue = @import("../queues/spmc_queue.zig").Queue;
 
 const Worker = @import("worker.zig").Worker;
 

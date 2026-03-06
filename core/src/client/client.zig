@@ -12,7 +12,7 @@ const Serializer = @import("../serializer/serializer.zig").Serializer;
 const CountingSerializer = @import("../serializer/counting_serializer.zig").Serializer;
 const Deserializer = @import("../serializer/deserializer.zig").Deserializer;
 
-const Queue = @import("../utils/mpsc_queue.zig").Queue;
+const Queue = @import("../queues/mpsc_queue.zig").Queue;
 const Promise = @import("promise.zig").Promise;
 const OutboundMessage = @import("outbound_message.zig").OutboundMessage;
 
