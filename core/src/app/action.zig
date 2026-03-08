@@ -38,6 +38,9 @@ fn concatPathSegment(comptime prefix: []const u8, comptime segment: []const u8) 
     if (prefix.len == 0) return segment;
     if (segment.len == 0) return prefix;
 
+    if (prefix.len == 1 and prefix[0] == '/') // path is root
+        return "/" ++ segment;
+
     return prefix ++ "/" ++ segment;
 }
 

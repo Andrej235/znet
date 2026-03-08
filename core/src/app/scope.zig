@@ -32,13 +32,16 @@ pub const ResolvedScopeOptions = struct {
     }
 };
 
-fn concatPathSegment(path: []const u8, segment: []const u8) []const u8 {
-    if (path.len == 0) // root path
+fn concatPathSegment(prefix: []const u8, segment: []const u8) []const u8 {
+    if (prefix.len == 0) // root path
         return "/" ++ segment;
 
-    if (segment.len == 0) return path;
+    if (prefix.len == 1 and prefix[0] == '/') // path is root
+        return "/" ++ segment;
 
-    return std.fmt.comptimePrint("{s}/{s}", .{ path, segment });
+    if (segment.len == 0) return prefix;
+
+    return prefix ++ "/" ++ segment;
 }
 
 pub const ScopeName = ?@Type(.enum_literal);

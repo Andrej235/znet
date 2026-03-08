@@ -2,9 +2,16 @@ const std = @import("std");
 const z = @import("znet");
 
 const App = z.App(.{
-    z.Scope(null, .{
-        z.Action(null, healthCheck, .{}),
-    }, .{}),
+    z.Scope(
+        null,
+        .{
+            z.Action(null, healthCheck, .{}),
+            z.Action(.echo, echo, .{}),
+        },
+        .{
+            .default_action_executor = .io,
+        },
+    ),
     z.Scope(.user, .{
         z.Action(.register, helloWorld, .{}),
         z.Action(.login, helloWorld, .{}),
@@ -32,6 +39,10 @@ pub fn main() !void {
 fn hello() !bool {
     std.debug.print("Hello from the handler!\n", .{});
     return true;
+}
+
+fn echo(msg: z.Body([]const u8)) []const u8 {
+    return msg.value;
 }
 
 fn helloWorld() !bool {
