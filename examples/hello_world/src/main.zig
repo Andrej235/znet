@@ -17,6 +17,7 @@ const App = z.App(.{
         z.Action(.login, helloWorld, .{}),
         z.Scope(.me, .{
             z.Action(null, hello, .{}),
+            z.Action(.@"{a}/{b}", helloPath, .{}),
             z.Action(.details, hello, .{}),
             z.Action(.@"details/profile_pic", hello, .{}),
             z.Action(.settings, hello, .{}),
@@ -38,6 +39,14 @@ pub fn main() !void {
 
 fn hello() !bool {
     std.debug.print("Hello from the handler!\n", .{});
+    return true;
+}
+
+fn helloPath(x: z.Path(struct {
+    a: u32,
+    b: []const u8,
+})) !bool {
+    _ = x;
     return true;
 }
 
