@@ -15,7 +15,7 @@ const deserializeMessageHeaders = @import("../message_headers/deserialize_messag
 
 const ClientConnection = @import("client_connection.zig").ClientConnection;
 const BufferPool = @import("../utils/buffer_pool.zig").BufferPool;
-const RuntimeScope = @import("../app/runtime_scope.zig").RuntimeScope;
+const RuntimeScope = @import("../app/scope/runtime_scope.zig").RuntimeScope;
 
 pub fn Worker(comptime TApp: type) type {
     const call_table: []const RuntimeScope = TApp.compileServerCallTable();

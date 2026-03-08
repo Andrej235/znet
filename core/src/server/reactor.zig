@@ -17,7 +17,7 @@ const deserializeMessageHeaders = @import("../message_headers/deserialize_messag
 const MessageHeadersByteSize = @import("../message_headers/message_headers.zig").HeadersByteSize;
 const ShutdownState = @import("server.zig").ShutdownState;
 
-const RuntimeScope = @import("../app/runtime_scope.zig").RuntimeScope;
+const RuntimeScope = @import("../app/scope/runtime_scope.zig").RuntimeScope;
 
 const Listener = @import("../listener/listener.zig");
 const Waker = @import("../waker/waker.zig");

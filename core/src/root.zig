@@ -22,8 +22,8 @@ pub const Logger = @import("logger/logger.zig").Logger;
 pub const Options = @import("options.zig").Options;
 
 pub const App = @import("app/app.zig").App;
-pub const Scope = @import("app/scope.zig").Scope;
-pub const Action = @import("app/action.zig").Action;
+pub const Scope = @import("app/scope/scope.zig").Scope;
+pub const Action = @import("app/action/action.zig").Action;
 
 pub const Path = @import("app/params/path_param.zig").Path;
 pub const Query = @import("app/params/query_param.zig").Query;

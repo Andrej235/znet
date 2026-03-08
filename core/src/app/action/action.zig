@@ -1,16 +1,8 @@
 const RuntimeAction = @import("runtime_action.zig").RuntimeAction;
-const ResolvedScopeOptions = @import("scope.zig").ResolvedScopeOptions;
+const ResolvedScopeOptions = @import("../scope/resolved_scope_options.zig").ResolvedScopeOptions;
+const ActionOptions = @import("action_options.zig").ActionOptions;
 
-const createHandlerFn = @import("../server/handler_fn/create_handler_fn.zig").createHandlerFn;
-
-pub const ActionExecutor = enum {
-    io,
-    worker_pool,
-};
-
-pub const ActionOptions = struct {
-    executor: ?ActionExecutor = null,
-};
+const createHandlerFn = @import("../../server/handler_fn/create_handler_fn.zig").createHandlerFn;
 
 pub const ActionName = ?@Type(.enum_literal);
 
