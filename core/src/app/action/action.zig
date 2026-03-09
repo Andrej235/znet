@@ -127,7 +127,10 @@ pub fn validateAction(comptime TAction: type) !void {
     }
 }
 
-pub fn validateActionParams(comptime handler_fn: anytype, comptime protocol: []const Protocol, absolute_path: []const u8) void {
+/// Validates that the handler function of an action is compatible with the action's protocol and path parameters,
+/// and that the path parameters defined in the handler function match the path parameters defined in the action's path.
+/// Throws compile errors with detailed messages if any issues are found.
+fn validateActionParams(comptime handler_fn: anytype, comptime protocol: []const Protocol, absolute_path: []const u8) void {
     comptime {
         if (protocol.len == 0) {
             @compileError("Protocol must be specified for action: " ++ absolute_path);
@@ -148,9 +151,27 @@ pub fn validateActionParams(comptime handler_fn: anytype, comptime protocol: []c
                 const TInnerParam: type = @field(T, "Type");
 
                 switch (param_kind) {
-                    .body => body = TInnerParam,
-                    .query => query = TInnerParam,
-                    .path => path = TInnerParam,
+                    .body => {
+                        if (body != null) {
+                            @compileError(std.fmt.comptimePrint("Multiple body parameters are not allowed in action handler functions. Try wrapping them in a struct. Found multiple in action at {s}", .{absolute_path}));
+                        }
+
+                        body = TInnerParam;
+                    },
+                    .query => {
+                        if (query != null) {
+                            @compileError(std.fmt.comptimePrint("Multiple query parameters are not allowed in action handler functions. Try wrapping them in a struct. Found multiple in action at {s}", .{absolute_path}));
+                        }
+
+                        query = TInnerParam;
+                    },
+                    .path => {
+                        if (path != null) {
+                            @compileError(std.fmt.comptimePrint("Multiple path parameters are not allowed in action handler functions. Try wrapping them in a struct. Found multiple in action at {s}", .{absolute_path}));
+                        }
+
+                        path = TInnerParam;
+                    },
                 }
             }
         }
