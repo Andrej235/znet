@@ -28,3 +28,6 @@ pub const Action = @import("app/action/action.zig").Action;
 pub const Path = @import("app/params/path_param.zig").Path;
 pub const Query = @import("app/params/query_param.zig").Query;
 pub const Body = @import("app/params/body_param.zig").Body;
+
+pub const DIC = @import("dependency_injection/container.zig").Container;
+pub const DIService = @import("dependency_injection/service.zig").Service;
