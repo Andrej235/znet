@@ -146,7 +146,7 @@ fn validateActionParams(comptime handler_fn: anytype, comptime protocol: []const
         for (params) |param| {
             const T = param.type orelse continue;
 
-            if (@hasDecl(T, "param_kind") and @hasDecl(T, "Type")) {
+            if (@typeInfo(T) == .@"struct" and @hasDecl(T, "param_kind") and @hasDecl(T, "Type")) {
                 const param_kind: ParamKind = @field(T, "param_kind");
                 const TInnerParam: type = @field(T, "Type");
 

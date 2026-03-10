@@ -1,15 +1,15 @@
 const std = @import("std");
-const znet = @import("znet");
+const z = @import("znet");
 
-pub fn echo(message: []const u8) []const u8 {
-    return message;
+pub fn echo(message: z.Body([]const u8)) []const u8 {
+    return message.value;
 }
 
-pub const App = znet.App(
-    .{znet.Scope(
+pub const App = z.App(
+    .{z.Scope(
         .echo,
         .{
-            znet.Action(null, echo, .{}),
+            z.Action(null, echo, .{}),
         },
         .{},
     )},

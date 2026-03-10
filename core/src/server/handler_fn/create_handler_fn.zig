@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const Body = @import("../../app/params/body_param.zig").Body;
+
 const RequestHeaders = @import("../../message_headers/request_headers.zig").RequestHeaders;
 const serializeMessageHeaders = @import("../../message_headers/serialize_message_headers.zig").serializeMessageHeaders;
 const Deserializer = @import("../../serializer/deserializer.zig").Deserializer;
@@ -8,15 +10,33 @@ const CountingSerializer = @import("../../serializer/counting_serializer.zig").S
 const HandlerFn = @import("handler_fn.zig").HandlerFn;
 const ReactorContext = @import("../reactor.zig").ReactorContext;
 
-const Context = @import("../context/context.zig").Context;
-const Clients = @import("../context/clients.zig").Clients;
-
 pub fn createHandlerFn(comptime fn_impl: anytype) HandlerFn {
     const TFn = @TypeOf(fn_impl);
     const fn_info = @typeInfo(TFn);
     if (fn_info != .@"fn") @compileError("Expected function type");
 
-    const TPayload = ParamTuple(@TypeOf(fn_impl));
+    var fields: [fn_info.@"fn".params.len]std.builtin.Type.StructField = undefined;
+    for (fn_info.@"fn".params, 0..) |param, idx| {
+        if (param.type) |T| {
+            fields[idx] = .{
+                .name = std.fmt.comptimePrint("{}", .{idx}),
+                .type = T,
+                .default_value_ptr = null,
+                .is_comptime = false,
+                .alignment = @alignOf(T),
+            };
+        }
+    }
+
+    const TPayload: type = @Type(.{
+        .@"struct" = .{
+            .backing_integer = null,
+            .decls = &.{},
+            .fields = &fields,
+            .layout = .auto,
+            .is_tuple = true,
+        },
+    });
 
     return struct {
         fn handler(
@@ -53,39 +73,4 @@ pub fn createHandlerFn(comptime fn_impl: anytype) HandlerFn {
             try deserializer.destroy(payload);
         }
     }.handler;
-}
-
-pub fn ParamTuple(comptime TFn: type) type {
-    const fn_info = @typeInfo(TFn);
-    if (fn_info != .@"fn") @compileError("Expected function type");
-
-    var fields: [fn_info.@"fn".params.len]std.builtin.Type.StructField = undefined;
-    for (fn_info.@"fn".params, 0..) |param, idx| {
-        if (idx != 0) {
-            if (param.type == Context or param.type == *Context)
-                @compileError("Context must be the first parameter if injected");
-        } else if (param.type == Context) {
-            @compileError("Context must be injected as a pointer");
-        }
-
-        if (param.type) |T| {
-            fields[idx] = .{
-                .name = std.fmt.comptimePrint("{}", .{idx}),
-                .type = T,
-                .default_value_ptr = null,
-                .is_comptime = false,
-                .alignment = @alignOf(T),
-            };
-        }
-    }
-
-    return comptime @Type(.{
-        .@"struct" = .{
-            .backing_integer = null,
-            .decls = &.{},
-            .fields = &fields,
-            .layout = .auto,
-            .is_tuple = true,
-        },
-    });
 }

@@ -6,8 +6,6 @@ const MessageHeaders = @import("../message_headers/message_headers.zig").Message
 const MessageHeadersByteSize = @import("../message_headers/message_headers.zig").HeadersByteSize;
 const serializeHeaders = @import("../message_headers/serialize_message_headers.zig").serializeMessageHeaders;
 
-const ServerContext = @import("../server/context/context.zig").Context;
-
 const Serializer = @import("../serializer/serializer.zig").Serializer;
 const CountingSerializer = @import("../serializer/counting_serializer.zig").Serializer;
 const Deserializer = @import("../serializer/deserializer.zig").Deserializer;
@@ -19,16 +17,13 @@ const OutboundMessage = @import("outbound_message.zig").OutboundMessage;
 const PendingRequestsMap = @import("pending_requests_map.zig").PendingRequestsMap;
 const ServerConnection = @import("server_connection.zig").ServerConnection;
 
-const BroadcastHandlerFn = @import("handler_fn/broadcast_handler_fn.zig").BroadcastHandlerFn;
-const createBroadcastHandlerFn = @import("handler_fn/create_broadcast_handler_fn.zig").createBroadcastHandlerFn;
+const ParamKind = @import("../app/params/param_kind.zig").ParamKind;
 
 const BufferPool = @import("../utils/buffer_pool.zig").BufferPool;
 
 const app_version: u8 = @import("../app_version.zig").app_version;
 
 pub const ClientInterface = struct {
-    pub const call_table = createCallTable();
-
     options: ClientOptions = .{},
     allocator: std.mem.Allocator,
 
@@ -135,7 +130,7 @@ pub const ClientInterface = struct {
         try self.pending_requests_map.clear();
     }
 
-    pub fn fetch(self: *ClientInterface, contract_id: u16, method_id: u16, method: anytype, args: MethodTupleArg(method)) anyerror!Promise(MethodReturnType(method)) {
+    pub fn fetch(self: *ClientInterface, contract_id: u16, method_id: u16, method: anytype, args: HandlerBodyArg(@TypeOf(method))) anyerror!Promise(MethodReturnType(method)) {
         const TResponse = MethodReturnType(method);
         const TPromise = Promise(TResponse);
 
@@ -200,78 +195,30 @@ pub fn Client(comptime TApp: type) type {
             try self.interface.disconnect();
         }
 
-        pub fn fetch(self: *const Self, method: anytype, args: MethodTupleArg(method)) anyerror!Promise(MethodReturnType(method)) {
+        pub fn fetch(self: *const Self, method: anytype, args: HandlerBodyArg(@TypeOf(method))) anyerror!Promise(MethodReturnType(method)) {
             const method_id = comptime TApp.actionToId(method);
             return self.interface.fetch(method_id.scope_idx, method_id.action_idx, method, args);
         }
     };
 }
 
-pub fn createCallTable() []const []const BroadcastHandlerFn {
-    return comptime blk: {
-        var call_table: []const []const BroadcastHandlerFn = &.{};
-        for (@import("znet_contract_registry").client_contracts) |TContract| {
-            var handlers: []const BroadcastHandlerFn = &.{};
-
-            const info = @typeInfo(TContract);
-            if (info != .@"struct") continue;
-            const decls = info.@"struct".decls;
-
-            for (decls) |decl| {
-                const fn_name = decl.name;
-                const fn_impl = @field(TContract, fn_name);
-
-                if (@typeInfo(@TypeOf(fn_impl)) != .@"fn") continue;
-                handlers = handlers ++ @as([]const BroadcastHandlerFn, &.{createBroadcastHandlerFn(fn_impl)});
-            }
-            call_table = call_table ++ @as([]const []const BroadcastHandlerFn, &.{handlers});
-        }
-
-        break :blk call_table;
-    };
-}
-
-fn MethodTupleArg(comptime method: anytype) type {
-    const arg_fields = comptime getParamTupleFields(@TypeOf(method));
-    const argument = comptime @Type(.{
-        .@"struct" = .{
-            .is_tuple = true,
-            .backing_integer = null,
-            .layout = .auto,
-            .decls = &.{},
-            .fields = arg_fields,
-        },
-    });
-
-    return argument;
-}
-
-fn getParamTupleFields(comptime TFn: type) []std.builtin.Type.StructField {
+fn HandlerBodyArg(comptime TFn: type) type {
     const fn_info = @typeInfo(TFn);
     if (fn_info != .@"fn") @compileError("Expected function type");
 
-    if (fn_info.@"fn".params[0].type == ServerContext)
-        @compileError("Context must be injected as a pointer");
+    for (fn_info.@"fn".params) |param| {
+        const T = param.type orelse continue;
 
-    const inject_context: bool = fn_info.@"fn".params[0].type == *ServerContext;
-    const fields_len = if (inject_context) fn_info.@"fn".params.len - 1 else fn_info.@"fn".params.len;
+        if (@typeInfo(T) == .@"struct" and @hasDecl(T, "param_kind") and @hasDecl(T, "Type")) {
+            const param_kind: ParamKind = @field(T, "param_kind");
 
-    var fields: [fields_len]std.builtin.Type.StructField = undefined;
-    const params = if (inject_context) fn_info.@"fn".params[1..] else fn_info.@"fn".params;
-
-    for (params, 0..) |param, idx| {
-        if (param.type) |T| {
-            fields[idx] = .{
-                .name = std.fmt.comptimePrint("{}", .{idx}),
-                .type = T,
-                .default_value_ptr = null,
-                .is_comptime = false,
-                .alignment = @alignOf(T),
-            };
+            if (param_kind == .body) {
+                return @field(T, "Type");
+            }
         }
     }
 
-    return &fields;
+    return void;
 }
 
 fn MethodReturnType(comptime method: anytype) type {
