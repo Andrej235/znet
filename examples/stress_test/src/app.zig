@@ -1,7 +1,14 @@
 const std = @import("std");
 const z = @import("znet");
 
-pub fn echo(message: z.Body([]const u8)) []const u8 {
+const SomeService = struct {
+    pub fn hello(_: *const SomeService, message: z.Body([]const u8)) void {
+        std.debug.print("message: {s}\n", .{message.value});
+    }
+};
+
+pub fn echo(message: z.Body([]const u8), service: SomeService) []const u8 {
+    service.hello(message);
     return message.value;
 }
 
