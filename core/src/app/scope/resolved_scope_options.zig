@@ -3,17 +3,20 @@ const ScopeOptions = @import("scope_options.zig").ScopeOptions;
 
 const ActionExecutor = @import("../options/action_executor.zig").ActionExecutor;
 const Protocol = @import("../options/protocol.zig").Protocol;
+const DIContainer = @import("../../dependency_injection/container.zig").Container;
 
 pub const ResolvedScopeOptions = struct {
     path: []const u8,
 
     default_action_executor: ActionExecutor,
     default_action_protocol: []const Protocol,
+    di: ?DIContainer,
 
     pub fn resolve(parent_options: ResolvedScopeOptions, options: ScopeOptions, name: []const u8) ResolvedScopeOptions {
         return ResolvedScopeOptions{
             .default_action_executor = options.default_action_executor orelse parent_options.default_action_executor,
             .default_action_protocol = options.default_action_protocol orelse parent_options.default_action_protocol,
+            .di = options.di orelse parent_options.di,
             .path = concatPathSegment(parent_options.path, name),
         };
     }
@@ -22,6 +25,7 @@ pub const ResolvedScopeOptions = struct {
         return ResolvedScopeOptions{
             .default_action_executor = app_options.default_action_executor,
             .default_action_protocol = app_options.default_action_protocol,
+            .di = app_options.di,
             .path = "",
         };
     }

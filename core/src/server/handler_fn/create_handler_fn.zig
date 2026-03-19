@@ -11,7 +11,9 @@ const CountingSerializer = @import("../../serializer/counting_serializer.zig").S
 const HandlerFn = @import("handler_fn.zig").HandlerFn;
 const ReactorContext = @import("../reactor.zig").ReactorContext;
 
-pub fn createHandlerFn(comptime fn_impl: anytype) HandlerFn {
+const DIContainer = @import("../../dependency_injection/container.zig").Container;
+
+pub fn createHandlerFn(comptime fn_impl: anytype, comptime di: ?DIContainer) HandlerFn {
     const TFn = @TypeOf(fn_impl);
     const fn_info = @typeInfo(TFn);
     if (fn_info != .@"fn") @compileError("Expected function type");
@@ -45,7 +47,11 @@ pub fn createHandlerFn(comptime fn_impl: anytype) HandlerFn {
                     comptime continue;
 
                 // inject
-                @field(params, field.name) = undefined;
+                if (di) |d| {
+                    @field(params, field.name) = comptime d.resolve(field.type);
+                } else {
+                    @compileError(std.fmt.comptimePrint("Cannot resolve parameter of type '{s}' because no DI container is available", .{@typeName(field.type)}));
+                }
             }
 
             const TPayload: ?type = params_info.TBody;
