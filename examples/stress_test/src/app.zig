@@ -13,7 +13,7 @@ const SomeService = struct {
     }
 
     pub fn hello(self: *const SomeService, message: z.Body([]const u8)) void {
-        std.debug.print("message: {s} | {} / {}\n", .{ message.value, self.s.get(), self.s3.get() });
+        _ = .{ message.value, self.s.get(), self.s3.get() };
     }
 };
 

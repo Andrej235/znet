@@ -48,7 +48,7 @@ pub fn createHandlerFn(comptime fn_impl: anytype, comptime di: ?DIContainer) Han
 
                 // inject
                 if (di) |d| {
-                    @field(params, field.name) = comptime d.resolve(field.type);
+                    @field(params, field.name) = d.resolve(field.type);
                 } else {
                     @compileError(std.fmt.comptimePrint("Cannot resolve parameter of type '{s}' because no DI container is available", .{@typeName(field.type)}));
                 }

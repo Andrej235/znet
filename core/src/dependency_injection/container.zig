@@ -6,7 +6,7 @@ pub const Container = struct {
     services: []const Service,
 
     pub fn resolve(comptime self: *const Container, comptime T: type) T {
-        for (self.services) |service| {
+        inline for (self.services) |service| {
             switch (service) {
                 ._transient => |tr| {
                     if (tr.type == T) {
@@ -30,17 +30,17 @@ pub const Container = struct {
     }
 
     pub fn call(comptime self: *const Container, comptime callback: anytype) FnReturnType(callback) {
-        const args = comptime blk: {
-            const info = @typeInfo(@TypeOf(callback));
-            if (info != .@"fn") {
-                @compileError("Callback must be a function");
-            }
+        const info = @typeInfo(@TypeOf(callback));
+        if (info != .@"fn") {
+            @compileError("Callback must be a function");
+        }
 
-            const params = info.@"fn".params;
-            var arg_tuple_fields: [params.len]std.builtin.Type.StructField = undefined;
+        const params = info.@"fn".params;
+        const arg_tuple_fields: []const std.builtin.Type.StructField = comptime blk: {
+            var fields: [params.len]std.builtin.Type.StructField = undefined;
 
             for (params, 0..) |param, i| {
-                arg_tuple_fields[i] = .{
+                fields[i] = .{
                     .name = std.fmt.comptimePrint("{}", .{i}),
                     .type = param.type orelse @compileError(std.fmt.comptimePrint("Parameter {} does not have a type", .{i})),
                     .default_value_ptr = null,
@@ -49,22 +49,22 @@ pub const Container = struct {
                 };
             }
 
-            const TArgsTuple = @Type(.{
-                .@"struct" = .{
-                    .is_tuple = true,
-                    .decls = &.{},
-                    .fields = arg_tuple_fields[0..],
-                    .layout = .auto,
-                },
-            });
-
-            var args: TArgsTuple = undefined;
-            for (arg_tuple_fields) |arg_field| {
-                @field(args, arg_field.name) = self.resolve(arg_field.type);
-            }
-
-            break :blk args;
+            break :blk &fields;
         };
+
+        const TArgsTuple = @Type(.{
+            .@"struct" = .{
+                .is_tuple = true,
+                .decls = &.{},
+                .fields = arg_tuple_fields,
+                .layout = .auto,
+            },
+        });
+
+        var args: TArgsTuple = undefined;
+        inline for (arg_tuple_fields) |arg_field| {
+            @field(args, arg_field.name) = self.resolve(arg_field.type);
+        }
 
         return @call(.always_inline, callback, args);
     }
