@@ -116,6 +116,11 @@ pub fn Reactor(comptime TApp: type) type {
                 self.removeClient(0);
             }
 
+            for (self.workers) |*w| {
+                w.deinit();
+            }
+            self.allocator.free(self.workers);
+
             self.waker.deinit();
 
             self.input_buffer_pool.deinit(self.allocator);
@@ -123,6 +128,9 @@ pub fn Reactor(comptime TApp: type) type {
 
             self.output_buffer_pool.deinit(self.allocator);
             self.allocator.destroy(self.output_buffer_pool);
+
+            self.worker_pool_job_queue.deinit(self.allocator);
+            self.allocator.destroy(self.worker_pool_job_queue);
 
             self.job_queue.deinit(self.allocator);
             self.allocator.destroy(self.job_queue);
@@ -203,6 +211,7 @@ pub fn Reactor(comptime TApp: type) type {
 
             const worker_pool_job_queue = try allocator.create(SPMCQueue(Job));
             worker_pool_job_queue.* = try SPMCQueue(Job).init(allocator, options.max_jobs_in_queue);
+            errdefer worker_pool_job_queue.deinit(allocator);
             errdefer allocator.destroy(worker_pool_job_queue);
 
             const worker_pool_semaphore = Semaphore.init(0);
@@ -282,7 +291,11 @@ pub fn Reactor(comptime TApp: type) type {
                     if (idx == self.options.max_clients + 1) { // wakeup fd
                         // either the server shutdown or there are new jobs to process
 
-                        if (self.shutdown_state.load(.acquire) == .immediate) break;
+                        if (self.shutdown_state.load(.acquire) == .immediate) {
+                            // shutdown
+                            try self.stop();
+                            return;
+                        }
 
                         // handle new jobs
                         while (self.job_queue.tryPop()) |job| {
@@ -457,6 +470,7 @@ pub fn Reactor(comptime TApp: type) type {
                 }
             }
 
+            Logger.err("Exited main reactor loop without going through proper shutdown path", .{});
             try self.stop();
         }
 

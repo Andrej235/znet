@@ -39,7 +39,9 @@ pub fn main() !void {
     while (try reader.takeDelimiter('\n')) |message| {
         if (std.mem.eql(u8, message, "exit")) {
             try server.shutdown(.immediate);
+            server.join();
             try server.deinit();
+
             znet.Logger.info("Exiting...", .{});
             break;
         }
