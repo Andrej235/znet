@@ -71,8 +71,15 @@ pub fn Worker(comptime TApp: type) type {
             }
         }
 
-        pub inline fn runThread(self: *Self) !void {
+        pub inline fn runThread(self: *Self, io_thread_id: usize, worker_id: usize) !void {
             const thread = try std.Thread.spawn(.{}, Self.run, .{self});
+
+            var name_buff: [16]u8 = undefined;
+            const name = try std.fmt.bufPrint(name_buff[0..], "io-{}-worker-{}", .{ io_thread_id, worker_id });
+            thread.setName(name) catch |err| {
+                Logger.err("Failed to set thread name to {s}: {}", .{ name, err });
+            };
+
             self.thread = thread;
         }
 

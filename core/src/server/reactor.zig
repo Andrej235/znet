@@ -243,7 +243,7 @@ pub fn Reactor(comptime TApp: type) type {
                 .worker_pool_semaphore = worker_pool_semaphore,
             };
 
-            for (workers) |*w| {
+            for (workers, 0..) |*w, i| {
                 w.* = Worker(TApp).init(
                     allocator,
                     worker_pool_job_queue,
@@ -253,7 +253,7 @@ pub fn Reactor(comptime TApp: type) type {
                     input_buffer_pool,
                     output_buffer_pool,
                 );
-                try w.runThread();
+                try w.runThread(io_thread_id, i);
             }
 
             // todo: shutdown workers in case self.run throws an error
