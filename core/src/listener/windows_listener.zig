@@ -26,7 +26,7 @@ pub const WindowsListener = struct {
         try poller.add(self.listener_fd, index, true, false);
     }
 
-    pub fn drainAccepts(self: *WindowsListener, comptime _: type, reactor: anytype) !void {
+    pub fn drainAccepts(self: *WindowsListener, reactor: anytype) !void {
         while (true) {
             var address: std.net.Address = undefined;
             var address_len: posix.socklen_t = @sizeOf(std.net.Address);

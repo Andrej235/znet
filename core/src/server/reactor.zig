@@ -287,7 +287,7 @@ pub fn Reactor(comptime TApp: type) type {
 
                     if (idx == self.options.max_clients) { // listening socket
                         // listening socket is ready, accept new connections
-                        try listener.drainAccepts(TApp, self);
+                        try listener.drainAccepts(self);
                         continue;
                     }
 
@@ -385,7 +385,6 @@ pub fn Reactor(comptime TApp: type) type {
                                     self.current_output_buffer_idx = null;
                                 },
                                 .worker_pool => { // pass the job over to the worker pool, guaranteed to be a valid request
-                                    // todo: implement
                                     self.worker_pool_job_queue.tryPush(job) catch {
                                         // queue full, drop the message and release the input buffer
                                         self.input_buffer_pool.release(job.buffer_idx);

@@ -30,10 +30,43 @@ pub fn register(self: *Self, poller: *Poller, index: u32) !void {
 }
 
 /// Called for all pending connections.
+/// Provided `reactor` is used to register new client connections
+/// and MUST have a method `attachClientSocket(self: *Self, socket: std.posix.socket_t, address: std.net.Address)` for that purpose.
 pub fn drainAccepts(
     self: *Self,
-    comptime TApp: type,
-    reactor: *Reactor(TApp),
+    reactor: anytype,
 ) !void {
-    try self.impl.drainAccepts(TApp, reactor);
+    comptime {
+        var T = @TypeOf(reactor);
+        var info = @typeInfo(T);
+
+        if (info == .pointer and info.pointer.size == .one) {
+            T = info.pointer.child;
+            info = @typeInfo(T);
+        }
+
+        if (info != .@"struct") @compileError("Reactor must be a struct");
+
+        if (!@hasDecl(T, "attachClientSocket"))
+            @compileError("Reactor must implement method attachClientSocket(self: *Self, socket: posix.socket_t, address: std.net.Address)");
+
+        const attach_fn = @field(T, "attachClientSocket");
+        const TAttachFn = @TypeOf(attach_fn);
+        const attach_fn_info = @typeInfo(TAttachFn);
+
+        if (attach_fn_info != .@"fn")
+            @compileError("attachClientSocket must be a function");
+
+        const attach_fn_params = attach_fn_info.@"fn".params;
+        if (attach_fn_params.len != 3)
+            @compileError("attachClientSocket must have exactly 3 parameters");
+
+        if (attach_fn_params[1].type != std.posix.socket_t)
+            @compileError("Second parameter of attachClientSocket must be of type posix.socket_t");
+
+        if (attach_fn_params[2].type != std.net.Address)
+            @compileError("Third parameter of attachClientSocket must be of type std.net.Address");
+    }
+
+    try self.impl.drainAccepts(reactor);
 }
