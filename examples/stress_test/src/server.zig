@@ -6,22 +6,30 @@ pub const znet_options: znet.Options = .{
     .logger_type = .async,
 };
 
+const use_gpa = false;
+
 pub fn main() !void {
     try znet.Logger.start();
+    defer znet.Logger.shutdown(.graceful) catch unreachable;
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{ .thread_safe = true }){};
+    const TGpa = std.heap.GeneralPurposeAllocator(.{});
+    var gpa: ?TGpa = if (comptime use_gpa) TGpa{} else null;
     defer {
-        if (gpa.deinit() == .leak) {
-            znet.Logger.err("Memory leak detected", .{});
-        } else {
-            znet.Logger.info("Server shut down cleanly", .{});
+        if (gpa) |*g| {
+            if (g.deinit() == .leak) {
+                znet.Logger.err("Memory leak detected", .{});
+            } else {
+                znet.Logger.info("Server shut down cleanly", .{});
+            }
         }
     }
+
+    const allocator = if (gpa) |*g| g.allocator() else std.heap.smp_allocator;
 
     const address = try std.net.Address.parseIp("127.0.0.1", 5001);
 
     const server = try znet.Server(App).init(
-        std.heap.smp_allocator,
+        allocator,
         .{
             .max_clients = 128,
             .client_read_buffer_size = 4096,

@@ -61,7 +61,7 @@ pub fn Reactor(comptime TApp: type) type {
 
         waker: Waker,
 
-        // used by the server to coordinate shutdown between all reactor threads
+        // used by the server to coordinate shutdown between all threads
         shutdown_state: *std.atomic.Value(ShutdownState),
 
         input_buffer_pool: *BufferPool,
@@ -116,8 +116,10 @@ pub fn Reactor(comptime TApp: type) type {
                 self.removeClient(0);
             }
 
+            self.worker_pool_semaphore.batchRelease(@intCast(self.workers.len));
             for (self.workers) |*w| {
-                w.deinit();
+                // workers use the same shutdown signal as the reactor thread
+                w.thread.join();
             }
             self.allocator.free(self.workers);
 
@@ -248,6 +250,7 @@ pub fn Reactor(comptime TApp: type) type {
                     allocator,
                     worker_pool_job_queue,
                     &self.worker_pool_semaphore,
+                    shutdown_state,
                     waker,
                     clients,
                     input_buffer_pool,

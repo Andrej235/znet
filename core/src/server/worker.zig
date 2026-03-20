@@ -17,6 +17,8 @@ const ClientConnection = @import("client_connection.zig").ClientConnection;
 const BufferPool = @import("../utils/buffer_pool.zig").BufferPool;
 const RuntimeScope = @import("../app/scope/runtime_scope.zig").RuntimeScope;
 
+const ShutdownState = @import("server.zig").ShutdownState;
+
 pub fn Worker(comptime TApp: type) type {
     const call_table: []const RuntimeScope = TApp.compileServerCallTable();
 
@@ -29,6 +31,7 @@ pub fn Worker(comptime TApp: type) type {
 
         job_queue: *Queue(Job),
         semaphore: *Semaphore,
+        shutdown_state: *std.atomic.Value(ShutdownState),
         io_waker: Waker,
 
         clients: []ClientConnection,
@@ -42,6 +45,7 @@ pub fn Worker(comptime TApp: type) type {
             allocator: std.mem.Allocator,
             job_queue: *Queue(Job),
             semaphore: *Semaphore,
+            shutdown_state: *std.atomic.Value(ShutdownState),
             io_waker: Waker,
             clients: []ClientConnection,
             input_buffer_pool: *BufferPool,
@@ -54,6 +58,7 @@ pub fn Worker(comptime TApp: type) type {
 
                 .job_queue = job_queue,
                 .semaphore = semaphore,
+                .shutdown_state = shutdown_state,
                 .io_waker = io_waker,
 
                 .clients = clients,
@@ -65,7 +70,7 @@ pub fn Worker(comptime TApp: type) type {
             };
         }
 
-        pub fn deinit(self: *Self) void {
+        fn stop(self: *Self) void {
             if (self.current_buffer_idx) |idx| {
                 self.output_buffer_pool.release(idx);
             }
@@ -83,15 +88,15 @@ pub fn Worker(comptime TApp: type) type {
             self.thread = thread;
         }
 
-        pub inline fn join(self: *Self) !void {
-            try self.thread.join();
-        }
-
         fn run(self: *Self) !void {
             while (true) {
                 // input buffer released in handler right after deserialization
 
                 self.semaphore.acquire();
+                if (self.shutdown_state.load(.acquire) == .immediate) {
+                    self.stop();
+                    return;
+                }
                 const job = self.job_queue.tryPop() orelse continue;
 
                 var reader: std.Io.Reader = .fixed(job.data);
