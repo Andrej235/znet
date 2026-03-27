@@ -2,10 +2,10 @@ const std = @import("std");
 const z = @import("znet");
 
 const SomeService = struct {
-    s: Service1,
-    s3: Service3,
+    s: *Service1,
+    s3: *Service3,
 
-    pub fn init(s: Service1, s3: Service3) SomeService {
+    pub fn init(s: *Service1, s3: *Service3) SomeService {
         return SomeService{
             .s = s,
             .s3 = s3,
@@ -18,10 +18,10 @@ const SomeService = struct {
 };
 
 const Service1 = struct {
-    s2: Service2,
-    s3: Service3,
+    s2: *Service2,
+    s3: *Service3,
 
-    pub fn init(s2: Service2, s3: Service3) Service1 {
+    pub fn init(s2: *Service2, s3: *Service3) Service1 {
         return Service1{
             .s2 = s2,
             .s3 = s3,
@@ -44,9 +44,9 @@ const Service2 = struct {
 };
 
 const Service3 = struct {
-    s2: Service2,
+    s2: *Service2,
 
-    pub fn init(s2: Service2) Service3 {
+    pub fn init(s2: *Service2) Service3 {
         return Service3{
             .s2 = s2,
         };
@@ -57,7 +57,7 @@ const Service3 = struct {
     }
 };
 
-pub fn echo(message: z.Body([]const u8), service: SomeService) []const u8 {
+pub fn echo(message: z.Body([]const u8), service: *SomeService) []const u8 {
     service.hello(message);
     return message.value;
 }

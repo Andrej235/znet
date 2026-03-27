@@ -64,9 +64,9 @@ const OtherService = struct {
 };
 
 const ServiceWithDeps = struct {
-    other_service: MyService,
+    other_service: *const MyService,
 
-    pub fn init(other_service: MyService) ServiceWithDeps {
+    pub fn init(other_service: *const MyService) ServiceWithDeps {
         return ServiceWithDeps{
             .other_service = other_service,
         };
@@ -85,6 +85,12 @@ pub fn main() !void {
     // try App.DIContainer.?.call(helloDI);
     const config = App.DIContainer.?.resolve(*const SomeConfiguration);
     std.debug.print("Config value: {}\n", .{config.value});
+
+    const service: MyService = App.DIContainer.?.resolve(*const MyService);
+    std.debug.print("Service value: {}\n", .{service.doSomething()});
+
+    const serviceWithDeps: ServiceWithDeps = App.DIContainer.?.resolve(*const ServiceWithDeps);
+    std.debug.print("ServiceWithDeps value: {}\n", .{serviceWithDeps.doSomething()});
 
     // const call_table = comptime App.compileServerCallTable();
     // for (call_table) |scope| {

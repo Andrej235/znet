@@ -5,7 +5,7 @@ const Service = @import("service.zig").Service;
 pub const Container = struct {
     services: []const Service,
 
-    pub fn resolve(comptime self: *const Container, comptime T: type) T {
+    pub fn resolve(comptime self: *const Container, comptime T: type) self.ResolveReturnType(T) {
         const info = @typeInfo(T);
         if (info != .pointer or info.pointer.size != .one) {
             @compileError(std.fmt.comptimePrint("Only single pointer types can be resolved, got '{}'", .{T}));
@@ -33,6 +33,34 @@ pub const Container = struct {
         }
 
         @compileError(std.fmt.comptimePrint("Type '{}' is not registered in the container", .{T}));
+    }
+
+    fn isTransient(comptime self: *const Container, comptime T: type) bool {
+        comptime {
+            const info = @typeInfo(T);
+            const TService = info.pointer.child;
+
+            for (self.services) |service| {
+                if (service == ._transient and service._transient.type == TService) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    }
+
+    fn ResolveReturnType(comptime self: *const Container, comptime T: type) type {
+        const info = @typeInfo(T);
+        if (info != .pointer or info.pointer.size != .one) {
+            @compileError(std.fmt.comptimePrint("Only single pointer types can be resolved, got '{}'", .{T}));
+        }
+
+        if (self.isTransient(T)) {
+            return info.pointer.child;
+        }
+
+        return T;
     }
 
     pub fn call(comptime self: *const Container, comptime callback: anytype) FnReturnType(callback) {
@@ -67,9 +95,11 @@ pub const Container = struct {
             },
         });
 
+        // every args has to be a pointer, this is validated while resolving
         var args: TArgsTuple = undefined;
         inline for (arg_tuple_fields) |arg_field| {
-            @field(args, arg_field.name) = self.resolve(arg_field.type);
+            var dependency = self.resolve(arg_field.type);
+            @field(args, arg_field.name) = if (@typeInfo(@TypeOf(dependency)) == .pointer) dependency else &dependency;
         }
 
         return @call(.always_inline, callback, args);
