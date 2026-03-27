@@ -37,14 +37,11 @@ pub const Service = union(enum) {
             @compileError("Singleton service must be a pointer to a single instance");
         }
 
-        if (info.pointer.is_const) {
-            @compileError("Singleton service must be a pointer to a non-const instance");
-        }
-
         return .{
             ._singleton = .{
-                .type = T,
+                .type = info.pointer.child,
                 .instance_pointer = ptr,
+                .is_const = info.pointer.is_const,
             },
         };
     }

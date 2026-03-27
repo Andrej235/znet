@@ -1,6 +1,10 @@
 const std = @import("std");
 const z = @import("znet");
 
+const my_config = SomeConfiguration{
+    .value = 123,
+};
+
 const App = z.App(
     .{
         z.Scope(
@@ -31,6 +35,7 @@ const App = z.App(
                 .transient(MyService),
                 .transient(OtherService),
                 .transient(ServiceWithDeps),
+                .singleton(&my_config),
             },
         },
     },
@@ -72,18 +77,24 @@ const ServiceWithDeps = struct {
     }
 };
 
+const SomeConfiguration = struct {
+    value: u32,
+};
+
 pub fn main() !void {
-    try App.DIContainer.?.call(helloDI);
+    // try App.DIContainer.?.call(helloDI);
+    const config = App.DIContainer.?.resolve(*const SomeConfiguration);
+    std.debug.print("Config value: {}\n", .{config.value});
 
-    const call_table = comptime App.compileServerCallTable();
-    for (call_table) |scope| {
-        for (scope) |action| {
-            std.debug.print("{s}\n", .{action.path});
-        }
-    }
+    // const call_table = comptime App.compileServerCallTable();
+    // for (call_table) |scope| {
+    //     for (scope) |action| {
+    //         std.debug.print("{s}\n", .{action.path});
+    //     }
+    // }
 
-    const app: App = .{};
-    _ = app;
+    // const app: App = .{};
+    // _ = app;
 }
 
 fn hello() !bool {

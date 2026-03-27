@@ -6,21 +6,27 @@ pub const Container = struct {
     services: []const Service,
 
     pub fn resolve(comptime self: *const Container, comptime T: type) T {
+        const info = @typeInfo(T);
+        if (info != .pointer or info.pointer.size != .one) {
+            @compileError(std.fmt.comptimePrint("Only single pointer types can be resolved, got '{}'", .{T}));
+        }
+        const TService = info.pointer.child;
+
         inline for (self.services) |service| {
             switch (service) {
                 ._transient => |tr| {
-                    if (tr.type == T) {
+                    if (tr.type == TService) {
                         return tr.resolve(self);
                     }
                 },
                 ._scoped => |sc| {
-                    if (sc.type == T) {
+                    if (sc.type == TService) {
                         return sc.resolve(self);
                     }
                 },
                 ._singleton => |sg| {
-                    if (sg.type == T) {
-                        return sg.resolve(self);
+                    if (sg.type == TService) {
+                        return sg.resolve(T);
                     }
                 },
             }
