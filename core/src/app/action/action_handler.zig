@@ -8,13 +8,20 @@ const serializeMessageHeaders = @import("../../message_headers/serialize_message
 const Deserializer = @import("../../serializer/deserializer.zig").Deserializer;
 const Serializer = @import("../../serializer/serializer.zig").Serializer;
 const CountingSerializer = @import("../../serializer/counting_serializer.zig").Serializer;
-const HandlerFn = @import("handler_fn.zig").HandlerFn;
-const ReactorContext = @import("../reactor.zig").ReactorContext;
+const ReactorContext = @import("../../server/reactor.zig").ReactorContext;
 
 const DIContainer = @import("../../dependency_injection/container.zig").Container;
 
-pub fn createHandlerFn(comptime fn_impl: anytype, comptime di: ?DIContainer) HandlerFn {
-    const TFn = @TypeOf(fn_impl);
+pub const ActionHandler = *const fn (
+    context: ReactorContext,
+    request_headers: RequestHeaders,
+    input_reader: *std.Io.Reader,
+    output_writer: *std.Io.Writer,
+    input_buffer_idx: u32,
+) anyerror!void;
+
+pub fn createActionHandler(comptime callback: anytype, comptime di: ?DIContainer) ActionHandler {
+    const TFn = @TypeOf(callback);
     const fn_info = @typeInfo(TFn);
     if (fn_info != .@"fn") @compileError("Expected function type");
 
@@ -69,7 +76,7 @@ pub fn createHandlerFn(comptime fn_impl: anytype, comptime di: ?DIContainer) Han
                 @field(params, name) = .{ .value = payload };
             }
 
-            const output = @call(.always_inline, fn_impl, params);
+            const output = @call(.always_inline, callback, params);
 
             try serializeMessageHeaders(
                 output_writer,

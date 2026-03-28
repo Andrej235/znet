@@ -7,7 +7,7 @@ const RuntimeAction = @import("runtime_action.zig").RuntimeAction;
 const ResolvedScopeOptions = @import("../scope/resolved_scope_options.zig").ResolvedScopeOptions;
 const ActionOptions = @import("action_options.zig").ActionOptions;
 
-const createHandlerFn = @import("../../server/handler_fn/create_handler_fn.zig").createHandlerFn;
+const createActionHandler = @import("./action_handler.zig").createActionHandler;
 
 pub const ActionName = ?@Type(.enum_literal);
 
@@ -30,7 +30,7 @@ pub fn Action(comptime name: ActionName, comptime handler_fn: anytype, comptime 
 
             return RuntimeAction{
                 .path = absolute_path,
-                .handler = createHandlerFn(handler_fn, scope_options.di),
+                .handler = createActionHandler(handler_fn, scope_options.di),
                 .executor = options.executor orelse scope_options.default_action_executor,
             };
         }

@@ -9,7 +9,6 @@ const Waker = @import("../waker/waker.zig");
 
 const Logger = @import("../logger/logger.zig").Logger.scoped(.worker_thread); // todo: make scope include worker id
 
-const HandlerFn = @import("handler_fn/handler_fn.zig").HandlerFn;
 const MessageHeadersByteSize = @import("../message_headers/message_headers.zig").HeadersByteSize;
 const deserializeMessageHeaders = @import("../message_headers/deserialize_message_headers.zig").deserializeMessageHeaders;
 
