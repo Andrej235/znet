@@ -107,26 +107,10 @@ pub const ClientInterface = struct {
 
     pub fn connect(self: *ClientInterface, address: std.net.Address) ServerConnection.ConnectError!void {
         try self.server_connection.connect(address);
-
-        // todo: reimplement for broadcasts only
-        // for (0..self.options.worker_thread_count) |i| {
-        //     self.workers[i] = Worker.init(self.allocator, self);
-
-        //     self.workers[i].runThread() catch |err| {
-        //         std.debug.print("Failed to spawn worker thread {}: {}\n", .{ i, err });
-        //         return err;
-        //     };
-        // }
     }
 
     pub fn disconnect(self: *ClientInterface) !void {
         try self.server_connection.disconnect();
-
-        // self.inbound_queue.close();
-        // for (self.workers) |*w| {
-        //     w.thread.join();
-        // }
-
         try self.pending_requests_map.clear();
     }
 
