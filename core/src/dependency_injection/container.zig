@@ -1,11 +1,15 @@
 const std = @import("std");
 
 const Service = @import("service.zig").Service;
+const Scope = @import("scope.zig").Scope;
 
 pub const Container = struct {
     services: []const Service,
 
-    pub fn resolve(comptime self: *const Container, comptime T: type) self.ResolveReturnType(T) {
+    // the scope is a type created perfectly to hold scoped instances, it must **always** be passed by reference
+    // all instances are to be initialized to null and then filled when the service is resolved for the first time
+    // after the first resolution, the scope will hold the instance and return its pointer for subsequent resolutions
+    pub fn resolve(comptime self: *const Container, comptime T: type, scope: anytype) self.ResolveReturnType(T) {
         const info = @typeInfo(T);
         if (info != .pointer or info.pointer.size != .one) {
             @compileError(std.fmt.comptimePrint("Only single pointer types can be resolved, got '{}'", .{T}));
@@ -16,12 +20,18 @@ pub const Container = struct {
             switch (service) {
                 ._transient => |tr| {
                     if (tr.type == TService) {
-                        return tr.resolve(self);
+                        return tr.resolve(self, scope);
                     }
                 },
                 ._scoped => |sc| {
                     if (sc.type == TService) {
-                        return sc.resolve(self);
+                        const TScope = @TypeOf(scope);
+                        const scope_info = @typeInfo(TScope);
+                        if (scope_info != .pointer) {
+                            @compileError(std.fmt.comptimePrint("Scope must be passed by reference: '{}'", .{T}));
+                        }
+
+                        return sc.resolve(scope);
                     }
                 },
                 ._singleton => |sg| {
@@ -63,7 +73,7 @@ pub const Container = struct {
         return T;
     }
 
-    pub fn call(comptime self: *const Container, comptime callback: anytype) FnReturnType(callback) {
+    pub fn call(comptime self: *const Container, comptime callback: anytype, scope: anytype) FnReturnType(callback) {
         const info = @typeInfo(@TypeOf(callback));
         if (info != .@"fn") {
             @compileError("Callback must be a function");
@@ -98,12 +108,15 @@ pub const Container = struct {
         // every args has to be a pointer, this is validated while resolving
         var args: TArgsTuple = undefined;
         inline for (arg_tuple_fields) |arg_field| {
-            var dependency = self.resolve(arg_field.type);
+            var dependency = self.resolve(arg_field.type, scope);
             @field(args, arg_field.name) = if (@typeInfo(@TypeOf(dependency)) == .pointer) dependency else &dependency;
         }
 
         return @call(.always_inline, callback, args);
     }
+
+    pub const FunctionScope = Scope.Function;
+    pub const walkDependencyGraph = Scope.walkDependencyGraph;
 
     fn FnReturnType(comptime callback: anytype) type {
         const info = @typeInfo(@TypeOf(callback));
@@ -112,5 +125,47 @@ pub const Container = struct {
         }
 
         return info.@"fn".return_type orelse void;
+    }
+
+    pub fn getServiceType(comptime self: *const Container, comptime TService: type) enum {
+        transient,
+        scoped,
+        singleton,
+    } {
+        comptime {
+            const service = self.getService(TService);
+
+            switch (service) {
+                ._transient => return .transient,
+                ._scoped => return .scoped,
+                ._singleton => return .singleton,
+            }
+        }
+    }
+
+    pub fn getService(comptime self: *const Container, comptime TService: type) Service {
+        comptime {
+            for (self.services) |service| {
+                switch (service) {
+                    ._transient => |tr| {
+                        if (tr.type == TService) {
+                            return service;
+                        }
+                    },
+                    ._scoped => |sc| {
+                        if (sc.type == TService) {
+                            return service;
+                        }
+                    },
+                    ._singleton => |sg| {
+                        if (sg.type == TService) {
+                            return service;
+                        }
+                    },
+                }
+            }
+
+            @compileError(std.fmt.comptimePrint("Type '{}' is not registered in the container", .{TService}));
+        }
     }
 };

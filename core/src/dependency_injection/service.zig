@@ -1,5 +1,5 @@
 const TransientService = @import("transient_service.zig").TransientService;
-const ScopedService = @import("transient_service.zig").TransientService;
+const ScopedService = @import("scoped_service.zig").ScopedService;
 const SingletonService = @import("singleton_service.zig").SingletonService;
 
 pub const Service = union(enum) {

@@ -7,7 +7,7 @@ pub const TransientService = struct {
     type: type,
     init_type: ServiceInitType = .init_fn,
 
-    pub fn resolve(comptime self: TransientService, comptime container: *const DIContainer) self.type {
+    pub fn resolve(comptime self: TransientService, comptime container: *const DIContainer, scope: anytype) self.type {
         const T = self.type;
 
         return switch (self.init_type) {
@@ -27,7 +27,7 @@ pub const TransientService = struct {
                     @compileError(std.fmt.comptimePrint("'init' function of type '{}' does not return the correct type", .{T}));
                 }
 
-                return container.call(init_fn);
+                return container.call(init_fn, scope);
             },
             .construct => return T{},
         };
