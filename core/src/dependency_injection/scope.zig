@@ -36,7 +36,7 @@ pub const Scope = struct {
     }
 
     /// Generates a scope using given services, **doesn't** walk the dependency graph
-    fn Internal(comptime container: *const Container, comptime services: []const type) type {
+    fn Internal(comptime di: *const Container, comptime services: []const type) type {
         comptime {
             if (services.len == 0) {
                 return Empty();
@@ -86,12 +86,12 @@ pub const Scope = struct {
                     }
 
                     // create a new instance of the service and store it in the scope for future resolutions
-                    const service = container.getService(TService)._scoped;
+                    const service = di.getService(TService)._scoped;
                     switch (service.init_type) {
                         .construct => return TService{},
                         .init_fn => {
                             const init_fn = @field(TService, "init");
-                            const instance = container.call(init_fn, self);
+                            const instance = di.call(init_fn, self);
                             @field(self.container, service_field_name) = ScopedServiceContainer(TService){
                                 .value = instance,
                                 .initialized = true,
@@ -100,6 +100,21 @@ pub const Scope = struct {
                             return &@field(self.container, service_field_name).value;
                         },
                     }
+                }
+
+                pub fn init() Self {
+                    var container: TContainer = undefined;
+
+                    inline for (fields) |field| {
+                        @field(container, field.name) = field.type{
+                            .value = undefined,
+                            .initialized = false,
+                        };
+                    }
+
+                    return Self{
+                        .container = container,
+                    };
                 }
             };
         }
@@ -172,8 +187,18 @@ pub const Scope = struct {
 
     pub fn Empty() type {
         return struct {
-            pub fn resolve(comptime T: type) T {
-                @compileError(std.fmt.comptimePrint("No dependencies can be resolved in an empty scope, tried to resolve {}", .{T}));
+            const Self = @This();
+
+            container: void,
+
+            pub fn resolve(_: *Self, comptime TService: type) *TService {
+                @compileError(std.fmt.comptimePrint("No dependencies can be resolved in an empty scope, tried to resolve {}", .{TService}));
+            }
+
+            pub fn init() Self {
+                return Self{
+                    .container = {},
+                };
             }
         };
     }

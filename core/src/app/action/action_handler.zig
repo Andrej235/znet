@@ -10,6 +10,8 @@ const Serializer = @import("../../serializer/serializer.zig").Serializer;
 const CountingSerializer = @import("../../serializer/counting_serializer.zig").Serializer;
 const ReactorContext = @import("../../server/reactor.zig").ReactorContext;
 
+const Logger = @import("../../logger/logger.zig").Logger.scoped(.action_handler);
+
 const DIContainer = @import("../../dependency_injection/container.zig").Container;
 
 pub const ActionHandler = *const fn (
@@ -33,6 +35,9 @@ pub fn createActionHandler(comptime callback: anytype, comptime di: ?DIContainer
             output_writer: *std.Io.Writer,
             input_buffer_idx: u32,
         ) anyerror!void {
+            //Logger.info("handler start", .{});
+            //defer Logger.info("handler end", .{});
+
             const params_info = getParamsInfo(TFn);
             const param_fields = params_info.fields;
 
@@ -67,7 +72,7 @@ pub fn createActionHandler(comptime callback: anytype, comptime di: ?DIContainer
                 break :blk di.?.SliceScope(services);
             };
 
-            var scope: if (TScope) |TS| TS else void = undefined;
+            var scope: if (TScope) |TS| TS else void = if (TScope) |TS| TS.init() else {};
             var params: TParams = undefined;
 
             inline for (param_fields) |field| {
@@ -84,6 +89,8 @@ pub fn createActionHandler(comptime callback: anytype, comptime di: ?DIContainer
                 }
             }
 
+            //Logger.info("populated scope", .{});
+
             const TPayload: ?type = params_info.TBody;
             const payload_field_name = params_info.body_field_name;
 
@@ -94,11 +101,14 @@ pub fn createActionHandler(comptime callback: anytype, comptime di: ?DIContainer
             } else {};
             context.input_buffer_pool.release(input_buffer_idx);
 
+            //Logger.info("deserialized payload", .{});
+
             if (payload_field_name) |name| {
                 @field(params, name) = .{ .value = payload };
             }
 
             const output = @call(.always_inline, callback, params);
+            //Logger.info("completed action", .{});
 
             try serializeMessageHeaders(
                 output_writer,
@@ -113,6 +123,7 @@ pub fn createActionHandler(comptime callback: anytype, comptime di: ?DIContainer
                 },
             );
             try Serializer.serialize(fn_info.@"fn".return_type.?, output_writer, output);
+            //Logger.info("serialized output", .{});
 
             if (TPayload) |_| { // payload MUST be destroyed AFTER output serialization is complete in case pointers from payload are used in output
                 try deserializer.destroy(payload);
