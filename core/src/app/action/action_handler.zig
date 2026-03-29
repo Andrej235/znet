@@ -46,6 +46,28 @@ pub fn createActionHandler(comptime callback: anytype, comptime di: ?DIContainer
                 },
             });
 
+            const TScope: ?type = comptime blk: {
+                if (di == null) {
+                    break :blk null;
+                }
+
+                var services: []const type = &[_]type{};
+
+                for (param_fields) |field| {
+                    const T = field.type;
+                    const info = @typeInfo(T);
+
+                    if (info == .@"struct" and @hasDecl(T, "param_kind") and @hasDecl(T, "Type"))
+                        continue;
+
+                    const TParam = if (info == .pointer) info.pointer.child else T;
+                    services = services ++ &[_]type{TParam};
+                }
+
+                break :blk di.?.SliceScope(services);
+            };
+
+            var scope: if (TScope) |TS| TS else void = undefined;
             var params: TParams = undefined;
 
             inline for (param_fields) |field| {
@@ -55,7 +77,7 @@ pub fn createActionHandler(comptime callback: anytype, comptime di: ?DIContainer
 
                 // inject
                 if (di) |d| {
-                    var dependency = d.resolve(field.type);
+                    var dependency = d.resolve(field.type, &scope);
                     @field(params, field.name) = if (@typeInfo(@TypeOf(dependency)) == .pointer) dependency else &dependency;
                 } else {
                     @compileError(std.fmt.comptimePrint("Cannot resolve parameter of type '{s}' because no DI container is available", .{@typeName(field.type)}));

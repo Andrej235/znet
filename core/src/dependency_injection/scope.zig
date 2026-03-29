@@ -3,6 +3,7 @@ const std = @import("std");
 const Container = @import("container.zig").Container;
 
 pub const Scope = struct {
+    /// Generates a scope using all dependencies needed to call the provided function, walking the dependency graph to find them
     pub fn Function(comptime container: *const Container, comptime function: anytype) type {
         comptime {
             const T = @TypeOf(function);
@@ -12,15 +13,40 @@ pub const Scope = struct {
             }
 
             const field_types = walkDependencyGraph(container, T);
-            if (field_types.len == 0) {
+            return Internal(container, field_types);
+        }
+    }
+
+    /// Generates a scope using given services and all their dependencies, walking the dependency graph to find them
+    pub fn Slice(comptime container: *const Container, comptime services: []const type) type {
+        comptime {
+            var alL_services: []const type = services;
+
+            for (services) |service| {
+                const service_deps = walkDependencyGraph(container, service);
+                for (service_deps) |dep| {
+                    if (!std.mem.containsAtLeastScalar(type, alL_services, 1, dep)) {
+                        alL_services = alL_services ++ &[_]type{dep};
+                    }
+                }
+            }
+
+            return Internal(container, alL_services);
+        }
+    }
+
+    /// Generates a scope using given services, **doesn't** walk the dependency graph
+    fn Internal(comptime container: *const Container, comptime services: []const type) type {
+        comptime {
+            if (services.len == 0) {
                 return Empty();
             }
 
-            var fields: [field_types.len]std.builtin.Type.StructField = undefined;
+            var fields: [services.len]std.builtin.Type.StructField = undefined;
 
-            for (field_types, 0..) |TDep, i| {
+            for (services, 0..) |TDep, i| {
                 fields[i] = std.builtin.Type.StructField{
-                    .name = @typeName(TDep),
+                    .name = std.fmt.comptimePrint("{}", .{i}),
                     .type = ScopedServiceContainer(TDep),
                     .alignment = @alignOf(ScopedServiceContainer(TDep)),
                     .is_comptime = false,
@@ -33,7 +59,7 @@ pub const Scope = struct {
                     .backing_integer = null,
                     .decls = &.{},
                     .fields = &fields,
-                    .is_tuple = false,
+                    .is_tuple = true,
                     .layout = .auto,
                 },
             });
@@ -44,11 +70,17 @@ pub const Scope = struct {
                 container: TContainer,
 
                 pub fn resolve(self: *Self, comptime TService: type) *TService {
-                    if (!@hasField(@TypeOf(self.container), @typeName(TService))) {
-                        @compileError(std.fmt.comptimePrint("Service '{}' is not a dependency of this scope", .{TService}));
-                    }
+                    const service_field_name = comptime field_name: {
+                        for (services, 0..) |TDep, i| {
+                            if (TDep == TService) {
+                                break :field_name std.fmt.comptimePrint("{}", .{i});
+                            }
+                        }
 
-                    var scoped_service_container: *ScopedServiceContainer(TService) = &@field(self.container, @typeName(TService));
+                        @compileError(std.fmt.comptimePrint("Service of type '{}' is not part of this scope and cannot be resolved", .{TService}));
+                    };
+
+                    var scoped_service_container: *ScopedServiceContainer(TService) = &@field(self.container, service_field_name);
                     if (scoped_service_container.initialized) {
                         return &scoped_service_container.value;
                     }
@@ -60,12 +92,12 @@ pub const Scope = struct {
                         .init_fn => {
                             const init_fn = @field(TService, "init");
                             const instance = container.call(init_fn, self);
-                            @field(self.container, @typeName(TService)) = ScopedServiceContainer(TService){
+                            @field(self.container, service_field_name) = ScopedServiceContainer(TService){
                                 .value = instance,
                                 .initialized = true,
                             };
 
-                            return &@field(self.container, @typeName(TService)).value;
+                            return &@field(self.container, service_field_name).value;
                         },
                     }
                 }
@@ -97,33 +129,30 @@ pub const Scope = struct {
                         if (param.type == null) continue;
 
                         const TParam = param.type.?;
-                        const paramInfo = @typeInfo(TParam);
-                        if (paramInfo != .pointer or paramInfo.pointer.size != .one) {
+                        const param_info = @typeInfo(TParam);
+                        if (param_info != .pointer or param_info.pointer.size != .one) {
                             @compileError(std.fmt.comptimePrint("Only single pointer parameters are supported in 'init' functions, but parameter {} of type {} does not meet this requirement", .{ param.name, TParam }));
                         }
 
-                        const TChild = paramInfo.pointer.child;
+                        const TChild = param_info.pointer.child;
                         const service = container.getService(TChild);
 
                         switch (service) {
                             ._scoped => |sc| {
-                                dependencies = dependencies ++ &[_]type{TChild};
+                                const to_add = if (sc.init_type == .init_fn) &[_]type{TChild} ++ walkDependencyGraph(container, TChild) else &[_]type{TChild};
 
-                                if (sc.init_type == .init_fn) {
-                                    // add nested deps, check for dupes
-                                    const nestedDeps = walkDependencyGraph(container, TChild);
-                                    for (nestedDeps) |TDep| {
-                                        if (!std.mem.containsAtLeastScalar(type, dependencies, 1, TDep)) {
-                                            dependencies = dependencies ++ &.{TDep};
-                                        }
+                                // add nested deps, check for dupes
+                                for (to_add) |TDep| {
+                                    if (!std.mem.containsAtLeastScalar(type, dependencies, 1, TDep)) {
+                                        dependencies = dependencies ++ &[_]type{TDep};
                                     }
                                 }
                             },
                             ._transient => |tr| {
                                 if (tr.init_type == .init_fn) {
                                     // add nested deps, check for dupes
-                                    const nestedDeps = walkDependencyGraph(container, TChild);
-                                    for (nestedDeps) |TDep| {
+                                    const nested_deps = walkDependencyGraph(container, TChild);
+                                    for (nested_deps) |TDep| {
                                         if (!std.mem.containsAtLeastScalar(type, dependencies, 1, TDep)) {
                                             dependencies = dependencies ++ &[_]type{TDep};
                                         }

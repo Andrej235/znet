@@ -71,10 +71,10 @@ pub const App = z.App(
         .{
             .di = z.DIC{
                 .services = &[_]z.DIService{
-                    .transient(SomeService),
-                    .transient(Service1),
-                    .transient(Service2),
-                    .transient(Service3),
+                    .scoped(SomeService),
+                    .scoped(Service1),
+                    .scoped(Service2),
+                    .scoped(Service3),
                 },
             },
         },

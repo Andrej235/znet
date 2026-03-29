@@ -116,6 +116,7 @@ pub const Container = struct {
     }
 
     pub const FunctionScope = Scope.Function;
+    pub const SliceScope = Scope.Slice;
     pub const walkDependencyGraph = Scope.walkDependencyGraph;
 
     fn FnReturnType(comptime callback: anytype) type {
