@@ -1,5 +1,5 @@
 const std = @import("std");
-const zNet = @import("znet");
+const z = @import("znet");
 const testing = std.testing;
 
 fn forceRuntimeTuple(comptime tuple: anytype) StripComptimeFromTupleType(@TypeOf(tuple)) {
@@ -29,11 +29,6 @@ fn StripComptimeFromTupleType(comptime T: type) type {
         },
     });
 }
-
-// var stdout_buffer: [256]u8 = undefined;
-//     var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
-//     const stdout = &stdout_writer.interface;
-//     try stdout.flush();
 
 pub const Vector = struct {
     x: f32,
@@ -587,14 +582,14 @@ test "tuples s/d" {
     );
 }
 
-var deserializer = zNet.Deserializer.init(std.heap.page_allocator);
+var deserializer = z.Deserializer.init(std.heap.page_allocator);
 
 fn roundTrip(comptime T: type, data: T) T {
     var buffer: [1024]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
     var reader: std.Io.Reader = .fixed(&buffer);
 
-    zNet.Serializer.serialize(T, &writer, data) catch unreachable;
+    z.Serializer.serialize(T, &writer, data) catch unreachable;
 
     const deserialized: T = if (@typeInfo(T) == .error_union) deserializer.deserialize(&reader, T) catch |err| switch (err) {
         error.InvalidUnionTag => unreachable,
@@ -614,7 +609,7 @@ fn roundTripInfer(comptime data: anytype) @TypeOf(data) {
     var writer: std.Io.Writer = .fixed(&buffer);
     var reader: std.Io.Reader = .fixed(&buffer);
 
-    zNet.Serializer.serialize(@TypeOf(data), &writer, data) catch unreachable;
+    z.Serializer.serialize(@TypeOf(data), &writer, data) catch unreachable;
     const deserialized: @TypeOf(data) = deserializer.deserialize(&reader, @TypeOf(data)) catch unreachable;
     return deserialized;
 }
