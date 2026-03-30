@@ -1,45 +1,12 @@
 const std = @import("std");
 
-const validateAction = @import("action.zig").validateAction;
+const validateAction = @import("../action/action.zig").validateAction;
+
+const ScopeOptions = @import("scope_options.zig").ScopeOptions;
+const ResolvedScopeOptions = @import("resolved_scope_options.zig").ResolvedScopeOptions;
 
 const RuntimeScope = @import("runtime_scope.zig").RuntimeScope;
-const RuntimeAction = @import("runtime_action.zig").RuntimeAction;
-const ActionExecutor = @import("action.zig").ActionExecutor;
-const AppOptions = @import("app.zig").AppOptions;
-const ActionId = @import("action.zig").ActionId;
-
-pub const ScopeOptions = struct {
-    default_action_executor: ?ActionExecutor = null,
-};
-
-pub const ResolvedScopeOptions = struct {
-    path: []const u8,
-
-    default_action_executor: ActionExecutor,
-
-    pub fn resolve(parent_options: ResolvedScopeOptions, options: ScopeOptions, name: []const u8) ResolvedScopeOptions {
-        return ResolvedScopeOptions{
-            .default_action_executor = options.default_action_executor orelse parent_options.default_action_executor,
-            .path = concatPathSegment(parent_options.path, name),
-        };
-    }
-
-    pub fn fromAppOptions(app_options: AppOptions) ResolvedScopeOptions {
-        return ResolvedScopeOptions{
-            .default_action_executor = app_options.default_action_executor,
-            .path = "",
-        };
-    }
-};
-
-fn concatPathSegment(path: []const u8, segment: []const u8) []const u8 {
-    if (path.len == 0) // root path
-        return "/" ++ segment;
-
-    if (segment.len == 0) return path;
-
-    return std.fmt.comptimePrint("{s}/{s}", .{ path, segment });
-}
+const RuntimeAction = @import("../action/runtime_action.zig").RuntimeAction;
 
 pub const ScopeName = ?@Type(.enum_literal);
 

@@ -1,14 +1,19 @@
 const std = @import("std");
 
-const validateScope = @import("scope.zig").validateScope;
+const DIContainer = @import("../dependency_injection/container.zig").Container;
 
-const ActionExecutor = @import("action.zig").ActionExecutor;
-const RuntimeScope = @import("runtime_scope.zig").RuntimeScope;
-const ResolvedScopeOptions = @import("scope.zig").ResolvedScopeOptions;
-const ActionId = @import("action.zig").ActionId;
+const validateScope = @import("scope/scope.zig").validateScope;
+
+const ActionExecutor = @import("options/action_executor.zig").ActionExecutor;
+const Protocol = @import("options/protocol.zig").Protocol;
+const RuntimeScope = @import("scope/runtime_scope.zig").RuntimeScope;
+const ResolvedScopeOptions = @import("scope/resolved_scope_options.zig").ResolvedScopeOptions;
+const ActionId = @import("action/action.zig").ActionId;
 
 pub const AppOptions = struct {
     default_action_executor: ActionExecutor = .worker_pool,
+    default_action_protocol: []const Protocol = &[_]Protocol{.http},
+    di: ?DIContainer = null,
 };
 
 pub fn App(comptime scopes: anytype, comptime options: AppOptions) type {
@@ -49,6 +54,8 @@ pub fn App(comptime scopes: anytype, comptime options: AppOptions) type {
     };
 
     return struct {
+        pub const DIContainer = options.di;
+
         pub fn compileServerCallTable() []const RuntimeScope {
             comptime {
                 var runtime_scopes: []const RuntimeScope = &[_]RuntimeScope{};

@@ -37,8 +37,7 @@ pub const LinuxListener = struct {
     /// Called for all pending connections.
     pub fn drainAccepts(
         self: *LinuxListener,
-        comptime TApp: type,
-        reactor: *Reactor(TApp),
+        reactor: anytype,
     ) !void {
         // the while loop will keep accepting connections until the first time posix.accept tries to block in order to wait for a new connection, i.e. there are no more pending connections
         // or attachClientSocket returns an error indicating that the connection should be closed immediately (e.g. if the reactor is already full and cannot accept more connections)

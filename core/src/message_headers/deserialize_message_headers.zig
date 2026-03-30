@@ -2,7 +2,6 @@ const std = @import("std");
 const MessageHeaders = @import("message_headers.zig").MessageHeaders;
 const RequestHeaders = @import("request_headers.zig").RequestHeaders;
 const ResponseHeaders = @import("response_headers.zig").ResponseHeaders;
-const BroadcastHeaders = @import("broadcast_headers.zig").BroadcastHeaders;
 const app_version = @import("../app_version.zig").app_version;
 
 pub fn deserializeMessageHeaders(reader: *std.Io.Reader) DeserializeMessageHeaderErrors!MessageHeaders {
@@ -34,17 +33,6 @@ pub fn deserializeMessageHeaders(reader: *std.Io.Reader) DeserializeMessageHeade
                 .payload_len = reader.takeInt(u32, .big) catch return DeserializeMessageHeaderErrors.FailedToReadField,
             };
             return .{ .Response = header };
-        },
-        2 => {
-            const header: BroadcastHeaders = .{
-                .version = version,
-                .msg_type = .Broadcast,
-                .flags = reader.takeInt(u16, .big) catch return DeserializeMessageHeaderErrors.FailedToReadField,
-                .contract_id = reader.takeInt(u16, .big) catch return DeserializeMessageHeaderErrors.FailedToReadField,
-                .method_id = reader.takeInt(u16, .big) catch return DeserializeMessageHeaderErrors.FailedToReadField,
-                .payload_len = reader.takeInt(u32, .big) catch return DeserializeMessageHeaderErrors.FailedToReadField,
-            };
-            return .{ .Broadcast = header };
         },
         else => return DeserializeMessageHeaderErrors.InvalidMessageType,
     };

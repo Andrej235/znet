@@ -1,44 +1,101 @@
 const std = @import("std");
 const z = @import("znet");
 
-const App = z.App(.{
-    z.Scope(null, .{
-        z.Action(null, healthCheck, .{}),
-    }, .{}),
-    z.Scope(.user, .{
-        z.Action(.register, helloWorld, .{}),
-        z.Action(.login, helloWorld, .{}),
-        z.Scope(.me, .{
-            z.Action(null, hello, .{}),
-            z.Action(.details, hello, .{}),
-            z.Action(.@"details/profile_pic", hello, .{}),
-            z.Action(.settings, hello, .{}),
-        }, .{}),
-    }, .{}),
-}, .{});
+const App = z.App(
+    .{},
+    .{
+        .di = .{
+            .services = &.{
+                .scoped(SomeService),
+                .scoped(Service1),
+                .scoped(Service2),
+                .scoped(Service3),
+            },
+        },
+    },
+);
 
-pub fn main() !void {
-    const call_table = comptime App.compileServerCallTable();
-    for (call_table) |scope| {
-        for (scope) |action| {
-            std.debug.print("{s}\n", .{action.path});
-        }
+const SomeService = struct {
+    s: *Service1,
+    s3: *Service3,
+
+    pub fn init(s: *Service1, s3: *Service3) SomeService {
+        return SomeService{
+            .s = s,
+            .s3 = s3,
+        };
     }
 
-    const app: App = .{};
-    _ = app;
+    pub fn hello(self: *const SomeService, message: z.Body([]const u8)) void {
+        _ = .{ message.value, self.s.get(), self.s3.get() };
+    }
+};
+
+const Service1 = struct {
+    s2: *Service2,
+    s3: *Service3,
+
+    pub fn init(s2: *Service2, s3: *Service3) Service1 {
+        return Service1{
+            .s2 = s2,
+            .s3 = s3,
+        };
+    }
+
+    pub fn get(self: *const Service1) u32 {
+        return 42 + self.s2.get() + self.s3.get();
+    }
+};
+
+const Service2 = struct {
+    pub fn init() Service2 {
+        return Service2{};
+    }
+
+    pub fn get(_: *const Service2) u32 {
+        return 24;
+    }
+};
+
+const Service3 = struct {
+    s2: *Service2,
+
+    pub fn init(s2: *Service2) Service3 {
+        return Service3{
+            .s2 = s2,
+        };
+    }
+
+    pub fn get(self: *const Service3) u32 {
+        return 123 + self.s2.get();
+    }
+};
+
+pub fn main() !void {
+    if (App.DIContainer) |di| {
+        const TFnScope = comptime di.FunctionScope(echo);
+
+        inline for (@typeInfo(@typeInfo(TFnScope).@"struct".fields[0].type).@"struct".fields) |field| {
+            std.debug.print("{}\n", .{@typeInfo(field.type).@"struct".fields[0].type});
+        }
+
+        std.debug.print("--- slice --\n", .{});
+
+        const TSliceScope = comptime di.SliceScope(&[_]type{SomeService});
+
+        inline for (@typeInfo(@typeInfo(TSliceScope).@"struct".fields[0].type).@"struct".fields) |field| {
+            std.debug.print("{}\n", .{@typeInfo(field.type).@"struct".fields[0].type});
+        }
+
+        std.debug.print("--- walk --\n", .{});
+
+        const deps = di.walkDependencyGraph(@TypeOf(echo));
+        inline for (deps) |T| {
+            std.debug.print("{}\n", .{T});
+        }
+
+        // di.call(helloDI, &scope);
+    }
 }
 
-fn hello() !bool {
-    std.debug.print("Hello from the handler!\n", .{});
-    return true;
-}
-
-fn helloWorld() !bool {
-    std.debug.print("Hello, world!\n", .{});
-    return true;
-}
-
-fn healthCheck() !bool {
-    return true;
-}
+pub fn echo(_: *SomeService) void {}

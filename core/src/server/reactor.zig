@@ -17,7 +17,7 @@ const deserializeMessageHeaders = @import("../message_headers/deserialize_messag
 const MessageHeadersByteSize = @import("../message_headers/message_headers.zig").HeadersByteSize;
 const ShutdownState = @import("server.zig").ShutdownState;
 
-const RuntimeScope = @import("../app/runtime_scope.zig").RuntimeScope;
+const RuntimeScope = @import("../app/scope/runtime_scope.zig").RuntimeScope;
 
 const Listener = @import("../listener/listener.zig");
 const Waker = @import("../waker/waker.zig");
@@ -61,7 +61,7 @@ pub fn Reactor(comptime TApp: type) type {
 
         waker: Waker,
 
-        // used by the server to coordinate shutdown between all reactor threads
+        // used by the server to coordinate shutdown between all threads
         shutdown_state: *std.atomic.Value(ShutdownState),
 
         input_buffer_pool: *BufferPool,
@@ -116,6 +116,13 @@ pub fn Reactor(comptime TApp: type) type {
                 self.removeClient(0);
             }
 
+            self.worker_pool_semaphore.batchRelease(@intCast(self.workers.len));
+            for (self.workers) |*w| {
+                // workers use the same shutdown signal as the reactor thread
+                w.thread.join();
+            }
+            self.allocator.free(self.workers);
+
             self.waker.deinit();
 
             self.input_buffer_pool.deinit(self.allocator);
@@ -123,6 +130,9 @@ pub fn Reactor(comptime TApp: type) type {
 
             self.output_buffer_pool.deinit(self.allocator);
             self.allocator.destroy(self.output_buffer_pool);
+
+            self.worker_pool_job_queue.deinit(self.allocator);
+            self.allocator.destroy(self.worker_pool_job_queue);
 
             self.job_queue.deinit(self.allocator);
             self.allocator.destroy(self.job_queue);
@@ -203,6 +213,7 @@ pub fn Reactor(comptime TApp: type) type {
 
             const worker_pool_job_queue = try allocator.create(SPMCQueue(Job));
             worker_pool_job_queue.* = try SPMCQueue(Job).init(allocator, options.max_jobs_in_queue);
+            errdefer worker_pool_job_queue.deinit(allocator);
             errdefer allocator.destroy(worker_pool_job_queue);
 
             const worker_pool_semaphore = Semaphore.init(0);
@@ -234,20 +245,19 @@ pub fn Reactor(comptime TApp: type) type {
                 .worker_pool_semaphore = worker_pool_semaphore,
             };
 
-            for (workers) |*w| {
+            for (workers, 0..) |*w, i| {
                 w.* = Worker(TApp).init(
                     allocator,
                     worker_pool_job_queue,
                     &self.worker_pool_semaphore,
+                    shutdown_state,
                     waker,
                     clients,
                     input_buffer_pool,
                     output_buffer_pool,
                 );
-                try w.runThread();
+                try w.runThread(io_thread_id, i);
             }
-
-            // todo: shutdown workers in case self.run throws an error
 
             try self.run(address, ready_count);
         }
@@ -255,6 +265,9 @@ pub fn Reactor(comptime TApp: type) type {
         fn run(self: *Self, address: std.net.Address, ready_reactors_count: *std.atomic.Value(u32)) !void {
             var listener = try Listener.init(address);
             defer listener.deinit();
+            errdefer self.stop() catch |err| {
+                Logger.err("Failed to stop io thread: {}", .{err});
+            };
 
             // polling slot with index self.options.max_clients is reserved for the listening socket
             try listener.register(&self.poller, self.options.max_clients);
@@ -275,14 +288,18 @@ pub fn Reactor(comptime TApp: type) type {
 
                     if (idx == self.options.max_clients) { // listening socket
                         // listening socket is ready, accept new connections
-                        try listener.drainAccepts(TApp, self);
+                        try listener.drainAccepts(self);
                         continue;
                     }
 
                     if (idx == self.options.max_clients + 1) { // wakeup fd
                         // either the server shutdown or there are new jobs to process
 
-                        if (self.shutdown_state.load(.acquire) == .immediate) break;
+                        if (self.shutdown_state.load(.acquire) == .immediate) {
+                            // shutdown
+                            try self.stop();
+                            return;
+                        }
 
                         // handle new jobs
                         while (self.job_queue.tryPop()) |job| {
@@ -369,7 +386,6 @@ pub fn Reactor(comptime TApp: type) type {
                                     self.current_output_buffer_idx = null;
                                 },
                                 .worker_pool => { // pass the job over to the worker pool, guaranteed to be a valid request
-                                    // todo: implement
                                     self.worker_pool_job_queue.tryPush(job) catch {
                                         // queue full, drop the message and release the input buffer
                                         self.input_buffer_pool.release(job.buffer_idx);
@@ -457,6 +473,7 @@ pub fn Reactor(comptime TApp: type) type {
                 }
             }
 
+            Logger.err("Exited main reactor loop without going through proper shutdown path", .{});
             try self.stop();
         }
 

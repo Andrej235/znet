@@ -7,15 +7,16 @@ const OutMessage = @import("out_message.zig").OutMessage;
 const Semaphore = @import("../semaphore/semaphore.zig").Semaphore;
 const Waker = @import("../waker/waker.zig");
 
-const Logger = @import("../logger/logger.zig").Logger.scoped(.worker_thread); // todo: make scope include worker id
+const Logger = @import("../logger/logger.zig").Logger.scoped(.worker_thread);
 
-const HandlerFn = @import("handler_fn/handler_fn.zig").HandlerFn;
 const MessageHeadersByteSize = @import("../message_headers/message_headers.zig").HeadersByteSize;
 const deserializeMessageHeaders = @import("../message_headers/deserialize_message_headers.zig").deserializeMessageHeaders;
 
 const ClientConnection = @import("client_connection.zig").ClientConnection;
 const BufferPool = @import("../utils/buffer_pool.zig").BufferPool;
-const RuntimeScope = @import("../app/runtime_scope.zig").RuntimeScope;
+const RuntimeScope = @import("../app/scope/runtime_scope.zig").RuntimeScope;
+
+const ShutdownState = @import("server.zig").ShutdownState;
 
 pub fn Worker(comptime TApp: type) type {
     const call_table: []const RuntimeScope = TApp.compileServerCallTable();
@@ -29,6 +30,7 @@ pub fn Worker(comptime TApp: type) type {
 
         job_queue: *Queue(Job),
         semaphore: *Semaphore,
+        shutdown_state: *std.atomic.Value(ShutdownState),
         io_waker: Waker,
 
         clients: []ClientConnection,
@@ -42,6 +44,7 @@ pub fn Worker(comptime TApp: type) type {
             allocator: std.mem.Allocator,
             job_queue: *Queue(Job),
             semaphore: *Semaphore,
+            shutdown_state: *std.atomic.Value(ShutdownState),
             io_waker: Waker,
             clients: []ClientConnection,
             input_buffer_pool: *BufferPool,
@@ -54,6 +57,7 @@ pub fn Worker(comptime TApp: type) type {
 
                 .job_queue = job_queue,
                 .semaphore = semaphore,
+                .shutdown_state = shutdown_state,
                 .io_waker = io_waker,
 
                 .clients = clients,
@@ -65,19 +69,22 @@ pub fn Worker(comptime TApp: type) type {
             };
         }
 
-        pub fn deinit(self: *Self) void {
+        fn stop(self: *Self) void {
             if (self.current_buffer_idx) |idx| {
                 self.output_buffer_pool.release(idx);
             }
         }
 
-        pub inline fn runThread(self: *Self) !void {
+        pub inline fn runThread(self: *Self, io_thread_id: usize, worker_id: usize) !void {
             const thread = try std.Thread.spawn(.{}, Self.run, .{self});
-            self.thread = thread;
-        }
 
-        pub inline fn join(self: *Self) !void {
-            try self.thread.join();
+            var name_buff: [16]u8 = undefined;
+            const name = try std.fmt.bufPrint(name_buff[0..], "io-{}-worker-{}", .{ io_thread_id, worker_id });
+            thread.setName(name) catch |err| {
+                Logger.err("Failed to set thread name to {s}: {}", .{ name, err });
+            };
+
+            self.thread = thread;
         }
 
         fn run(self: *Self) !void {
@@ -85,6 +92,10 @@ pub fn Worker(comptime TApp: type) type {
                 // input buffer released in handler right after deserialization
 
                 self.semaphore.acquire();
+                if (self.shutdown_state.load(.acquire) == .immediate) {
+                    self.stop();
+                    return;
+                }
                 const job = self.job_queue.tryPop() orelse continue;
 
                 var reader: std.Io.Reader = .fixed(job.data);

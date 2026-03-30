@@ -3,8 +3,6 @@ const posix = std.posix;
 const net = std.net;
 
 const ServerOptions = @import("server_options.zig").ServerOptions;
-const HandlerFn = @import("handler_fn/handler_fn.zig").HandlerFn;
-const createHandlerFn = @import("handler_fn/create_handler_fn.zig").createHandlerFn;
 
 const Reactor = @import("reactor.zig").Reactor;
 const ReactorHandle = @import("reactor.zig").ReactorHandle;

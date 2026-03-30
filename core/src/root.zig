@@ -13,8 +13,6 @@ pub const serializeMessageHeaders = @import("message_headers/serialize_message_h
 pub const MessageType = @import("message_headers/message_type.zig").MessageType;
 pub const app_version: u8 = @import("app_version.zig").app_version;
 
-pub const Context = @import("server/context/context.zig").Context;
-
 pub const PendingRequest = @import("client/pending_request.zig").PendingRequest;
 
 pub const Logger = @import("logger/logger.zig").Logger;
@@ -22,5 +20,12 @@ pub const Logger = @import("logger/logger.zig").Logger;
 pub const Options = @import("options.zig").Options;
 
 pub const App = @import("app/app.zig").App;
-pub const Scope = @import("app/scope.zig").Scope;
-pub const Action = @import("app/action.zig").Action;
+pub const Scope = @import("app/scope/scope.zig").Scope;
+pub const Action = @import("app/action/action.zig").Action;
+
+pub const Path = @import("app/params/path_param.zig").Path;
+pub const Query = @import("app/params/query_param.zig").Query;
+pub const Body = @import("app/params/body_param.zig").Body;
+
+pub const DIC = @import("dependency_injection/container.zig").Container;
+pub const DIService = @import("dependency_injection/service.zig").Service;
