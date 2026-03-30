@@ -157,11 +157,6 @@ pub const ServerConnection = struct {
 
                                 pending_request.resolve(in_msg.data, in_msg.buffer_idx);
                             },
-                            .Broadcast => |broadcast| {
-                                Logger.debug("broadcast", .{});
-                                _ = broadcast; // todo: implement broadcast handling on workers when enabled
-                                return error.Unimplemented;
-                            },
                         }
                     }
                 }

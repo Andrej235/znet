@@ -81,9 +81,8 @@ pub const ConnectionReader = struct {
         const payload_len = switch (self.current_headers.?) {
             .Request => return error.InvalidState, // we should never have request headers in the connection reader, they are only used for outgoing messages
             .Response => |res| res.payload_len,
-            .Broadcast => |b| b.payload_len,
         };
-        const message_len = payload_len + MessageHeadersByteSize.Response; // response and broadcast headers have the same size
+        const message_len = payload_len + MessageHeadersByteSize.Response;
 
         if (self.pos < message_len) {
             // not enough data to read the full message
