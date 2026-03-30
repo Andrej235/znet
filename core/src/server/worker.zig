@@ -7,7 +7,7 @@ const OutMessage = @import("out_message.zig").OutMessage;
 const Semaphore = @import("../semaphore/semaphore.zig").Semaphore;
 const Waker = @import("../waker/waker.zig");
 
-const Logger = @import("../logger/logger.zig").Logger.scoped(.worker_thread); // todo: make scope include worker id
+const Logger = @import("../logger/logger.zig").Logger.scoped(.worker_thread);
 
 const MessageHeadersByteSize = @import("../message_headers/message_headers.zig").HeadersByteSize;
 const deserializeMessageHeaders = @import("../message_headers/deserialize_message_headers.zig").deserializeMessageHeaders;

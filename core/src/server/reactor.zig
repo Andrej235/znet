@@ -259,14 +259,15 @@ pub fn Reactor(comptime TApp: type) type {
                 try w.runThread(io_thread_id, i);
             }
 
-            // todo: shutdown workers in case self.run throws an error
-
             try self.run(address, ready_count);
         }
 
         fn run(self: *Self, address: std.net.Address, ready_reactors_count: *std.atomic.Value(u32)) !void {
             var listener = try Listener.init(address);
             defer listener.deinit();
+            errdefer self.stop() catch |err| {
+                Logger.err("Failed to stop io thread: {}", .{err});
+            };
 
             // polling slot with index self.options.max_clients is reserved for the listening socket
             try listener.register(&self.poller, self.options.max_clients);
