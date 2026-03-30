@@ -8,7 +8,7 @@ const deserializeMessageHeaders = @import("../message_headers/deserialize_messag
 const ConnectionId = @import("connection_id.zig").ConnectionId;
 const RequestHeaders = @import("../message_headers/request_headers.zig").RequestHeaders;
 
-const Queue = @import("../utils/spsc_queue.zig").Queue;
+const Queue = @import("../queues/spsc_queue.zig").Queue;
 const Job = @import("./job.zig").Job;
 const OutMessage = @import("./out_message.zig").OutMessage;
 const Logger = @import("../logger/logger.zig").Logger.scoped(.client_connection);
@@ -71,7 +71,7 @@ pub const ClientConnection = struct {
 
         self.reader.deinit();
 
-        self.allocator.free(self.out_message_queue.buf);
+        self.out_message_queue.deinit(self.allocator);
         self.allocator.destroy(self.out_message_queue);
     }
 

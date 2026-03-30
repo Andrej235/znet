@@ -1,5 +1,5 @@
 const std = @import("std");
-const Queue = @import("../utils/mpmc_queue.zig").Queue;
+const Queue = @import("../queues/mpmc_queue.zig").Queue;
 
 const LogLevel = std.log.Level;
 

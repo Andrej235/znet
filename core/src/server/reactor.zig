@@ -2,9 +2,13 @@ const std = @import("std");
 const posix = std.posix;
 const builtin = @import("builtin");
 
+const SPSCQueue = @import("../queues/spsc_queue.zig").Queue;
+const SPMCQueue = @import("../queues/spmc_queue.zig").Queue;
+
+const Worker = @import("worker.zig").Worker;
+
 const ClientConnection = @import("client_connection.zig").ClientConnection;
 const BufferPool = @import("../utils/buffer_pool.zig").BufferPool;
-const Queue = @import("../utils/spsc_queue.zig").Queue;
 const Job = @import("job.zig").Job;
 const ConnectionId = @import("connection_id.zig").ConnectionId;
 const ServerOptions = @import("server_options.zig").ServerOptions;
@@ -13,9 +17,12 @@ const deserializeMessageHeaders = @import("../message_headers/deserialize_messag
 const MessageHeadersByteSize = @import("../message_headers/message_headers.zig").HeadersByteSize;
 const ShutdownState = @import("server.zig").ShutdownState;
 
+const RuntimeScope = @import("../app/scope/runtime_scope.zig").RuntimeScope;
+
 const Listener = @import("../listener/listener.zig");
 const Waker = @import("../waker/waker.zig");
 const Poller = @import("../poller/poller.zig");
+const Semaphore = @import("../semaphore/semaphore.zig").Semaphore;
 
 const Logger = @import("../logger/logger.zig").Logger.scoped(.reactor);
 
@@ -27,14 +34,11 @@ pub const ReactorHandle = struct {
 pub const ReactorContext = struct {
     allocator: std.mem.Allocator,
     input_buffer_pool: *BufferPool,
-    initiated_by_connection_id: u32,
-    client_connections: []const ClientConnection,
-    connected_clients: []const u32,
     waker: Waker,
 };
 
-pub fn Reactor(comptime TSchema: type) type {
-    const call_table = TSchema.createServerCallTable();
+pub fn Reactor(comptime TApp: type) type {
+    const call_table: []const RuntimeScope = TApp.compileServerCallTable();
 
     return struct {
         const Self = @This();
@@ -57,16 +61,21 @@ pub fn Reactor(comptime TSchema: type) type {
 
         waker: Waker,
 
-        // used by the server to coordinate shutdown between all reactor threads
+        // used by the server to coordinate shutdown between all threads
         shutdown_state: *std.atomic.Value(ShutdownState),
 
         input_buffer_pool: *BufferPool,
         output_buffer_pool: *BufferPool,
 
-        job_queue: *Queue(Job),
+        job_queue: *SPSCQueue(Job),
 
         current_output_buffer: []u8, // only valid if current_output_buffer_idx != null
         current_output_buffer_idx: ?u32,
+
+        // worker pool
+        workers: []Worker(TApp),
+        worker_pool_job_queue: *SPMCQueue(Job),
+        worker_pool_semaphore: Semaphore,
 
         pub fn init(
             allocator: std.mem.Allocator,
@@ -107,6 +116,13 @@ pub fn Reactor(comptime TSchema: type) type {
                 self.removeClient(0);
             }
 
+            self.worker_pool_semaphore.batchRelease(@intCast(self.workers.len));
+            for (self.workers) |*w| {
+                // workers use the same shutdown signal as the reactor thread
+                w.thread.join();
+            }
+            self.allocator.free(self.workers);
+
             self.waker.deinit();
 
             self.input_buffer_pool.deinit(self.allocator);
@@ -115,7 +131,10 @@ pub fn Reactor(comptime TSchema: type) type {
             self.output_buffer_pool.deinit(self.allocator);
             self.allocator.destroy(self.output_buffer_pool);
 
-            self.allocator.free(self.job_queue.buf);
+            self.worker_pool_job_queue.deinit(self.allocator);
+            self.allocator.destroy(self.worker_pool_job_queue);
+
+            self.job_queue.deinit(self.allocator);
             self.allocator.destroy(self.job_queue);
 
             self.allocator.free(self.clients);
@@ -160,11 +179,8 @@ pub fn Reactor(comptime TSchema: type) type {
             var poller = try Poller.init(allocator, options.max_clients + 2); // +2 for the listening socket and the wakeup socket
             errdefer poller.deinit();
 
-            const jobs_buf = try allocator.alloc(Job, options.max_jobs_in_queue);
-            errdefer allocator.free(jobs_buf);
-
-            const job_queue = try allocator.create(Queue(Job));
-            job_queue.* = try Queue(Job).init(jobs_buf);
+            const job_queue = try allocator.create(SPSCQueue(Job));
+            job_queue.* = try SPSCQueue(Job).init(allocator, options.max_jobs_in_queue);
             errdefer allocator.destroy(job_queue);
 
             var free_indices = try allocator.alloc(ConnectionId, options.max_clients);
@@ -191,8 +207,16 @@ pub fn Reactor(comptime TSchema: type) type {
             errdefer output_buffer_pool.deinit(allocator);
             errdefer allocator.destroy(output_buffer_pool);
 
-            // no workers for now, todo: add Task<T> or DeferredResult<T> as a tag for contract methods that should be executed on worker threads and then add workers back in
-            // const workers = try allocator.alloc(Worker, options.worker_threads);
+            // worker pool
+            const workers = try allocator.alloc(Worker(TApp), options.worker_pool_size_per_io);
+            errdefer allocator.free(workers);
+
+            const worker_pool_job_queue = try allocator.create(SPMCQueue(Job));
+            worker_pool_job_queue.* = try SPMCQueue(Job).init(allocator, options.max_jobs_in_queue);
+            errdefer worker_pool_job_queue.deinit(allocator);
+            errdefer allocator.destroy(worker_pool_job_queue);
+
+            const worker_pool_semaphore = Semaphore.init(0);
 
             const self = try allocator.create(Self);
             self.* = Self{
@@ -215,7 +239,25 @@ pub fn Reactor(comptime TSchema: type) type {
 
                 .current_output_buffer = undefined,
                 .current_output_buffer_idx = null,
+
+                .workers = workers,
+                .worker_pool_job_queue = worker_pool_job_queue,
+                .worker_pool_semaphore = worker_pool_semaphore,
             };
+
+            for (workers, 0..) |*w, i| {
+                w.* = Worker(TApp).init(
+                    allocator,
+                    worker_pool_job_queue,
+                    &self.worker_pool_semaphore,
+                    shutdown_state,
+                    waker,
+                    clients,
+                    input_buffer_pool,
+                    output_buffer_pool,
+                );
+                try w.runThread(io_thread_id, i);
+            }
 
             try self.run(address, ready_count);
         }
@@ -223,6 +265,9 @@ pub fn Reactor(comptime TSchema: type) type {
         fn run(self: *Self, address: std.net.Address, ready_reactors_count: *std.atomic.Value(u32)) !void {
             var listener = try Listener.init(address);
             defer listener.deinit();
+            errdefer self.stop() catch |err| {
+                Logger.err("Failed to stop io thread: {}", .{err});
+            };
 
             // polling slot with index self.options.max_clients is reserved for the listening socket
             try listener.register(&self.poller, self.options.max_clients);
@@ -243,23 +288,27 @@ pub fn Reactor(comptime TSchema: type) type {
 
                     if (idx == self.options.max_clients) { // listening socket
                         // listening socket is ready, accept new connections
-                        try listener.drainAccepts(TSchema, self);
+                        try listener.drainAccepts(self);
                         continue;
                     }
 
                     if (idx == self.options.max_clients + 1) { // wakeup fd
                         // either the server shutdown or there are new jobs to process
 
-                        if (self.shutdown_state.load(.acquire) == .immediate) break;
+                        if (self.shutdown_state.load(.acquire) == .immediate) {
+                            // shutdown
+                            try self.stop();
+                            return;
+                        }
 
-                        // handle non blocking jobs
-                        while (self.job_queue.tryPeek()) |job| {
+                        // handle new jobs
+                        while (self.job_queue.tryPop()) |job| {
                             // input buffer will be released in handler right after deserialization or in the first point of failure
 
                             var reader: std.Io.Reader = .fixed(job.data);
                             const headers = deserializeMessageHeaders(&reader) catch |err| {
-                                // invalid message, release the buffer and move on to the next job. No need to send an error response since we can't even be sure if the client sent a valid request or not
-                                _ = self.job_queue.tryPop();
+                                // invalid message, release the buffer and move on to the next job
+                                // no need to send an error response since we can't even be sure if the client sent a valid request or not
                                 self.input_buffer_pool.release(job.buffer_idx);
 
                                 Logger.warn("Failed to deserialize message headers: {}", .{err});
@@ -271,72 +320,83 @@ pub fn Reactor(comptime TSchema: type) type {
 
                             const client = &self.clients[job.client_id.index];
                             if (client.id.gen != job.client_id.gen) {
-                                // job was meant for a previous generation of the client, just release the buffer there is no point in processing it
-                                _ = self.job_queue.tryPop();
+                                // job was meant for a previous generation of the client, just release the buffer as there is no point in processing it
                                 self.input_buffer_pool.release(job.buffer_idx);
 
                                 Logger.info("Client gen mismatch: expected {}, got {}", .{ client.id.gen, job.client_id.gen });
                                 continue;
                             }
 
-                            // acquire a new output buffer
-                            if (self.current_output_buffer_idx == null) {
-                                const buffer_idx = self.output_buffer_pool.acquire() orelse {
-                                    // no output buffers available, can't process any jobs yet. Don't consume anything
-                                    break;
-                                };
+                            const action = call_table[req_header.contract_id][req_header.method_id];
+                            switch (action.executor) {
+                                .io => { // execute the contract method on the reactor thread
+                                    // acquire a new output buffer
+                                    if (self.current_output_buffer_idx == null) {
+                                        const buffer_idx = self.output_buffer_pool.acquire() orelse {
+                                            // no output buffers available, drop the message and release the input buffer
+                                            self.input_buffer_pool.release(job.buffer_idx);
 
-                                self.current_output_buffer_idx = buffer_idx;
-                                self.current_output_buffer = self.output_buffer_pool.buffer(buffer_idx);
+                                            Logger.info("No output buffers available, dropping message", .{});
+                                            continue;
+                                        };
+
+                                        self.current_output_buffer_idx = buffer_idx;
+                                        self.current_output_buffer = self.output_buffer_pool.buffer(buffer_idx);
+                                    }
+
+                                    var writer: std.Io.Writer = .fixed(self.current_output_buffer);
+                                    action.handler(
+                                        ReactorContext{
+                                            .allocator = self.allocator,
+                                            .input_buffer_pool = self.input_buffer_pool,
+                                            .waker = self.waker,
+                                        },
+                                        headers.Request,
+                                        &reader,
+                                        &writer,
+                                        job.buffer_idx,
+                                    ) catch |err| {
+                                        // handlers release the input buffer regardless of success or failure, so we don't need to release it here
+                                        // keep the current output buffer to avoid just re-acquiring it in the next iteration
+
+                                        Logger.warn("Action at {s} failed with error: {}", .{ action.path, err });
+                                        continue;
+                                    };
+
+                                    const response_payload_len = std.mem.readInt(u32, self.current_output_buffer[MessageHeadersByteSize.Response - 4 .. MessageHeadersByteSize.Response], .big);
+                                    const response_data = self.current_output_buffer[0 .. MessageHeadersByteSize.Response + response_payload_len];
+
+                                    // response_data will be freed by the reactor thread after sending
+                                    client.enqueueMessage(OutMessage{
+                                        .offset = 0,
+                                        .data = .{
+                                            .single = .{
+                                                .data = response_data,
+                                                .buffer_idx = self.current_output_buffer_idx.?,
+                                            },
+                                        },
+                                    }) catch {
+                                        // client's response queue is full
+                                        // we can't really do anything about it, so just move on to the next job, input buffer was released in the handler
+                                        // keep the current output buffer to avoid just re-acquiring it in the next iteration
+                                        continue;
+                                    };
+
+                                    // released in reactor thread, set to null here to indicate that we don't have a current buffer anymore
+                                    self.current_output_buffer_idx = null;
+                                },
+                                .worker_pool => { // pass the job over to the worker pool, guaranteed to be a valid request
+                                    self.worker_pool_job_queue.tryPush(job) catch {
+                                        // queue full, drop the message and release the input buffer
+                                        self.input_buffer_pool.release(job.buffer_idx);
+
+                                        Logger.info("Worker pool job queue full, dropping message", .{});
+                                        continue;
+                                    };
+
+                                    self.worker_pool_semaphore.release();
+                                },
                             }
-
-                            const handler = call_table[req_header.contract_id][req_header.method_id];
-
-                            var writer: std.Io.Writer = .fixed(self.current_output_buffer);
-                            handler(
-                                ReactorContext{
-                                    .allocator = self.allocator,
-                                    .input_buffer_pool = self.input_buffer_pool,
-                                    .initiated_by_connection_id = job.client_id.index,
-                                    .client_connections = self.clients[0..self.connected],
-                                    .connected_clients = &.{},
-                                    .waker = self.waker,
-                                },
-                                headers.Request,
-                                &reader,
-                                &writer,
-                                job.buffer_idx,
-                            ) catch |err| {
-                                // handlers release the input buffer regardless of success or failure, so we don't need to release it here, just pop the job to consume it
-                                // keep the current output buffer avoid just re-acquiring it in the next iteration
-                                _ = self.job_queue.tryPop();
-
-                                Logger.warn("Handler failed with error: {}", .{err});
-                                continue;
-                            };
-
-                            const response_payload_len = std.mem.readInt(u32, self.current_output_buffer[MessageHeadersByteSize.Response - 4 .. MessageHeadersByteSize.Response], .big);
-                            const response_data = self.current_output_buffer[0 .. MessageHeadersByteSize.Response + response_payload_len];
-
-                            // response_data will be freed by the reactor thread after sending
-                            client.enqueueMessage(OutMessage{
-                                .offset = 0,
-                                .data = .{
-                                    .single = .{
-                                        .data = response_data,
-                                        .buffer_idx = self.current_output_buffer_idx.?,
-                                    },
-                                },
-                            }) catch {
-                                // client's response queue is full
-                                // we can't really do anything about it, so just consume the job, input buffer was released in the handler
-                                // keep the current output buffer avoid just re-acquiring it in the next iteration
-                                _ = self.job_queue.tryPop();
-                                continue;
-                            };
-
-                            _ = self.job_queue.tryPop(); // consume the job after successfully enqueuing the message
-                            self.current_output_buffer_idx = null; // released in reactor thread, set to null here to indicate that we don't have a current buffer anymore
                         }
 
                         // nothing left to send, clear the eventfd
@@ -413,6 +473,7 @@ pub fn Reactor(comptime TSchema: type) type {
                 }
             }
 
+            Logger.err("Exited main reactor loop without going through proper shutdown path", .{});
             try self.stop();
         }
 
@@ -428,11 +489,8 @@ pub fn Reactor(comptime TSchema: type) type {
 
             try self.poller.add(socket, client_id.index, true, false);
 
-            const out_message_buf = try self.allocator.alloc(OutMessage, self.options.client_out_message_queue_size);
-            errdefer self.allocator.free(out_message_buf);
-
-            const out_message_queue = try self.allocator.create(Queue(OutMessage));
-            out_message_queue.* = try Queue(OutMessage).init(out_message_buf);
+            const out_message_queue = try self.allocator.create(SPSCQueue(OutMessage));
+            out_message_queue.* = try SPSCQueue(OutMessage).init(self.allocator, self.options.client_out_message_queue_size);
             errdefer self.allocator.destroy(out_message_queue);
 
             const client = ClientConnection.init(

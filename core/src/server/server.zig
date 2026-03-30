@@ -3,8 +3,6 @@ const posix = std.posix;
 const net = std.net;
 
 const ServerOptions = @import("server_options.zig").ServerOptions;
-const HandlerFn = @import("handler_fn/handler_fn.zig").HandlerFn;
-const createHandlerFn = @import("handler_fn/create_handler_fn.zig").createHandlerFn;
 
 const Reactor = @import("reactor.zig").Reactor;
 const ReactorHandle = @import("reactor.zig").ReactorHandle;
@@ -45,9 +43,9 @@ const ServerInterface = struct {
         return self;
     }
 
-    pub fn run(self: *ServerInterface, comptime TSchema: type, address: net.Address) !void {
+    pub fn run(self: *ServerInterface, comptime TApp: type, address: net.Address) !void {
         for (self.reactors, 0..) |*reactor, idx| {
-            const handle = try Reactor(TSchema).init(
+            const handle = try Reactor(TApp).init(
                 self.allocator,
                 address,
                 &self.shutdown_state,
@@ -92,7 +90,7 @@ const ServerInterface = struct {
     }
 };
 
-pub fn Server(comptime TSchema: type) type {
+pub fn Server(comptime TApp: type) type {
     return struct {
         const Self = @This();
 
@@ -107,7 +105,7 @@ pub fn Server(comptime TSchema: type) type {
         }
 
         pub inline fn run(self: *const Self, address: net.Address) !void {
-            try self.interface.run(TSchema, address);
+            try self.interface.run(TApp, address);
         }
 
         pub inline fn join(self: *const Self) void {
