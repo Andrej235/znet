@@ -38,6 +38,8 @@ pub const Http1Parser = struct {
                 return error.InvalidHeaders;
             }
 
+            self.parse_offset += line.len;
+
             switch (self.state) {
                 .request_line => {
                     if (line.len == 2) {
@@ -67,7 +69,23 @@ pub const Http1Parser = struct {
                     }
                 },
 
-                .headers => {},
+                .headers => {
+                    if (line.len == 2) {
+                        // headers end with \r\n\r\n
+                        self.state = .body;
+                        continue;
+                    }
+
+                    const colon_index = std.mem.indexOfScalar(u8, line, ':') orelse {
+                        Logger.err("Invalid HTTP header line (no colon found): {any}", .{line});
+                        return error.InvalidHeaders;
+                    };
+
+                    const header_name = line[0..colon_index];
+                    const header_value = std.mem.trim(u8, line[colon_index + 1 .. line.len - 2], &std.ascii.whitespace);
+
+                    Logger.debug("Header: {s}: {s}", .{ header_name, header_value });
+                },
 
                 .body => {},
             }
