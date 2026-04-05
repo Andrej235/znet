@@ -1,4 +1,5 @@
-const ConnectionReader = @import("../client_connection.zig").ConnectionReader;
+const ConnectionReader = @import("../connection_reader.zig").ConnectionReader;
+const Request = @import("../requests/request.zig").Request;
 
 const Logger = @import("../../logger/logger.zig").Logger.scoped(.tls_parser);
 
@@ -7,7 +8,7 @@ pub const TlsParser = struct {
         return .{};
     }
 
-    pub fn parse(self: *TlsParser, conn: *ConnectionReader) !?ConnectionReader.MessageReadResult {
+    pub fn parse(self: *TlsParser, conn: *ConnectionReader) !?Request {
         _ = self;
         _ = conn;
         Logger.err("TLS not implemented", .{});

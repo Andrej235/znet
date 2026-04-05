@@ -1,6 +1,7 @@
 const std = @import("std");
-const ConnectionReader = @import("../client_connection.zig").ConnectionReader;
+const ConnectionReader = @import("../connection_reader.zig").ConnectionReader;
 
+const Request = @import("../requests/request.zig").Request;
 const Method = @import("../requests/http.zig").HttpMethod;
 const Version = @import("../requests/http.zig").HttpVersion;
 
@@ -27,7 +28,7 @@ pub const Http1Parser = struct {
         };
     }
 
-    pub fn parse(self: *Http1Parser, conn: *ConnectionReader) !?ConnectionReader.MessageReadResult {
+    pub fn parse(self: *Http1Parser, conn: *ConnectionReader) !?Request {
         const buf = conn.current_buffer[self.parse_offset..conn.buffered_bytes];
         var reader = std.io.Reader.fixed(buf);
 
@@ -91,6 +92,12 @@ pub const Http1Parser = struct {
             }
         }
 
-        return error.Unimplemented;
+        return Request{
+            .http = .{
+                .method = self.method.?,
+                .version = self.version.?,
+                .path = self.path.?,
+            },
+        };
     }
 };

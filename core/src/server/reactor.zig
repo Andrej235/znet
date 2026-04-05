@@ -305,6 +305,9 @@ pub fn Reactor(comptime TApp: type) type {
                         while (self.job_queue.tryPop()) |job| {
                             // input buffer will be released in handler right after deserialization or in the first point of failure
 
+                            if (true)
+                                continue;
+
                             var reader: std.Io.Reader = .fixed(job.data);
                             const headers = deserializeMessageHeaders(&reader) catch |err| {
                                 // invalid message, release the buffer and move on to the next job

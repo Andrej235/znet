@@ -88,7 +88,7 @@ pub fn Worker(comptime TApp: type) type {
         }
 
         fn run(self: *Self) !void {
-            while (true) {
+            while (false) {
                 // input buffer released in handler right after deserialization
 
                 self.semaphore.acquire();
