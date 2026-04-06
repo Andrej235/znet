@@ -305,6 +305,12 @@ pub fn Reactor(comptime TApp: type) type {
                         while (self.job_queue.tryPop()) |job| {
                             // input buffer will be released in handler right after deserialization or in the first point of failure
 
+                            switch (job.request) {
+                                .http => |http_request| {
+                                    Logger.debug("Received HTTP request: {} {s}", .{ http_request.method, http_request.path });
+                                },
+                            }
+
                             if (true)
                                 continue;
 

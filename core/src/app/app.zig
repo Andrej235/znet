@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const DIContainer = @import("../dependency_injection/container.zig").Container;
+const Router = @import("router.zig").Router;
 
 const validateScope = @import("scope/scope.zig").validateScope;
 
@@ -68,6 +69,10 @@ pub fn App(comptime scopes: anytype, comptime options: AppOptions) type {
 
                 return runtime_scopes;
             }
+        }
+
+        pub fn compileRouter(allocator: std.mem.Allocator) Router {
+            return Router.fromScopes(comptime compileServerCallTable(), allocator);
         }
 
         pub fn actionToId(comptime action_fn: anytype) ActionId {

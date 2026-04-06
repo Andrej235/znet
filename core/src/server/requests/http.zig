@@ -6,16 +6,16 @@ pub const HttpRequest = struct {
     version: HttpVersion,
 };
 
-pub const HttpMethod = enum {
-    GET,
-    POST,
-    PUT,
-    DELETE,
-    HEAD,
-    OPTIONS,
-    CONNECT,
-    TRACE,
-    PATCH,
+pub const HttpMethod = enum(u8) {
+    GET = 0,
+    POST = 1,
+    PUT = 2,
+    DELETE = 3,
+    HEAD = 4,
+    OPTIONS = 5,
+    CONNECT = 6,
+    TRACE = 7,
+    PATCH = 8,
 
     pub fn fromString(s: []const u8) ?HttpMethod {
         if (std.mem.eql(u8, s, "GET")) return .GET;
@@ -29,6 +29,8 @@ pub const HttpMethod = enum {
         if (std.mem.eql(u8, s, "PATCH")) return .PATCH;
         return null;
     }
+
+    pub const count = @typeInfo(@This()).@"enum".fields.len;
 };
 
 pub const HttpVersion = enum {

@@ -163,7 +163,7 @@ fn getParamsInfo(comptime TFn: type) struct {
                             TPayload = @field(T, "Type");
                             payload_field_name = field_name;
                         },
-                        .path => @compileError("Not implemented"),
+                        .path => {},
                         .query => @compileError("Not implemented"),
                     }
                 }
