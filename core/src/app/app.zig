@@ -71,8 +71,8 @@ pub fn App(comptime scopes: anytype, comptime options: AppOptions) type {
             }
         }
 
-        pub fn compileRouter(allocator: std.mem.Allocator) Router {
-            return Router.fromScopes(comptime compileServerCallTable(), allocator);
+        pub fn compileRouter(allocator: std.mem.Allocator) !Router {
+            return try Router.fromScopes(comptime compileServerCallTable(), allocator);
         }
 
         pub fn actionToId(comptime action_fn: anytype) ActionId {
