@@ -31,3 +31,4 @@ pub const DIC = @import("dependency_injection/container.zig").Container;
 pub const DIService = @import("dependency_injection/service.zig").Service;
 
 pub const Router = @import("app/router.zig").Router;
+pub const HttpMethod = @import("server/requests/http.zig").HttpMethod;

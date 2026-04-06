@@ -38,7 +38,11 @@ const App = z.App(
 
 pub fn main() !void {
     const router = try App.compileRouter(std.heap.page_allocator);
-    router.print();
+    // router.print();
+
+    lookup(&router, "api/users/all", .GET);
+    lookup(&router, "api/users/asdasdasdasd", .GET);
+    lookup(&router, "api/posts", .POST);
 
     const server = try z.Server(App).init(std.heap.page_allocator, .{});
 
@@ -54,4 +58,12 @@ pub fn hello() bool {
 pub fn hello2(_: z.Path(struct { id: u8 })) bool {
     z.Logger.info("Hello world with id!", .{});
     return true;
+}
+
+fn lookup(router: *const z.Router, path: []const u8, method: z.HttpMethod) void {
+    if (router.lookup(path, method)) |match| {
+        z.Logger.info("Found match for path: {s}", .{match.action.path});
+    } else {
+        z.Logger.err("No match for path: {s}", .{path});
+    }
 }
