@@ -65,7 +65,7 @@ pub const Http1Parser = struct {
                                 return error.UnsupportedVersion;
                             };
 
-                            Logger.debug("{} {s} ({})", .{ self.method.?, self.path.?, self.version.? });
+                            // Logger.debug("{} {s} ({})", .{ self.method.?, self.path.?, self.version.? });
                         }
                     }
                 },
@@ -85,7 +85,9 @@ pub const Http1Parser = struct {
                     const header_name = line[0..colon_index];
                     const header_value = std.mem.trim(u8, line[colon_index + 1 .. line.len - 2], &std.ascii.whitespace);
 
-                    Logger.debug("Header: {s}: {s}", .{ header_name, header_value });
+                    // Logger.debug("Header: {s}: {s}", .{ header_name, header_value });
+                    _ = header_name;
+                    _ = header_value;
                 },
 
                 .body => {},

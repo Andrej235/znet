@@ -2,27 +2,24 @@ const std = @import("std");
 const posix = std.posix;
 const builtin = @import("builtin");
 
-const SPSCQueue = @import("../queues/spsc_queue.zig").Queue;
-const SPMCQueue = @import("../queues/spmc_queue.zig").Queue;
-
-const Worker = @import("worker.zig").Worker;
-
-const ClientConnection = @import("client_connection.zig").ClientConnection;
-const BufferPool = @import("../utils/buffer_pool.zig").BufferPool;
-const Job = @import("job.zig").Job;
-const ConnectionId = @import("connection_id.zig").ConnectionId;
-const ServerOptions = @import("server_options.zig").ServerOptions;
-const OutMessage = @import("out_message.zig").OutMessage;
+const Router = @import("../app/router.zig").Router;
+const RuntimeScope = @import("../app/scope/runtime_scope.zig").RuntimeScope;
+const Listener = @import("../listener/listener.zig");
 const deserializeMessageHeaders = @import("../message_headers/deserialize_message_headers.zig").deserializeMessageHeaders;
 const MessageHeadersByteSize = @import("../message_headers/message_headers.zig").HeadersByteSize;
-const ShutdownState = @import("server.zig").ShutdownState;
-
-const RuntimeScope = @import("../app/scope/runtime_scope.zig").RuntimeScope;
-
-const Listener = @import("../listener/listener.zig");
-const Waker = @import("../waker/waker.zig");
 const Poller = @import("../poller/poller.zig");
+const SPMCQueue = @import("../queues/spmc_queue.zig").Queue;
+const SPSCQueue = @import("../queues/spsc_queue.zig").Queue;
 const Semaphore = @import("../semaphore/semaphore.zig").Semaphore;
+const BufferPool = @import("../utils/buffer_pool.zig").BufferPool;
+const Waker = @import("../waker/waker.zig");
+const ClientConnection = @import("client_connection.zig").ClientConnection;
+const ConnectionId = @import("connection_id.zig").ConnectionId;
+const Job = @import("job.zig").Job;
+const OutMessage = @import("out_message.zig").OutMessage;
+const ServerOptions = @import("server_options.zig").ServerOptions;
+const ShutdownState = @import("server.zig").ShutdownState;
+const Worker = @import("worker.zig").Worker;
 
 const Logger = @import("../logger/logger.zig").Logger.scoped(.reactor);
 
@@ -45,6 +42,7 @@ pub fn Reactor(comptime TApp: type) type {
 
         options: ServerOptions,
         allocator: std.mem.Allocator,
+        router: *const Router,
 
         // number of connected clients
         connected: usize,
@@ -84,6 +82,7 @@ pub fn Reactor(comptime TApp: type) type {
             io_thread_id: usize,
             options: ServerOptions,
             ready_count: *std.atomic.Value(u32),
+            router: *const Router,
         ) !ReactorHandle {
             const waker = try Waker.init();
 
@@ -95,6 +94,7 @@ pub fn Reactor(comptime TApp: type) type {
                 io_thread_id,
                 options,
                 ready_count,
+                router,
             });
 
             var name_buff: [8]u8 = undefined;
@@ -152,6 +152,7 @@ pub fn Reactor(comptime TApp: type) type {
             io_thread_id: usize,
             options: ServerOptions,
             ready_count: *std.atomic.Value(u32),
+            router: *const Router,
         ) !void {
             // pin thread to a specific cpu core to improve cache locality and reduce latency
             // this needs to be done before any allocations to ensure memory is allocated in the local NUMA node (first touch policy)
@@ -243,6 +244,8 @@ pub fn Reactor(comptime TApp: type) type {
                 .workers = workers,
                 .worker_pool_job_queue = worker_pool_job_queue,
                 .worker_pool_semaphore = worker_pool_semaphore,
+
+                .router = router,
             };
 
             for (workers, 0..) |*w, i| {
@@ -308,6 +311,13 @@ pub fn Reactor(comptime TApp: type) type {
                             switch (job.request) {
                                 .http => |http_request| {
                                     Logger.debug("Received HTTP request: {} {s}", .{ http_request.method, http_request.path });
+
+                                    const match = self.router.lookup(http_request.path, http_request.method);
+                                    if (match) |m| {
+                                        Logger.debug("Found match for path: {s}", .{m.action.path});
+                                    } else {
+                                        Logger.debug("No match for path: {s}", .{http_request.path});
+                                    }
                                 },
                             }
 

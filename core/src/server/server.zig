@@ -4,6 +4,7 @@ const net = std.net;
 
 const ServerOptions = @import("server_options.zig").ServerOptions;
 
+const Router = @import("../app/router.zig").Router;
 const Reactor = @import("reactor.zig").Reactor;
 const ReactorHandle = @import("reactor.zig").ReactorHandle;
 
@@ -24,10 +25,11 @@ const ServerInterface = struct {
 
     reactors: []ReactorHandle,
     shutdown_state: std.atomic.Value(ShutdownState),
+    router: *const Router,
 
     reactors_ready_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
-    pub fn init(allocator: std.mem.Allocator, comptime options: ServerOptions) !*ServerInterface {
+    pub fn init(allocator: std.mem.Allocator, router: *const Router, comptime options: ServerOptions) !*ServerInterface {
         const reactors = try allocator.alloc(ReactorHandle, options.reactor_thread_count);
 
         const self = try allocator.create(ServerInterface);
@@ -38,6 +40,7 @@ const ServerInterface = struct {
             .reactors = reactors,
 
             .shutdown_state = std.atomic.Value(ShutdownState).init(.running),
+            .router = router,
         };
 
         return self;
@@ -52,6 +55,7 @@ const ServerInterface = struct {
                 idx,
                 self.options,
                 &self.reactors_ready_count,
+                self.router,
             );
 
             reactor.* = handle;
@@ -97,7 +101,10 @@ pub fn Server(comptime TApp: type) type {
         interface: *ServerInterface,
 
         pub fn init(allocator: std.mem.Allocator, comptime options: ServerOptions) !Self {
-            const server_interface = try ServerInterface.init(allocator, options);
+            const router = try allocator.create(Router);
+            router.* = try TApp.compileRouter(allocator);
+
+            const server_interface = try ServerInterface.init(allocator, router, options);
 
             return Self{
                 .interface = server_interface,

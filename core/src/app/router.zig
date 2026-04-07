@@ -151,10 +151,23 @@ fn hasActions(node: *const Router.Node) bool {
 }
 
 fn lookupNode(node: *const Router.Node, path: []const u8, method: HttpMethod) ?Router.Match {
-    var segments = std.mem.splitScalar(u8, path, '/');
+    if (path.len == 0 or (path.len == 1 and path[0] == '/')) {
+        const method_idx = @intFromEnum(method);
+        if (node.actions[method_idx]) |action| {
+            return Router.Match{
+                .action = action,
+                .params = {}, // todo: implement params extraction
+            };
+        }
+        return null;
+    }
+
+    var segments = std.mem.splitScalar(u8, if (path[0] == '/') path[1..] else path, '/');
     var current = node;
 
+    var i: usize = 0;
     while (segments.next()) |segment| {
+        i += segment.len + 1;
         var found = false;
 
         for (current.static_children.items) |*child| {
