@@ -29,8 +29,10 @@ pub const Router = struct {
 
         for (scopes) |scope| {
             for (scope) |action| {
-                var segments = std.mem.splitScalar(u8, action.path, '/');
                 var current = &root;
+
+                const normalized_path = normalizePath(action.path);
+                var segments = std.mem.splitScalar(u8, normalized_path, '/');
 
                 while (segments.next()) |segment| {
                     var found = false;
@@ -151,7 +153,9 @@ fn hasActions(node: *const Router.Node) bool {
 }
 
 fn lookupNode(node: *const Router.Node, path: []const u8, method: HttpMethod) ?Router.Match {
-    if (path.len == 0 or (path.len == 1 and path[0] == '/')) {
+    const normalized_path = normalizePath(path);
+
+    if (normalized_path.len == 0) {
         const method_idx = @intFromEnum(method);
         if (node.actions[method_idx]) |action| {
             return Router.Match{
@@ -162,12 +166,15 @@ fn lookupNode(node: *const Router.Node, path: []const u8, method: HttpMethod) ?R
         return null;
     }
 
-    var segments = std.mem.splitScalar(u8, if (path[0] == '/') path[1..] else path, '/');
+    var segments = std.mem.splitScalar(u8, normalized_path, '/');
+    const first = segments.first();
+    if (!std.mem.eql(u8, node.segment, first)) {
+        return null;
+    }
+
     var current = node;
 
-    var i: usize = 0;
     while (segments.next()) |segment| {
-        i += segment.len + 1;
         var found = false;
 
         for (current.static_children.items) |*child| {
@@ -199,4 +206,8 @@ fn lookupNode(node: *const Router.Node, path: []const u8, method: HttpMethod) ?R
     }
 
     return null;
+}
+
+fn normalizePath(path: []const u8) []const u8 {
+    return std.mem.trim(u8, path, "/");
 }

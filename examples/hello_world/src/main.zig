@@ -3,6 +3,7 @@ const z = @import("znet");
 
 const App = z.App(
     .{
+        z.Scope(null, .{z.Action(null, hello, .{})}, .{}),
         z.Scope(
             .api,
             .{
@@ -38,11 +39,12 @@ const App = z.App(
 
 pub fn main() !void {
     const router = try App.compileRouter(std.heap.page_allocator);
-    router.print();
+    // router.print();
 
     lookup(&router, "/api/users/all", .GET);
-    lookup(&router, "/", .GET);
+    lookup(&router, "///////////", .GET);
     lookup(&router, "api/users/all", .GET);
+    lookup(&router, "/api/users/all///", .GET);
     lookup(&router, "api/users/asdasdasdasd", .GET);
     lookup(&router, "api/posts", .POST);
 
