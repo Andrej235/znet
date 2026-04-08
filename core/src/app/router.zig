@@ -14,7 +14,42 @@ pub const Router = struct {
 
     pub const Match = struct {
         action: RuntimeAction,
-        params: void, // todo: implement params extraction
+        params: ParamIterator,
+    };
+
+    const ParamIterator = struct {
+        request_path: []const u8,
+        request_template_path: []const u8,
+
+        request_path_index: usize,
+        request_template_path_index: usize,
+
+        pub fn next(self: *ParamIterator) ?struct { name: []const u8, value: []const u8 } {
+            while (true) {
+                self.request_template_path_index = (std.mem.indexOfScalarPos(u8, self.request_template_path, self.request_template_path_index, '/') orelse return null) + 1;
+                self.request_path_index = (std.mem.indexOfScalarPos(u8, self.request_path, self.request_path_index, '/') orelse return null) + 1;
+
+
+                if (self.request_template_path[self.request_template_path_index] != '{') // not a param segment
+                    continue;
+
+                const request_template_path_end_index = std.mem.indexOfScalarPos(u8, self.request_template_path, self.request_template_path_index, '/') orelse self.request_template_path.len;
+                const request_path_end_index = std.mem.indexOfScalarPos(u8, self.request_path, self.request_path_index, '/') orelse self.request_path.len;
+
+                const param_name = self.request_template_path[self.request_template_path_index + 1 .. request_template_path_end_index - 1]; // remove { and }
+                const param_value = self.request_path[self.request_path_index..request_path_end_index];
+
+                self.request_template_path_index = request_template_path_end_index;
+                self.request_path_index = request_path_end_index;
+
+                return .{
+                    .name = param_name,
+                    .value = param_value,
+                };
+            }
+
+            return null;
+        }
     };
 
     nodes: []const Node,
@@ -156,11 +191,17 @@ fn lookupNode(node: *const Router.Node, path: []const u8, method: HttpMethod) ?R
     const normalized_path = normalizePath(path);
 
     if (normalized_path.len == 0) {
+        // root path
         const method_idx = @intFromEnum(method);
         if (node.actions[method_idx]) |action| {
             return Router.Match{
                 .action = action,
-                .params = {}, // todo: implement params extraction
+                .params = .{
+                    .request_path = "",
+                    .request_template_path = "",
+                    .request_path_index = 0,
+                    .request_template_path_index = 0,
+                },
             };
         }
         return null;
@@ -201,7 +242,12 @@ fn lookupNode(node: *const Router.Node, path: []const u8, method: HttpMethod) ?R
     if (current.actions[method_idx]) |action| {
         return Router.Match{
             .action = action,
-            .params = {}, // todo: implement params extraction
+            .params = .{
+                .request_path = normalized_path,
+                .request_template_path = normalizePath(action.path),
+                .request_path_index = 0,
+                .request_template_path_index = 0,
+            },
         };
     }
 

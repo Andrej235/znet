@@ -183,6 +183,7 @@ fn validateActionParams(comptime handler_fn: anytype, comptime protocol: []const
             var i = 0;
             var segment_start = -1;
 
+            @setEvalBranchQuota(999999999); // todo: find a way to avoid this
             while (i < absolute_path.len) : (i += 1) {
                 const c = absolute_path[i];
 

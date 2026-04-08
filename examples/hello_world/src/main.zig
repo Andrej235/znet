@@ -3,7 +3,14 @@ const z = @import("znet");
 
 const App = z.App(
     .{
-        z.Scope(null, .{z.Action(null, hello, .{})}, .{}),
+        z.Scope(
+            null,
+            .{
+                z.Action(null, hello, .{}),
+                z.Action(.@"deeply-nested/{id}/{language}/post/{action}/edit", deeplyNestedPath, .{}),
+            },
+            .{},
+        ),
         z.Scope(
             .api,
             .{
@@ -41,12 +48,7 @@ pub fn main() !void {
     const router = try App.compileRouter(std.heap.page_allocator);
     // router.print();
 
-    lookup(&router, "/api/users/all", .GET);
-    lookup(&router, "///////////", .GET);
-    lookup(&router, "api/users/all", .GET);
-    lookup(&router, "/api/users/all///", .GET);
-    lookup(&router, "api/users/asdasdasdasd", .GET);
-    lookup(&router, "api/posts", .POST);
+    lookup(&router, "/deeply-nested/123/english/post/some-action/edit/", .GET);
 
     const server = try z.Server(App).init(std.heap.page_allocator, .{});
 
@@ -64,9 +66,19 @@ pub fn hello2(_: z.Path(struct { id: u8 })) bool {
     return true;
 }
 
+pub fn deeplyNestedPath(_: z.Path(struct { id: u8, language: []const u8, action: []const u8 })) bool {
+    z.Logger.info("Hello from deeply nested path!", .{});
+    return true;
+}
+
 fn lookup(router: *const z.Router, path: []const u8, method: z.HttpMethod) void {
     if (router.lookup(path, method)) |match| {
         z.Logger.info("Found match for path: {s}", .{match.action.path});
+        var params = match.params;
+
+        while (params.next()) |param| {
+            z.Logger.info("Param: {s} = {s}", .{ param.name, param.value });
+        }
     } else {
         z.Logger.err("No match for path: {s}", .{path});
     }
