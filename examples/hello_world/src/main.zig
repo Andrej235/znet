@@ -41,32 +41,34 @@ const App = z.App(
             .{},
         ),
     },
-    .{},
+    .{
+        .default_action_executor = .io,
+    },
 );
 
 pub fn main() !void {
-    const router = try App.compileRouter(std.heap.page_allocator);
+    // const router = try App.compileRouter(std.heap.page_allocator);
     // router.print();
 
-    lookup(&router, "/deeply-nested/123/english/post/some-action/edit/", .GET);
+    // lookup(&router, "/deeply-nested/123/english/post/some-action/edit/", .GET);
 
     const server = try z.Server(App).init(std.heap.page_allocator, .{});
-
+    
     try server.run(try std.net.Address.parseIp("127.0.0.1", 5000));
     server.join();
 }
 
 pub fn hello() bool {
-    z.Logger.info("Hello world!", .{});
+    z.Logger.scoped(.action).info("Hello world!", .{});
     return true;
 }
 
-pub fn hello2(_: z.Path(struct { id: u8 })) bool {
-    z.Logger.info("Hello world with id!", .{});
+pub fn hello2(path: z.Path(struct { id: []const u8 })) bool {
+    z.Logger.scoped(.action).info("Hello id {s}!", .{path.value.id});
     return true;
 }
 
-pub fn deeplyNestedPath(_: z.Path(struct { id: u8, language: []const u8, action: []const u8 })) bool {
+pub fn deeplyNestedPath(_: z.Path(struct { id: []const u8, language: []const u8, action: []const u8 })) bool {
     z.Logger.info("Hello from deeply nested path!", .{});
     return true;
 }

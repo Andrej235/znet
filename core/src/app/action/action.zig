@@ -30,7 +30,7 @@ pub fn Action(comptime name: ActionName, comptime handler_fn: anytype, comptime 
 
             return RuntimeAction{
                 .path = absolute_path,
-                .handler = createActionHandler(handler_fn, scope_options.di),
+                .handler = createActionHandler(handler_fn, absolute_path, scope_options.di),
                 .executor = options.executor orelse scope_options.default_action_executor,
                 .http_method = options.http_method orelse .GET,
             };

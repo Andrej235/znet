@@ -9,35 +9,34 @@ const Deserializer = @import("../../serialization/binary/deserializer.zig").Dese
 const Serializer = @import("../../serialization/binary/serializer.zig").Serializer;
 const CountingSerializer = @import("../../serialization/binary/counting_serializer.zig").Serializer;
 const ReactorContext = @import("../../server/reactor.zig").ReactorContext;
+const BufferPool = @import("../../utils/buffer_pool.zig").BufferPool;
+const Waker = @import("../../waker/waker.zig");
+const ParamIterator = @import("../router.zig").Router.ParamIterator;
 
 const Logger = @import("../../logger/logger.zig").Logger.scoped(.action_handler);
 
 const DIContainer = @import("../../dependency_injection/container.zig").Container;
 
-pub const ActionHandler = *const fn (
-    context: ReactorContext,
-    request_headers: RequestHeaders,
+pub const RequestContext = struct {
+    allocator: std.mem.Allocator,
+    input_buffer_pool: *BufferPool,
+    input_buffer_idx: u32,
     input_reader: *std.Io.Reader,
     output_writer: *std.Io.Writer,
-    input_buffer_idx: u32,
-) anyerror!void;
+    waker: Waker,
+    param_iterator: ParamIterator,
+};
 
-pub fn createActionHandler(comptime callback: anytype, comptime di: ?DIContainer) ActionHandler {
+/// returns the length of the serialized output
+pub const ActionHandler = *const fn (context: RequestContext) anyerror!usize;
+
+pub fn createActionHandler(comptime callback: anytype, comptime path: []const u8, comptime di: ?DIContainer) ActionHandler {
     const TFn = @TypeOf(callback);
     const fn_info = @typeInfo(TFn);
     if (fn_info != .@"fn") @compileError("Expected function type");
 
     return struct {
-        fn handler(
-            context: ReactorContext,
-            request_headers: RequestHeaders,
-            input_reader: *std.Io.Reader,
-            output_writer: *std.Io.Writer,
-            input_buffer_idx: u32,
-        ) anyerror!void {
-            //Logger.info("handler start", .{});
-            //defer Logger.info("handler end", .{});
-
+        fn handler(context: RequestContext) anyerror!usize {
             const params_info = getParamsInfo(TFn);
             const param_fields = params_info.fields;
 
@@ -89,59 +88,93 @@ pub fn createActionHandler(comptime callback: anytype, comptime di: ?DIContainer
                 }
             }
 
-            //Logger.info("populated scope", .{});
-
             const TPayload: ?type = params_info.TBody;
             const payload_field_name = params_info.body_field_name;
 
             var deserializer = Deserializer.init(context.allocator);
-            const payload: if (TPayload) |T| T else void = if (TPayload) |T| deserializer.deserialize(input_reader, T) catch |err| {
-                context.input_buffer_pool.release(input_buffer_idx);
+            const payload: if (TPayload) |T| T else void = if (TPayload) |T| deserializer.deserialize(context.input_reader, T) catch |err| {
+                context.input_buffer_pool.release(context.input_buffer_idx);
                 return err;
             } else {};
-            context.input_buffer_pool.release(input_buffer_idx);
-
-            //Logger.info("deserialized payload", .{});
+            context.input_buffer_pool.release(context.input_buffer_idx);
 
             if (payload_field_name) |name| {
                 @field(params, name) = .{ .value = payload };
             }
 
-            const output = @call(.always_inline, callback, params);
-            //Logger.info("completed action", .{});
+            const sorted_path_param_fields: []const std.builtin.Type.StructField = comptime blk: {
+                if (params_info.TPath == null) {
+                    break :blk &[_]std.builtin.Type.StructField{};
+                }
 
-            try serializeMessageHeaders(
-                output_writer,
-                .{
-                    .Response = .{
-                        .version = request_headers.version,
-                        .msg_type = .Response,
-                        .flags = 0,
-                        .request_id = request_headers.request_id,
-                        .payload_len = try CountingSerializer.serialize(fn_info.@"fn".return_type.?, output),
-                    },
-                },
-            );
-            try Serializer.serialize(fn_info.@"fn".return_type.?, output_writer, output);
-            //Logger.info("serialized output", .{});
+                const path_param_fields = @typeInfo(params_info.TPath.?).@"struct".fields;
+                var i = 0;
+                var sorted: [path_param_fields.len]std.builtin.Type.StructField = undefined;
+
+                var path_segments = std.mem.splitScalar(u8, path, '/');
+                while (path_segments.next()) |segment| {
+                    if (segment.len == 0 or segment[0] != '{' or segment[segment.len - 1] != '}') continue;
+
+                    const param_name = segment[1 .. segment.len - 1];
+                    for (path_param_fields) |field| {
+                        if (std.mem.eql(u8, field.name, param_name)) {
+                            sorted[i] = field;
+                            i += 1;
+                            break;
+                        }
+                    }
+                }
+
+                break :blk &sorted;
+            };
+
+            if (params_info.path_field_name) |path_field_name| {
+                var path_param: params_info.TPath.? = undefined;
+
+                inline for (sorted_path_param_fields) |field| {
+                    var it = context.param_iterator;
+                    const param = it.next() orelse {
+                        Logger.err("Expected path parameter '{s}' not found in request", .{field.name});
+                        return error.InvalidPathParameter;
+                    };
+
+                    @field(path_param, field.name) = param.value;
+                }
+
+                @field(params, path_field_name) = .{ .value = path_param };
+            }
+
+            const output = @call(.always_inline, callback, params);
+
+            try Serializer.serialize(fn_info.@"fn".return_type.?, context.output_writer, output);
 
             if (TPayload) |_| { // payload MUST be destroyed AFTER output serialization is complete in case pointers from payload are used in output
                 try deserializer.destroy(payload);
             }
+
+            return 0; // todo: implement
         }
     }.handler;
 }
 
 fn getParamsInfo(comptime TFn: type) struct {
     fields: []const std.builtin.Type.StructField,
+
     TBody: ?type,
     body_field_name: ?[]const u8,
+
+    TPath: ?type,
+    path_field_name: ?[]const u8,
 } {
     comptime {
         const fn_info = @typeInfo(TFn).@"fn";
         var param_fields: [fn_info.params.len]std.builtin.Type.StructField = undefined;
+
         var TPayload: ?type = null;
         var payload_field_name: ?[]const u8 = null;
+
+        var TPath: ?type = null;
+        var path_field_name: ?[]const u8 = null;
 
         for (fn_info.params, 0..) |param, idx| {
             if (param.type) |T| {
@@ -163,7 +196,10 @@ fn getParamsInfo(comptime TFn: type) struct {
                             TPayload = @field(T, "Type");
                             payload_field_name = field_name;
                         },
-                        .path => {},
+                        .path => {
+                            TPath = @field(T, "Type");
+                            path_field_name = field_name;
+                        },
                         .query => @compileError("Not implemented"),
                     }
                 }
@@ -172,8 +208,12 @@ fn getParamsInfo(comptime TFn: type) struct {
 
         return .{
             .fields = param_fields[0..fn_info.params.len],
+
             .TBody = TPayload,
             .body_field_name = payload_field_name,
+
+            .TPath = TPath,
+            .path_field_name = path_field_name,
         };
     }
 }

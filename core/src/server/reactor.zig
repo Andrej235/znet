@@ -308,6 +308,15 @@ pub fn Reactor(comptime TApp: type) type {
                         while (self.job_queue.tryPop()) |job| {
                             // input buffer will be released in handler right after deserialization or in the first point of failure
 
+                            const client = &self.clients[job.client_id.index];
+                            if (client.id.gen != job.client_id.gen) {
+                                // job was meant for a previous generation of the client, just release the buffer as there is no point in processing it
+                                self.input_buffer_pool.release(job.buffer_idx);
+
+                                Logger.info("Client gen mismatch: expected {}, got {}", .{ client.id.gen, job.client_id.gen });
+                                continue;
+                            }
+
                             switch (job.request) {
                                 .http => |http_request| {
                                     Logger.debug("Received HTTP request: {} {s}", .{ http_request.method, http_request.path });
@@ -315,6 +324,66 @@ pub fn Reactor(comptime TApp: type) type {
                                     const match = self.router.lookup(http_request.path, http_request.method);
                                     if (match) |m| {
                                         Logger.debug("Found match for path: {s}", .{m.action.path});
+
+                                        switch (m.action.executor) {
+                                            .io => { // execute the action on the reactor thread
+                                                // acquire a new output buffer
+                                                if (self.current_output_buffer_idx == null) {
+                                                    const buffer_idx = self.output_buffer_pool.acquire() orelse {
+                                                        // no output buffers available, drop the message and release the input buffer
+                                                        self.input_buffer_pool.release(job.buffer_idx);
+
+                                                        Logger.info("No output buffers available, dropping message", .{});
+                                                        continue;
+                                                    };
+
+                                                    self.current_output_buffer_idx = buffer_idx;
+                                                    self.current_output_buffer = self.output_buffer_pool.buffer(buffer_idx);
+                                                }
+
+                                                var writer: std.Io.Writer = .fixed(self.current_output_buffer);
+                                                var reader: std.io.Reader = .fixed(http_request.path);
+                                                const response_payload_len = m.action.handler(
+                                                    .{
+                                                        .allocator = self.allocator,
+                                                        .input_buffer_pool = self.input_buffer_pool,
+                                                        .input_buffer_idx = job.buffer_idx,
+                                                        .input_reader = &reader,
+                                                        .output_writer = &writer,
+                                                        .waker = self.waker,
+                                                        .param_iterator = m.params,
+                                                    },
+                                                ) catch |err| {
+                                                    // handlers release the input buffer regardless of success or failure, so we don't need to release it here
+                                                    // keep the current output buffer to avoid just re-acquiring it in the next iteration
+
+                                                    Logger.warn("Action at {s} failed with error: {}", .{ m.action.path, err });
+                                                    continue;
+                                                };
+
+                                                const response_data = self.current_output_buffer[0 .. MessageHeadersByteSize.Response + response_payload_len];
+
+                                                // response_data will be freed by the reactor thread after sending
+                                                client.enqueueMessage(OutMessage{
+                                                    .offset = 0,
+                                                    .data = .{
+                                                        .single = .{
+                                                            .data = response_data,
+                                                            .buffer_idx = self.current_output_buffer_idx.?,
+                                                        },
+                                                    },
+                                                }) catch {
+                                                    // client's response queue is full
+                                                    // we can't really do anything about it, so just move on to the next job, input buffer was released in the handler
+                                                    // keep the current output buffer to avoid just re-acquiring it in the next iteration
+                                                    continue;
+                                                };
+
+                                                // released in reactor thread, set to null here to indicate that we don't have a current buffer anymore
+                                                self.current_output_buffer_idx = null;
+                                            },
+                                            .worker_pool => {},
+                                        }
                                     } else {
                                         Logger.debug("No match for path: {s}", .{http_request.path});
                                     }
@@ -336,15 +405,6 @@ pub fn Reactor(comptime TApp: type) type {
 
                             if (headers != .Request) return error.UnexpectedMessageHeader;
                             const req_header = headers.Request;
-
-                            const client = &self.clients[job.client_id.index];
-                            if (client.id.gen != job.client_id.gen) {
-                                // job was meant for a previous generation of the client, just release the buffer as there is no point in processing it
-                                self.input_buffer_pool.release(job.buffer_idx);
-
-                                Logger.info("Client gen mismatch: expected {}, got {}", .{ client.id.gen, job.client_id.gen });
-                                continue;
-                            }
 
                             const action = call_table[req_header.contract_id][req_header.method_id];
                             switch (action.executor) {

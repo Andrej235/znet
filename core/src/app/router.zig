@@ -17,7 +17,7 @@ pub const Router = struct {
         params: ParamIterator,
     };
 
-    const ParamIterator = struct {
+    pub const ParamIterator = struct {
         request_path: []const u8,
         request_template_path: []const u8,
 
@@ -28,7 +28,6 @@ pub const Router = struct {
             while (true) {
                 self.request_template_path_index = (std.mem.indexOfScalarPos(u8, self.request_template_path, self.request_template_path_index, '/') orelse return null) + 1;
                 self.request_path_index = (std.mem.indexOfScalarPos(u8, self.request_path, self.request_path_index, '/') orelse return null) + 1;
-
 
                 if (self.request_template_path[self.request_template_path_index] != '{') // not a param segment
                     continue;
