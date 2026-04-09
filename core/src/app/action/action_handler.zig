@@ -3,10 +3,16 @@ const std = @import("std");
 const Body = @import("../../app/params/body_param.zig").Body;
 const ParamKind = @import("../../app/params/param_kind.zig").ParamKind;
 
+const Request = @import("../../server/requests/request.zig").Request;
+
 const RequestHeaders = @import("../../message_headers/request_headers.zig").RequestHeaders;
 const serializeMessageHeaders = @import("../../message_headers/serialize_message_headers.zig").serializeMessageHeaders;
+
 const Deserializer = @import("../../serialization/binary/deserializer.zig").Deserializer;
 const Serializer = @import("../../serialization/binary/serializer.zig").Serializer;
+
+const FormUrlEncodedDeserializer = @import("../../serialization/form_url_encoded/deserializer.zig").Deserializer;
+
 const CountingSerializer = @import("../../serialization/binary/counting_serializer.zig").Serializer;
 const ReactorContext = @import("../../server/reactor.zig").ReactorContext;
 const BufferPool = @import("../../utils/buffer_pool.zig").BufferPool;
@@ -19,12 +25,15 @@ const DIContainer = @import("../../dependency_injection/container.zig").Containe
 
 pub const RequestContext = struct {
     allocator: std.mem.Allocator,
+    waker: Waker,
+
     input_buffer_pool: *BufferPool,
     input_buffer_idx: u32,
     input_reader: *std.Io.Reader,
     output_writer: *std.Io.Writer,
-    waker: Waker,
+
     param_iterator: ParamIterator,
+    query: ?[]const u8,
 };
 
 /// returns the length of the serialized output
@@ -144,6 +153,17 @@ pub fn createActionHandler(comptime callback: anytype, comptime path: []const u8
                 @field(params, path_field_name) = .{ .value = path_param };
             }
 
+            if (params_info.query_field_name) |query_field_name| {
+                var query_deserializer = FormUrlEncodedDeserializer.init(context.allocator);
+
+                if (context.query) |query| {
+                    var query_reader = std.io.Reader.fixed(query);
+                    @field(params, query_field_name) = .{
+                        .value = try query_deserializer.deserialize(&query_reader, params_info.TQuery.?),
+                    };
+                }
+            }
+
             const output = @call(.always_inline, callback, params);
 
             try Serializer.serialize(fn_info.@"fn".return_type.?, context.output_writer, output);
@@ -165,6 +185,9 @@ fn getParamsInfo(comptime TFn: type) struct {
 
     TPath: ?type,
     path_field_name: ?[]const u8,
+
+    TQuery: ?type,
+    query_field_name: ?[]const u8,
 } {
     comptime {
         const fn_info = @typeInfo(TFn).@"fn";
@@ -175,6 +198,9 @@ fn getParamsInfo(comptime TFn: type) struct {
 
         var TPath: ?type = null;
         var path_field_name: ?[]const u8 = null;
+
+        var TQuery: ?type = null;
+        var query_field_name: ?[]const u8 = null;
 
         for (fn_info.params, 0..) |param, idx| {
             if (param.type) |T| {
@@ -200,7 +226,10 @@ fn getParamsInfo(comptime TFn: type) struct {
                             TPath = @field(T, "Type");
                             path_field_name = field_name;
                         },
-                        .query => @compileError("Not implemented"),
+                        .query => {
+                            TQuery = @field(T, "Type");
+                            query_field_name = field_name;
+                        },
                     }
                 }
             }
@@ -214,6 +243,9 @@ fn getParamsInfo(comptime TFn: type) struct {
 
             .TPath = TPath,
             .path_field_name = path_field_name,
+
+            .TQuery = TQuery,
+            .query_field_name = query_field_name,
         };
     }
 }

@@ -15,6 +15,7 @@ pub const Router = struct {
     pub const Match = struct {
         action: RuntimeAction,
         params: ParamIterator,
+        query: ?[]const u8,
     };
 
     pub const ParamIterator = struct {
@@ -132,8 +133,14 @@ pub const Router = struct {
     }
 
     pub fn lookup(self: *const Router, path: []const u8, method: HttpMethod) ?Match {
+        const query_index = std.mem.indexOfScalar(u8, path, '?');
+        const query = if (query_index) |i| path[i + 1 ..] else null;
+
+        const path_without_query = if (query_index) |i| path[0..i] else path;
+        const normalized_path = normalizePath(path_without_query);
+
         for (self.nodes) |*node| {
-            if (lookupNode(node, path, method)) |match| {
+            if (lookupNode(node, normalized_path, query, method)) |match| {
                 return match;
             }
         }
@@ -194,10 +201,8 @@ fn hasActions(node: *const Router.Node) bool {
     return false;
 }
 
-fn lookupNode(node: *const Router.Node, path: []const u8, method: HttpMethod) ?Router.Match {
-    const normalized_path = normalizePath(path);
-
-    if (normalized_path.len == 0) {
+fn lookupNode(node: *const Router.Node, path: []const u8, query: ?[]const u8, method: HttpMethod) ?Router.Match {
+    if (path.len == 0) {
         // root path
         const method_idx = @intFromEnum(method);
         if (node.actions[method_idx]) |action| {
@@ -209,12 +214,13 @@ fn lookupNode(node: *const Router.Node, path: []const u8, method: HttpMethod) ?R
                     .request_path_index = 0,
                     .request_template_path_index = 0,
                 },
+                .query = null,
             };
         }
         return null;
     }
 
-    var segments = std.mem.splitScalar(u8, normalized_path, '/');
+    var segments = std.mem.splitScalar(u8, path, '/');
     const first = segments.first();
     if (!std.mem.eql(u8, node.segment, first)) {
         return null;
@@ -250,11 +256,12 @@ fn lookupNode(node: *const Router.Node, path: []const u8, method: HttpMethod) ?R
         return Router.Match{
             .action = action,
             .params = .{
-                .request_path = normalized_path,
+                .request_path = path,
                 .request_template_path = normalizePath(action.path),
                 .request_path_index = 0,
                 .request_template_path_index = 0,
             },
+            .query = query,
         };
     }
 

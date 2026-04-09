@@ -17,6 +17,7 @@ pub const DeserializationErrors = error{
     EndOfStream,
     InvalidBooleanValue,
     IntegerDeserializationFailed,
+    FloatDeserializationFailed,
     BooleanDeserializationFailed,
     SliceDeserializationFailed,
     InvalidErrorUnionValue,

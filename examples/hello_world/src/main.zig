@@ -19,6 +19,7 @@ const App = z.App(
                     .{
                         z.Action(null, hello, .{}),
                         z.Action(.@"{id}", hello2, .{}),
+                        z.Action(.@"{id}/q", helloWithQuery, .{}),
                         z.Action(.all, hello, .{}),
                         z.Action(.@"all/preview", hello, .{}),
                         z.Action(.register, hello, .{}),
@@ -60,6 +61,11 @@ pub fn main() !void {
 
 pub fn hello() bool {
     z.Logger.scoped(.action).info("Hello world!", .{});
+    return true;
+}
+
+pub fn helloWithQuery(path: z.Path(struct { id: []const u8 }), query: z.Query(struct { search: u32 })) bool {
+    z.Logger.scoped(.action).info("Hello id {s}! Search query: {}", .{ path.value.id, query.value.search });
     return true;
 }
 

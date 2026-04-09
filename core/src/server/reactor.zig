@@ -346,12 +346,15 @@ pub fn Reactor(comptime TApp: type) type {
                                                 const response_payload_len = m.action.handler(
                                                     .{
                                                         .allocator = self.allocator,
+                                                        .waker = self.waker,
+
                                                         .input_buffer_pool = self.input_buffer_pool,
                                                         .input_buffer_idx = job.buffer_idx,
                                                         .input_reader = &reader,
                                                         .output_writer = &writer,
-                                                        .waker = self.waker,
+
                                                         .param_iterator = m.params,
+                                                        .query = m.query,
                                                     },
                                                 ) catch |err| {
                                                     // handlers release the input buffer regardless of success or failure, so we don't need to release it here
