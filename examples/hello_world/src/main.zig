@@ -53,7 +53,7 @@ pub fn main() !void {
     // lookup(&router, "/deeply-nested/123/english/post/some-action/edit/", .GET);
 
     const server = try z.Server(App).init(std.heap.page_allocator, .{});
-    
+
     try server.run(try std.net.Address.parseIp("127.0.0.1", 5000));
     server.join();
 }
@@ -68,8 +68,8 @@ pub fn hello2(path: z.Path(struct { id: []const u8 })) bool {
     return true;
 }
 
-pub fn deeplyNestedPath(_: z.Path(struct { id: []const u8, language: []const u8, action: []const u8 })) bool {
-    z.Logger.info("Hello from deeply nested path!", .{});
+pub fn deeplyNestedPath(path: z.Path(struct { id: []const u8, language: []const u8, action: []const u8 })) bool {
+    z.Logger.info("Hello from deeply nested path! Passed params: {s} | {s} | {s}", .{ path.value.id, path.value.language, path.value.action });
     return true;
 }
 

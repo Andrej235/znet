@@ -131,8 +131,8 @@ pub fn createActionHandler(comptime callback: anytype, comptime path: []const u8
             if (params_info.path_field_name) |path_field_name| {
                 var path_param: params_info.TPath.? = undefined;
 
+                var it = context.param_iterator;
                 inline for (sorted_path_param_fields) |field| {
-                    var it = context.param_iterator;
                     const param = it.next() orelse {
                         Logger.err("Expected path parameter '{s}' not found in request", .{field.name});
                         return error.InvalidPathParameter;
