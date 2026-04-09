@@ -21,4 +21,5 @@ pub const DeserializationErrors = error{
     BooleanDeserializationFailed,
     SliceDeserializationFailed,
     InvalidErrorUnionValue,
+    MissingRequiredField,
 };

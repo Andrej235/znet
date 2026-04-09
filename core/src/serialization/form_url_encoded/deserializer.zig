@@ -13,7 +13,6 @@ pub const Deserializer = struct {
         };
     }
 
-    // todo: fix missing non-optional fields
     // todo: support array of values for repeated keys, e.g. tags=tag1&tags=tag2&tags=tag3
     // todo: support nested structs with dot notation in keys, e.g. user.name=John&user.age=30
     pub fn deserialize(self: *Deserializer, reader: *std.Io.Reader, comptime T: type) DeserializationErrors!T {
@@ -32,6 +31,7 @@ pub const Deserializer = struct {
             // this prevents undefined behavior from uninitialized memory
             @field(result, field.name) = null;
         }
+        var seen = [_]bool{false} ** fields.len;
 
         while (reader.takeDelimiter('&') catch |err| blk: {
             Logger.err("Failed to read key-value pair: {}", .{err});
@@ -41,13 +41,21 @@ pub const Deserializer = struct {
             const key = if (eq_index) |i| kv[0..i] else kv;
             const value = if (eq_index) |i| kv[i + 1 ..] else &[_]u8{};
 
-            Logger.debug("{s}: {s}", .{ key, value });
-
-            inline for (fields) |field| {
+            inline for (fields, 0..) |field, i| {
                 if (std.mem.eql(u8, field.name, key)) {
                     @field(result, field.name) = try self.deserializeValue(value, field.type);
+                    seen[i] = true;
                     break;
                 }
+            }
+        }
+
+        inline for (seen, 0..) |s, i| {
+            comptime if (@typeInfo(fields[i].type) == .optional) continue;
+
+            if (!s) {
+                Logger.err("fuuuuck: {s}", .{fields[i].name});
+                return DeserializationErrors.MissingRequiredField;
             }
         }
 

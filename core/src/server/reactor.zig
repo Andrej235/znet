@@ -323,8 +323,6 @@ pub fn Reactor(comptime TApp: type) type {
 
                                     const match = self.router.lookup(http_request.path, http_request.method);
                                     if (match) |m| {
-                                        Logger.debug("Found match for path: {s}", .{m.action.path});
-
                                         switch (m.action.executor) {
                                             .io => { // execute the action on the reactor thread
                                                 // acquire a new output buffer
