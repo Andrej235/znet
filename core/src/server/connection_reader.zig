@@ -80,10 +80,12 @@ pub const ConnectionReader = struct {
             }
 
             // try to parse a message from the buffered data
-            if (try self.parser.?.parse(self)) |msg| {
+            if (try self.parser.?.parse(self)) |parse_result| {
+                const buffer_idx = try self.passBufferOwnership(parse_result.consumed_bytes);
+
                 return MessageReadResult{
-                    .buffer_idx = self.current_buffer_idx.?,
-                    .request = msg,
+                    .buffer_idx = buffer_idx,
+                    .request = parse_result.request,
                 };
             }
         }
@@ -164,5 +166,38 @@ pub const ConnectionReader = struct {
             .buffer_idx = current_buffer_idx,
             .request = msg,
         };
+    }
+
+    fn passBufferOwnership(self: *ConnectionReader, bytes: usize) !u32 {
+        if (self.current_buffer_idx == null) {
+            return error.NoBufferAvailable;
+        }
+
+        if (bytes > self.buffered_bytes) {
+            return error.NotEnoughData;
+        }
+
+        const idx = self.current_buffer_idx.?;
+
+        if (bytes == self.buffered_bytes) {
+            self.current_buffer_idx = null;
+            return idx;
+        }
+
+        const remaining_bytes = self.current_buffer[bytes..self.buffered_bytes];
+        // if there isn't a free buffer, we can't process this message yet
+        // we also can't return the fully read one because then we wouldn't be able to preserve the remaining data for the next read
+        const new_buffer_idx = self.input_buffer_pool.acquire() orelse return error.NoBufferAvailable;
+        const new_buffer = self.input_buffer_pool.buffer(new_buffer_idx);
+
+        // move the remaining bytes to the new buffer so that we can continue reading that message in this new buffer we just acquired from the pool
+        @memcpy(new_buffer[0..remaining_bytes.len], remaining_bytes);
+
+        self.current_buffer_idx = new_buffer_idx;
+        self.current_buffer = new_buffer;
+
+        self.buffered_bytes -= bytes;
+
+        return idx;
     }
 };
