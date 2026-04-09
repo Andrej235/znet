@@ -64,8 +64,11 @@ pub fn hello() bool {
     return true;
 }
 
-pub fn helloWithQuery(path: z.Path(struct { id: []const u8 }), query: z.Query(struct { search: u32 })) bool {
-    z.Logger.scoped(.action).info("Hello id {s}! Search query: {}", .{ path.value.id, query.value.search });
+pub fn helloWithQuery(
+    path: z.Path(struct { id: []const u8 }),
+    query: z.Query(struct { search: ?[]const u8 }),
+) bool {
+    z.Logger.scoped(.action).info("Hello id {s}! Search query: {?s}", .{ path.value.id, query.value.search });
     return true;
 }
 

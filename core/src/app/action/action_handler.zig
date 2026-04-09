@@ -161,6 +161,12 @@ pub fn createActionHandler(comptime callback: anytype, comptime path: []const u8
                     @field(params, query_field_name) = .{
                         .value = try query_deserializer.deserialize(&query_reader, params_info.TQuery.?),
                     };
+                } else {
+                    const empty_query: []const u8 = "";
+                    var query_reader = std.io.Reader.fixed(empty_query);
+                    @field(params, query_field_name) = .{
+                        .value = try query_deserializer.deserialize(&query_reader, params_info.TQuery.?),
+                    };
                 }
             }
 

@@ -13,6 +13,9 @@ pub const Deserializer = struct {
         };
     }
 
+    // todo: fix missing non-optional fields
+    // todo: support array of values for repeated keys, e.g. tags=tag1&tags=tag2&tags=tag3
+    // todo: support nested structs with dot notation in keys, e.g. user.name=John&user.age=30
     pub fn deserialize(self: *Deserializer, reader: *std.Io.Reader, comptime T: type) DeserializationErrors!T {
         const info = @typeInfo(T);
         if (info != .@"struct") {
