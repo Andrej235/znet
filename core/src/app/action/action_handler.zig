@@ -138,7 +138,7 @@ pub fn createActionHandler(comptime callback: anytype, comptime path: []const u8
                         return error.InvalidPathParameter;
                     };
 
-                    @field(path_param, field.name) = param.value;
+                    @field(path_param, field.name) = try parsePathParam(field.type, param.value);
                 }
 
                 @field(params, path_field_name) = .{ .value = path_param };
@@ -215,5 +215,43 @@ fn getParamsInfo(comptime TFn: type) struct {
             .TPath = TPath,
             .path_field_name = path_field_name,
         };
+    }
+}
+
+inline fn parsePathParam(comptime T: type, value: []const u8) !T {
+    const info = @typeInfo(T);
+
+    if (T == []const u8) {
+        return value;
+    }
+
+    switch (info) {
+        .int => {
+            return std.fmt.parseInt(T, value, 10) catch
+                return error.InvalidPathParameter;
+        },
+        .float => {
+            return std.fmt.parseFloat(T, value) catch
+                return error.InvalidPathParameter;
+        },
+        .bool => {
+            if (std.mem.eql(u8, value, "true")) {
+                return true;
+            } else if (std.mem.eql(u8, value, "false")) {
+                return false;
+            } else {
+                return error.InvalidPathParameter;
+            }
+        },
+        .@"enum" => |enum_info| {
+            inline for (enum_info.fields) |field| {
+                if (std.mem.eql(u8, field.name, value)) {
+                    return @field(T, field.name);
+                }
+            }
+
+            return error.InvalidPathParameter;
+        },
+        else => @compileError(std.fmt.comptimePrint("Unsupported path parameter type: {s}", .{@typeName(T)})),
     }
 }

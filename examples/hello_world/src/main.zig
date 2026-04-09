@@ -68,8 +68,8 @@ pub fn hello2(path: z.Path(struct { id: []const u8 })) bool {
     return true;
 }
 
-pub fn deeplyNestedPath(path: z.Path(struct { id: []const u8, language: []const u8, action: []const u8 })) bool {
-    z.Logger.info("Hello from deeply nested path! Passed params: {s} | {s} | {s}", .{ path.value.id, path.value.language, path.value.action });
+pub fn deeplyNestedPath(path: z.Path(struct { id: u32, language: []const u8, action: []const u8 })) bool {
+    z.Logger.info("Hello from deeply nested path! Passed params: {} | {s} | {s}", .{ path.value.id, path.value.language, path.value.action });
     return true;
 }
 
