@@ -69,19 +69,15 @@ pub const Router = struct {
                 var segments = std.mem.splitScalar(u8, normalized_path, '/');
 
                 while (segments.next()) |segment| {
-                    var found = false;
+                    if (segment.len > 0 and segment[0] == '{') {
+                        // param
 
-                    for (current.static_children.items) |*node| {
-                        if (std.mem.eql(u8, node.segment, segment)) {
-                            current = @constCast(node);
-                            found = true;
-                            break;
-                        }
-                    }
-
-                    if (!found) {
-                        if (segment.len > 0 and segment[0] == '{') {
-                            // param
+                        if (current.param_child) |param_child| {
+                            if (!std.mem.eql(u8, param_child.segment, segment[1 .. segment.len - 1])) {
+                                return error.ConflictingParameterNames;
+                            }
+                            current = param_child;
+                        } else {
                             const new_node = try allocator.create(Node);
                             new_node.* = Node{
                                 .segment = segment[1 .. segment.len - 1], // remove { and }
@@ -91,8 +87,20 @@ pub const Router = struct {
                             };
                             current.param_child = new_node;
                             current = new_node;
-                        } else {
-                            // static
+                        }
+                    } else {
+                        // static
+                        var found = false;
+
+                        for (current.static_children.items) |*node| {
+                            if (std.mem.eql(u8, node.segment, segment)) {
+                                current = @constCast(node);
+                                found = true;
+                                break;
+                            }
+                        }
+
+                        if (!found) { // add new static node
                             const new_node = Node{
                                 .segment = segment,
                                 .static_children = std.ArrayList(Node){},
