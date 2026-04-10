@@ -348,7 +348,9 @@ pub fn Reactor(comptime TApp: type) type {
 
                                                         .body = http_request.body,
                                                         .body_content_type = http_request.content_type,
+
                                                         .output_writer = &writer,
+                                                        .accepts = http_request.accepts,
 
                                                         .param_iterator = m.params,
                                                         .query = m.query,

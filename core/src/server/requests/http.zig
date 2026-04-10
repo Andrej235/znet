@@ -7,6 +7,7 @@ pub const HttpRequest = struct {
 
     body: ?[]const u8,
     content_type: ?ContentType,
+    accepts: ?[]const u8,
 };
 
 pub const HttpMethod = enum(u8) {
@@ -49,6 +50,7 @@ pub const HttpVersion = enum {
     }
 };
 
+/// Request body content type, not suitable for representing response types which can be more complex (e.g. streaming, multipart, etc.)
 pub const ContentType = enum {
     octet_stream, // default for unknown content types
     text,

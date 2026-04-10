@@ -7,6 +7,7 @@ pub const SerializationErrors = error{
     NoSpaceLeft,
     IntegerSerializationFailed,
     InvalidErrorUnionValue,
+    SerializationFailed,
 };
 
 pub const DeserializationErrors = error{

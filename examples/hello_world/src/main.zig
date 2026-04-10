@@ -95,7 +95,7 @@ fn lookup(router: *const z.Router, path: []const u8, method: z.HttpMethod) void 
     }
 }
 
-fn post(body: z.Body(struct { message: []const u8 })) bool {
+fn post(body: z.Body(struct { message: []const u8 })) struct { success: bool } {
     z.Logger.info("Hello {s}", .{body.value.message});
-    return true;
+    return .{ .success = true };
 }

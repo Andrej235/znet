@@ -11,6 +11,7 @@ pub const Errors = @import("./errors.zig").DeserializationErrors || error{
 pub fn fromContentType(comptime T: type, content_type: ?ContentType, allocator: std.mem.Allocator, reader: *std.Io.Reader) Errors!T {
     switch (content_type orelse .octet_stream) {
         .json => return Json.deserialize(allocator, reader, T),
+        .form_url_encoded => return FormUrlEncoded.deserialize(allocator, reader, T),
         else => return Errors.UnsupportedContentType,
     }
 }

@@ -8,6 +8,7 @@ const Request = @import("../../server/requests/request.zig").Request;
 const RequestHeaders = @import("../../message_headers/request_headers.zig").RequestHeaders;
 const serializeMessageHeaders = @import("../../message_headers/serialize_message_headers.zig").serializeMessageHeaders;
 
+const Serializer = @import("../../serialization/serializer.zig");
 const Deserializer = @import("../../serialization/deserializer.zig");
 
 const CountingSerializer = @import("../../serialization/binary/counting_serializer.zig").Serializer;
@@ -29,6 +30,7 @@ pub const RequestContext = struct {
     body_content_type: ?ContentType,
 
     output_writer: *std.Io.Writer,
+    accepts: ?[]const u8,
 
     param_iterator: ParamIterator,
     query: ?[]const u8,
@@ -165,16 +167,18 @@ pub fn createActionHandler(comptime callback: anytype, comptime path: []const u8
                 }
             }
 
+            // todo: inject an arena allocator into the handler if asked
+
             const output = @call(.always_inline, callback, params);
-            _ = output;
-            // try Serializer.serialize(fn_info.@"fn".return_type.?, context.output_writer, output);
+            try Serializer.toContentTypeFromAcceptHeader(fn_info.@"fn".return_type.?, context.accepts, context.output_writer, output);
 
+            // freeing the memory allocated by the arena is safe after serializing because the serializer will need to copy any data it needs into the output writer anyways
             // todo: use an arena alloc for deserialization and destroy it here
-            // if (params_info.TBody) |_| { // payload MUST be destroyed AFTER output serialization is complete in case pointers from payload are used in output
-            // try deserializer.destroy(payload);
-            // }
 
-            return 0; // todo: implement
+            // todo: serializers should return the number of bytes written
+            // todo: remove counting serializer and implement it as a count function within serializers
+            // todo: implement a generic serializer like the deserializer that can serialize to any format based on content type
+            return 0;
         }
     }.handler;
 }

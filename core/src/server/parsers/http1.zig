@@ -34,6 +34,7 @@ pub const Http1Parser = struct {
     body_size: ?usize = null,
     transfer_encoding: TransferEncoding = .none,
     content_type: ?ContentType = null,
+    accepts: ?[]const u8 = null,
 
     pub fn init() Http1Parser {
         return .{
@@ -139,6 +140,7 @@ pub const Http1Parser = struct {
                         .version = self.version.?,
                         .path = self.path.?,
                         .body = buf[self.parse_offset .. self.parse_offset + size],
+                        .accepts = self.accepts,
                         .content_type = self.content_type,
                     },
                 },
@@ -156,6 +158,7 @@ pub const Http1Parser = struct {
                     .path = self.path.?,
                     .body = null,
                     .content_type = self.content_type,
+                    .accepts = self.accepts,
                 },
             },
             .consumed_bytes = self.parse_offset,
@@ -199,6 +202,11 @@ pub const Http1Parser = struct {
                 Logger.err("Unsupported Content-Type header value: {s}", .{trimmed_value});
                 return;
             };
+        }
+
+        if (std.ascii.eqlIgnoreCase(trimmed_name, "Accept")) {
+            self.accepts = trimmed_value;
+            return;
         }
     }
 };
