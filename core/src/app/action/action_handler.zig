@@ -27,8 +27,6 @@ pub const RequestContext = struct {
     allocator: std.mem.Allocator,
     waker: Waker,
 
-    input_buffer_pool: *BufferPool,
-    input_buffer_idx: u32,
     input_reader: *std.Io.Reader,
     output_writer: *std.Io.Writer,
 
@@ -101,11 +99,7 @@ pub fn createActionHandler(comptime callback: anytype, comptime path: []const u8
             const payload_field_name = params_info.body_field_name;
 
             var deserializer = Deserializer.init(context.allocator);
-            const payload: if (TPayload) |T| T else void = if (TPayload) |T| deserializer.deserialize(context.input_reader, T) catch |err| {
-                context.input_buffer_pool.release(context.input_buffer_idx);
-                return err;
-            } else {};
-            context.input_buffer_pool.release(context.input_buffer_idx);
+            const payload: if (TPayload) |T| T else void = if (TPayload) |T| try deserializer.deserialize(context.input_reader, T) else {};
 
             if (payload_field_name) |name| {
                 @field(params, name) = .{ .value = payload };

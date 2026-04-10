@@ -13,6 +13,7 @@ pub const Deserializer = struct {
         };
     }
 
+    // todo: implement url decoding of keys and values, e.g. %20 and + for space, %3D for =, etc.
     // todo: support array of values for repeated keys, e.g. tags=tag1&tags=tag2&tags=tag3
     // todo: support nested structs with dot notation in keys, e.g. user.name=John&user.age=30
     pub fn deserialize(self: *Deserializer, reader: *std.Io.Reader, comptime T: type) DeserializationErrors!T {
@@ -54,7 +55,6 @@ pub const Deserializer = struct {
             comptime if (@typeInfo(fields[i].type) == .optional) continue;
 
             if (!s) {
-                Logger.err("fuuuuck: {s}", .{fields[i].name});
                 return DeserializationErrors.MissingRequiredField;
             }
         }

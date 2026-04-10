@@ -306,7 +306,8 @@ pub fn Reactor(comptime TApp: type) type {
 
                         // handle new jobs
                         while (self.job_queue.tryPop()) |job| {
-                            // input buffer will be released in handler right after deserialization or in the first point of failure
+                            // input buffer will be released after executing the handler
+                            // doing it in the handler would allow for faster buffer cycling but would force allocations for header and path parsing
 
                             const client = &self.clients[job.client_id.index];
                             if (client.id.gen != job.client_id.gen) {
@@ -346,8 +347,6 @@ pub fn Reactor(comptime TApp: type) type {
                                                         .allocator = self.allocator,
                                                         .waker = self.waker,
 
-                                                        .input_buffer_pool = self.input_buffer_pool,
-                                                        .input_buffer_idx = job.buffer_idx,
                                                         .input_reader = &reader,
                                                         .output_writer = &writer,
 
@@ -355,16 +354,20 @@ pub fn Reactor(comptime TApp: type) type {
                                                         .query = m.query,
                                                     },
                                                 ) catch |err| {
-                                                    // handlers release the input buffer regardless of success or failure, so we don't need to release it here
                                                     // keep the current output buffer to avoid just re-acquiring it in the next iteration
+                                                    // release the input buffer
 
+                                                    self.input_buffer_pool.release(job.buffer_idx);
                                                     Logger.warn("Action at {s} failed with error: {}", .{ m.action.path, err });
                                                     continue;
                                                 };
 
+                                                // release the input buffer
+                                                self.input_buffer_pool.release(job.buffer_idx);
+
                                                 const response_data = self.current_output_buffer[0 .. MessageHeadersByteSize.Response + response_payload_len];
 
-                                                // response_data will be freed by the reactor thread after sending
+                                                // response_data will be freed by the io thread after sending
                                                 client.enqueueMessage(OutMessage{
                                                     .offset = 0,
                                                     .data = .{
