@@ -341,13 +341,12 @@ pub fn Reactor(comptime TApp: type) type {
                                                 }
 
                                                 var writer: std.Io.Writer = .fixed(self.current_output_buffer);
-                                                var reader: std.io.Reader = .fixed(http_request.path);
                                                 const response_payload_len = m.action.handler(
                                                     .{
                                                         .allocator = self.allocator,
                                                         .waker = self.waker,
 
-                                                        .input_reader = &reader,
+                                                        .body = http_request.body,
                                                         .output_writer = &writer,
 
                                                         .param_iterator = m.params,

@@ -27,7 +27,7 @@ pub const RequestContext = struct {
     allocator: std.mem.Allocator,
     waker: Waker,
 
-    input_reader: *std.Io.Reader,
+    body: ?[]const u8,
     output_writer: *std.Io.Writer,
 
     param_iterator: ParamIterator,
@@ -95,14 +95,19 @@ pub fn createActionHandler(comptime callback: anytype, comptime path: []const u8
                 }
             }
 
-            const TPayload: ?type = params_info.TBody;
-            const payload_field_name = params_info.body_field_name;
+            if (params_info.TBody) |TBody| {
+                if (context.body) |body| {
+                    var deserializer = Deserializer.init(context.allocator);
+                    var reader: std.io.Reader = .fixed(body);
 
-            var deserializer = Deserializer.init(context.allocator);
-            const payload: if (TPayload) |T| T else void = if (TPayload) |T| try deserializer.deserialize(context.input_reader, T) else {};
+                    const payload = try deserializer.deserialize(&reader, TBody);
 
-            if (payload_field_name) |name| {
-                @field(params, name) = .{ .value = payload };
+                    if (params_info.body_field_name) |name| {
+                        @field(params, name) = .{ .value = payload };
+                    }
+                } else {
+                    return error.MissingRequestBody;
+                }
             }
 
             const sorted_path_param_fields: []const std.builtin.Type.StructField = comptime blk: {
@@ -168,9 +173,10 @@ pub fn createActionHandler(comptime callback: anytype, comptime path: []const u8
 
             try Serializer.serialize(fn_info.@"fn".return_type.?, context.output_writer, output);
 
-            if (TPayload) |_| { // payload MUST be destroyed AFTER output serialization is complete in case pointers from payload are used in output
-                try deserializer.destroy(payload);
-            }
+            // todo: use an arena alloc for deserialization and destroy it here
+            // if (params_info.TBody) |_| { // payload MUST be destroyed AFTER output serialization is complete in case pointers from payload are used in output
+            // try deserializer.destroy(payload);
+            // }
 
             return 0; // todo: implement
         }

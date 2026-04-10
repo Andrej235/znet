@@ -12,6 +12,12 @@ const HttpState = enum {
     request_line,
     headers,
     body,
+    complete,
+};
+
+const TransferEncoding = enum {
+    none,
+    chunked,
 };
 
 pub const Http1Parser = struct {
@@ -23,6 +29,9 @@ pub const Http1Parser = struct {
 
     state: HttpState = .request_line,
 
+    body_size: ?usize = null,
+    transfer_encoding: TransferEncoding = .none,
+
     pub fn init() Http1Parser {
         return .{
             .parse_offset = 0,
@@ -30,6 +39,10 @@ pub const Http1Parser = struct {
     }
 
     pub fn parse(self: *Http1Parser, conn: *ConnectionReader) !?Parser.ParseResult {
+        if (self.state == .complete) {
+            self.resetState();
+        }
+
         const buf = conn.current_buffer[self.parse_offset..conn.buffered_bytes];
         var reader = std.io.Reader.fixed(buf);
 
@@ -65,8 +78,6 @@ pub const Http1Parser = struct {
                                 Logger.err("Unsupported HTTP version: {s}", .{version});
                                 return error.UnsupportedVersion;
                             };
-
-                            // Logger.debug("{} {s} ({})", .{ self.method.?, self.path.?, self.version.? });
                         }
                     }
                 },
@@ -75,7 +86,7 @@ pub const Http1Parser = struct {
                     if (line.len == 2) {
                         // headers end with \r\n\r\n
                         self.state = .body;
-                        continue;
+                        break;
                     }
 
                     const colon_index = std.mem.indexOfScalar(u8, line, ':') orelse {
@@ -86,24 +97,95 @@ pub const Http1Parser = struct {
                     const header_name = line[0..colon_index];
                     const header_value = std.mem.trim(u8, line[colon_index + 1 .. line.len - 2], &std.ascii.whitespace);
 
-                    // Logger.debug("Header: {s}: {s}", .{ header_name, header_value });
-                    _ = header_name;
-                    _ = header_value;
+                    self.parseHeader(header_name, header_value);
                 },
 
-                .body => {},
+                .body => {
+                    Logger.err("Tried http parsing body inside while loop", .{});
+                    break;
+                },
+
+                .complete => {
+                    Logger.err("Tried http parsing after finishing parsing a request", .{});
+                    break;
+                },
             }
         }
 
+        if (self.state != .body) {
+            // we haven't finished parsing headers yet, wait for more data
+            return null;
+        }
+
+        if (self.transfer_encoding == .chunked) {
+            Logger.err("Chunked transfer encoding is not supported yet", .{});
+            return error.UnsupportedTransferEncoding;
+        }
+
+        if (self.body_size) |size| {
+            if (conn.buffered_bytes < self.parse_offset + size) {
+                // not enough data buffered yet
+                return null;
+            }
+
+            self.state = .complete;
+            return Parser.ParseResult{
+                .request = Request{
+                    .http = .{
+                        .method = self.method.?,
+                        .version = self.version.?,
+                        .path = self.path.?,
+                        .body = buf[self.parse_offset..self.parse_offset + size],
+                    },
+                },
+                .consumed_bytes = self.parse_offset + size,
+            };
+        }
+
+        // no body
+        self.state = .complete;
         return Parser.ParseResult{
             .request = Request{
                 .http = .{
                     .method = self.method.?,
                     .version = self.version.?,
                     .path = self.path.?,
+                    .body = null,
                 },
             },
             .consumed_bytes = self.parse_offset,
         };
+    }
+
+    fn resetState(self: *Http1Parser) void {
+        self.parse_offset = 0;
+        self.method = null;
+        self.version = null;
+        self.path = null;
+        self.state = .request_line;
+        self.body_size = null;
+        self.transfer_encoding = .none;
+    }
+
+    inline fn parseHeader(self: *Http1Parser, name: []const u8, value: []const u8) void {
+        const trimmed_name = std.mem.trim(u8, name, &std.ascii.whitespace);
+
+        if (std.mem.eql(u8, trimmed_name, "Content-Length")) {
+            const length = std.fmt.parseInt(usize, value, 10) catch {
+                Logger.err("Invalid Content-Length header value: {s}", .{value});
+                return;
+            };
+            self.body_size = length;
+
+            return;
+        }
+
+        if (std.mem.eql(u8, trimmed_name, "Transfer-Encoding")) {
+            if (std.mem.eql(u8, std.mem.trim(u8, value, &std.ascii.whitespace), "chunked")) {
+                self.transfer_encoding = .chunked;
+            }
+
+            return;
+        }
     }
 };

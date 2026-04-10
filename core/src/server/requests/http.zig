@@ -4,6 +4,7 @@ pub const HttpRequest = struct {
     method: HttpMethod,
     path: []const u8,
     version: HttpVersion,
+    body: ?[]const u8,
 };
 
 pub const HttpMethod = enum(u8) {

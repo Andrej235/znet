@@ -30,7 +30,7 @@ const App = z.App(
                 z.Scope(
                     .posts,
                     .{
-                        z.Action(null, hello, .{ .http_method = .POST }),
+                        z.Action(null, post, .{ .http_method = .POST }),
                         z.Action(.all, hello, .{}),
                         z.Action(.@"all/preview", hello, .{}),
                         z.Action(.@"{id}", hello2, .{}),
@@ -93,4 +93,9 @@ fn lookup(router: *const z.Router, path: []const u8, method: z.HttpMethod) void 
     } else {
         z.Logger.err("No match for path: {s}", .{path});
     }
+}
+
+fn post(body: z.Body(struct { message: []const u8 })) bool {
+    z.Logger.info("Hello {s}", .{body.value.message});
+    return true;
 }
