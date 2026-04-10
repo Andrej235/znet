@@ -4,7 +4,9 @@ pub const HttpRequest = struct {
     method: HttpMethod,
     path: []const u8,
     version: HttpVersion,
+
     body: ?[]const u8,
+    content_type: ?ContentType,
 };
 
 pub const HttpMethod = enum(u8) {
@@ -43,6 +45,23 @@ pub const HttpVersion = enum {
         if (std.mem.eql(u8, s, "HTTP/1.0")) return .Http10;
         if (std.mem.eql(u8, s, "HTTP/1.1")) return .Http11;
         if (std.mem.eql(u8, s, "HTTP/2.0")) return .Http2;
+        return null;
+    }
+};
+
+pub const ContentType = enum {
+    octet_stream, // default for unknown content types
+    text,
+    json,
+    form_url_encoded,
+    multipart_form_data,
+
+    pub fn fromString(s: []const u8) ?ContentType {
+        if (std.mem.eql(u8, s, "application/octet-stream")) return .octet_stream;
+        if (std.mem.eql(u8, s, "text/plain")) return .text;
+        if (std.mem.eql(u8, s, "application/json")) return .json;
+        if (std.mem.eql(u8, s, "application/x-www-form-urlencoded")) return .form_url_encoded;
+        if (std.mem.eql(u8, s, "multipart/form-data")) return .multipart_form_data;
         return null;
     }
 };

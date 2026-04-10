@@ -8,16 +8,14 @@ const Request = @import("../../server/requests/request.zig").Request;
 const RequestHeaders = @import("../../message_headers/request_headers.zig").RequestHeaders;
 const serializeMessageHeaders = @import("../../message_headers/serialize_message_headers.zig").serializeMessageHeaders;
 
-const Deserializer = @import("../../serialization/binary/deserializer.zig").Deserializer;
-const Serializer = @import("../../serialization/binary/serializer.zig").Serializer;
-
-const FormUrlEncodedDeserializer = @import("../../serialization/form_url_encoded/deserializer.zig").Deserializer;
+const Deserializer = @import("../../serialization/deserializer.zig");
 
 const CountingSerializer = @import("../../serialization/binary/counting_serializer.zig").Serializer;
 const ReactorContext = @import("../../server/reactor.zig").ReactorContext;
 const BufferPool = @import("../../utils/buffer_pool.zig").BufferPool;
 const Waker = @import("../../waker/waker.zig");
 const ParamIterator = @import("../router.zig").Router.ParamIterator;
+const ContentType = @import("../../server/requests/http.zig").ContentType;
 
 const Logger = @import("../../logger/logger.zig").Logger.scoped(.action_handler);
 
@@ -28,6 +26,8 @@ pub const RequestContext = struct {
     waker: Waker,
 
     body: ?[]const u8,
+    body_content_type: ?ContentType,
+
     output_writer: *std.Io.Writer,
 
     param_iterator: ParamIterator,
@@ -97,10 +97,8 @@ pub fn createActionHandler(comptime callback: anytype, comptime path: []const u8
 
             if (params_info.TBody) |TBody| {
                 if (context.body) |body| {
-                    var deserializer = Deserializer.init(context.allocator);
                     var reader: std.io.Reader = .fixed(body);
-
-                    const payload = try deserializer.deserialize(&reader, TBody);
+                    const payload = try Deserializer.fromContentType(TBody, context.body_content_type, context.allocator, &reader);
 
                     if (params_info.body_field_name) |name| {
                         @field(params, name) = .{ .value = payload };
@@ -153,25 +151,23 @@ pub fn createActionHandler(comptime callback: anytype, comptime path: []const u8
             }
 
             if (params_info.query_field_name) |query_field_name| {
-                var query_deserializer = FormUrlEncodedDeserializer.init(context.allocator);
-
                 if (context.query) |query| {
                     var query_reader = std.io.Reader.fixed(query);
                     @field(params, query_field_name) = .{
-                        .value = try query_deserializer.deserialize(&query_reader, params_info.TQuery.?),
+                        .value = try Deserializer.FormUrlEncoded.deserialize(context.allocator, &query_reader, params_info.TQuery.?),
                     };
                 } else {
                     const empty_query: []const u8 = "";
                     var query_reader = std.io.Reader.fixed(empty_query);
                     @field(params, query_field_name) = .{
-                        .value = try query_deserializer.deserialize(&query_reader, params_info.TQuery.?),
+                        .value = try Deserializer.FormUrlEncoded.deserialize(context.allocator, &query_reader, params_info.TQuery.?),
                     };
                 }
             }
 
             const output = @call(.always_inline, callback, params);
-
-            try Serializer.serialize(fn_info.@"fn".return_type.?, context.output_writer, output);
+            _ = output;
+            // try Serializer.serialize(fn_info.@"fn".return_type.?, context.output_writer, output);
 
             // todo: use an arena alloc for deserialization and destroy it here
             // if (params_info.TBody) |_| { // payload MUST be destroyed AFTER output serialization is complete in case pointers from payload are used in output

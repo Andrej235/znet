@@ -3,8 +3,10 @@ const ConnectionReader = @import("../connection_reader.zig").ConnectionReader;
 
 const Parser = @import("./parser.zig").Parser;
 const Request = @import("../requests/request.zig").Request;
+
 const Method = @import("../requests/http.zig").HttpMethod;
 const Version = @import("../requests/http.zig").HttpVersion;
+const ContentType = @import("../requests/http.zig").ContentType;
 
 const Logger = @import("../../logger/logger.zig").Logger.scoped(.http1_parser);
 
@@ -31,6 +33,7 @@ pub const Http1Parser = struct {
 
     body_size: ?usize = null,
     transfer_encoding: TransferEncoding = .none,
+    content_type: ?ContentType = null,
 
     pub fn init() Http1Parser {
         return .{
@@ -135,7 +138,8 @@ pub const Http1Parser = struct {
                         .method = self.method.?,
                         .version = self.version.?,
                         .path = self.path.?,
-                        .body = buf[self.parse_offset..self.parse_offset + size],
+                        .body = buf[self.parse_offset .. self.parse_offset + size],
+                        .content_type = self.content_type,
                     },
                 },
                 .consumed_bytes = self.parse_offset + size,
@@ -151,6 +155,7 @@ pub const Http1Parser = struct {
                     .version = self.version.?,
                     .path = self.path.?,
                     .body = null,
+                    .content_type = self.content_type,
                 },
             },
             .consumed_bytes = self.parse_offset,
@@ -169,10 +174,11 @@ pub const Http1Parser = struct {
 
     inline fn parseHeader(self: *Http1Parser, name: []const u8, value: []const u8) void {
         const trimmed_name = std.mem.trim(u8, name, &std.ascii.whitespace);
+        const trimmed_value = std.mem.trim(u8, value, &std.ascii.whitespace);
 
-        if (std.mem.eql(u8, trimmed_name, "Content-Length")) {
-            const length = std.fmt.parseInt(usize, value, 10) catch {
-                Logger.err("Invalid Content-Length header value: {s}", .{value});
+        if (std.ascii.eqlIgnoreCase(trimmed_name, "Content-Length")) {
+            const length = std.fmt.parseInt(usize, trimmed_value, 10) catch {
+                Logger.err("Invalid Content-Length header value: {s}", .{trimmed_value});
                 return;
             };
             self.body_size = length;
@@ -180,12 +186,19 @@ pub const Http1Parser = struct {
             return;
         }
 
-        if (std.mem.eql(u8, trimmed_name, "Transfer-Encoding")) {
-            if (std.mem.eql(u8, std.mem.trim(u8, value, &std.ascii.whitespace), "chunked")) {
+        if (std.ascii.eqlIgnoreCase(trimmed_name, "Transfer-Encoding")) {
+            if (std.ascii.eqlIgnoreCase(trimmed_value, "chunked")) {
                 self.transfer_encoding = .chunked;
             }
 
             return;
+        }
+
+        if (std.ascii.eqlIgnoreCase(trimmed_name, "Content-Type")) {
+            self.content_type = ContentType.fromString(trimmed_value) orelse {
+                Logger.err("Unsupported Content-Type header value: {s}", .{trimmed_value});
+                return;
+            };
         }
     }
 };

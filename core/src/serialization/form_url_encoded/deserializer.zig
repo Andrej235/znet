@@ -5,18 +5,10 @@ const DeserializationErrors = @import("../errors.zig").DeserializationErrors;
 const Logger = @import("../../logger/logger.zig").Logger.scoped(.form_url_encoded_deserializer);
 
 pub const Deserializer = struct {
-    allocator: std.mem.Allocator,
-
-    pub fn init(allocator: std.mem.Allocator) Deserializer {
-        return Deserializer{
-            .allocator = allocator,
-        };
-    }
-
     // todo: implement url decoding of keys and values, e.g. %20 and + for space, %3D for =, etc.
     // todo: support array of values for repeated keys, e.g. tags=tag1&tags=tag2&tags=tag3
     // todo: support nested structs with dot notation in keys, e.g. user.name=John&user.age=30
-    pub fn deserialize(self: *Deserializer, reader: *std.Io.Reader, comptime T: type) DeserializationErrors!T {
+    pub fn deserialize(allocator: std.mem.Allocator, reader: *std.Io.Reader, comptime T: type) DeserializationErrors!T {
         const info = @typeInfo(T);
         if (info != .@"struct") {
             @compileError("FormUrlEncodedDeserializer can only deserialize into structs");
@@ -44,7 +36,7 @@ pub const Deserializer = struct {
 
             inline for (fields, 0..) |field, i| {
                 if (std.mem.eql(u8, field.name, key)) {
-                    @field(result, field.name) = try self.deserializeValue(value, field.type);
+                    @field(result, field.name) = try deserializeValue(allocator, value, field.type);
                     seen[i] = true;
                     break;
                 }
@@ -62,7 +54,7 @@ pub const Deserializer = struct {
         return result;
     }
 
-    fn deserializeValue(self: *Deserializer, value: []const u8, T: type) DeserializationErrors!T {
+    fn deserializeValue(allocator: std.mem.Allocator, value: []const u8, T: type) DeserializationErrors!T {
         if (T == []const u8) {
             return value;
         }
@@ -99,7 +91,7 @@ pub const Deserializer = struct {
                     return null;
                 }
 
-                return try self.deserializeValue(value, optional_info.child);
+                return try deserializeValue(allocator, value, optional_info.child);
             },
             else => @compileError(std.fmt.comptimePrint("Unsupported query parameter type: {s}", .{@typeName(T)})),
         }

@@ -347,6 +347,7 @@ pub fn Reactor(comptime TApp: type) type {
                                                         .waker = self.waker,
 
                                                         .body = http_request.body,
+                                                        .body_content_type = http_request.content_type,
                                                         .output_writer = &writer,
 
                                                         .param_iterator = m.params,
