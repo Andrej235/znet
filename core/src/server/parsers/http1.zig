@@ -4,10 +4,7 @@ const ConnectionReader = @import("../connection_reader.zig").ConnectionReader;
 const Parser = @import("./parser.zig").Parser;
 const Request = @import("../../requests/request.zig").Request;
 
-const Method = @import("../../requests/http.zig").HttpMethod;
-const Version = @import("../../requests/http.zig").HttpVersion;
-const ContentType = @import("../../requests/http.zig").ContentType;
-const Connection = @import("../../http/connection.zig").Connection;
+const http = @import("../../http/http.zig");
 
 const Logger = @import("../../logger/logger.zig").Logger.scoped(.http1_parser);
 
@@ -26,17 +23,17 @@ const TransferEncoding = enum {
 pub const Http1Parser = struct {
     parse_offset: usize,
 
-    method: ?Method = null,
-    version: ?Version = null,
+    method: ?http.Method = null,
+    version: ?http.Version = null,
     path: ?[]const u8 = null,
 
     state: HttpState = .request_line,
 
-    connection: Connection = .keep_alive, // http 1.1 assumes keep-alive connections by default
+    connection: http.Connection = .keep_alive, // http 1.1 assumes keep-alive connections by default
 
     body_size: ?usize = null,
     transfer_encoding: TransferEncoding = .none,
-    content_type: ?ContentType = null,
+    content_type: ?http.RequestContentType = null,
     accepts: ?[]const u8 = null,
 
     pub fn init() Http1Parser {
@@ -75,13 +72,13 @@ pub const Http1Parser = struct {
                             const version = line_reader.buffer[line_reader.seek..];
 
                             self.state = .headers;
-                            self.method = Method.fromString(method) orelse {
+                            self.method = http.Method.fromString(method) orelse {
                                 Logger.err("Unsupported HTTP method: {s}", .{method});
                                 // todo: implement arbitrary methods because spec supports them
                                 return error.UnsupportedMethod;
                             };
                             self.path = path;
-                            self.version = Version.fromString(version) orelse {
+                            self.version = http.Version.fromString(version) orelse {
                                 Logger.err("Unsupported HTTP version: {s}", .{version});
                                 return error.UnsupportedVersion;
                             };
@@ -142,7 +139,7 @@ pub const Http1Parser = struct {
                         .method = self.method.?,
                         .version = self.version.?,
                         .path = self.path.?,
-                        
+
                         .connection = self.connection,
 
                         .body = buf[self.parse_offset .. self.parse_offset + size],
@@ -162,9 +159,9 @@ pub const Http1Parser = struct {
                     .method = self.method.?,
                     .version = self.version.?,
                     .path = self.path.?,
-                    
+
                     .connection = self.connection,
-                    
+
                     .body = null,
                     .content_type = self.content_type,
                     .accepts = self.accepts,
@@ -210,7 +207,7 @@ pub const Http1Parser = struct {
         }
 
         if (std.ascii.eqlIgnoreCase(trimmed_name, "Content-Type")) {
-            self.content_type = ContentType.fromString(trimmed_value) orelse {
+            self.content_type = http.RequestContentType.fromString(trimmed_value) orelse {
                 Logger.err("Unsupported Content-Type header value: {s}", .{trimmed_value});
                 return;
             };

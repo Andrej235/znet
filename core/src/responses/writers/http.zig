@@ -1,12 +1,7 @@
 const std = @import("std");
+const http = @import("../../http/http.zig");
 
 const HttpResponse = @import("../http.zig").HttpResponse;
-
-const StatusCode = @import("../../http/status_code.zig").StatusCode;
-const HttpVersion = @import("../../requests/http.zig").HttpVersion;
-const ContentType = @import("../../requests/http.zig").ResponseContentType;
-const Connection = @import("../../http/connection.zig").Connection;
-
 const Serializer = @import("../../serialization/serializer.zig");
 
 pub fn HttpResponseWriter(comptime TBody: type) type {
@@ -32,7 +27,7 @@ pub fn HttpResponseWriter(comptime TBody: type) type {
             return self.bytes_written;
         }
 
-        fn writeStatusLine(self: *Self, version: HttpVersion, status_code: StatusCode) !void {
+        fn writeStatusLine(self: *Self, version: http.Version, status_code: http.StatusCode) !void {
             const version_str = version.toString();
             const status_code_str = status_code.toString();
 
@@ -101,7 +96,7 @@ pub fn HttpResponseWriter(comptime TBody: type) type {
             self.bytes_written += header.len;
         }
 
-        fn writeConnectionHeader(self: *Self, connection: Connection) !void {
+        fn writeConnectionHeader(self: *Self, connection: http.Connection) !void {
             const header_name = "Connection: ";
             const header_value = connection.toString();
 
@@ -115,7 +110,7 @@ pub fn HttpResponseWriter(comptime TBody: type) type {
         /// Writes headers needed for the response body, ends headers with an additional CRLF, and writes the body itself
         /// This should only be called after writing all other headers
         /// If TBody is void, this function just writes the CRLF to end the headers
-        fn writeBody(self: *Self, body: TBody, content_type: ContentType) !void {
+        fn writeBody(self: *Self, body: TBody, content_type: http.ResponseContentType) !void {
             const content_type_header = "Content-Type: ";
             const content_type_str = content_type.toStringUtf8();
 
