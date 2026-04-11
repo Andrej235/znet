@@ -2,7 +2,7 @@ const std = @import("std");
 const RuntimeScope = @import("scope/runtime_scope.zig").RuntimeScope;
 const RuntimeAction = @import("action/runtime_action.zig").RuntimeAction;
 
-const HttpMethod = @import("../server/requests/http.zig").HttpMethod;
+const HttpMethod = @import("../requests/http.zig").HttpMethod;
 
 pub const Router = struct {
     pub const Node = struct {

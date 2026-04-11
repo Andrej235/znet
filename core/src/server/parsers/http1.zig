@@ -2,11 +2,11 @@ const std = @import("std");
 const ConnectionReader = @import("../connection_reader.zig").ConnectionReader;
 
 const Parser = @import("./parser.zig").Parser;
-const Request = @import("../requests/request.zig").Request;
+const Request = @import("../../requests/request.zig").Request;
 
-const Method = @import("../requests/http.zig").HttpMethod;
-const Version = @import("../requests/http.zig").HttpVersion;
-const ContentType = @import("../requests/http.zig").ContentType;
+const Method = @import("../../requests/http.zig").HttpMethod;
+const Version = @import("../../requests/http.zig").HttpVersion;
+const ContentType = @import("../../requests/http.zig").ContentType;
 
 const Logger = @import("../../logger/logger.zig").Logger.scoped(.http1_parser);
 

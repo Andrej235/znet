@@ -1,6 +1,6 @@
 const Parser = @import("./parser.zig").Parser;
 const ConnectionReader = @import("../connection_reader.zig").ConnectionReader;
-const Request = @import("../requests/request.zig").Request;
+const Request = @import("../../requests/request.zig").Request;
 
 const Logger = @import("../../logger/logger.zig").Logger.scoped(.tls_parser);
 

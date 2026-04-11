@@ -1,5 +1,5 @@
 const ConnectionId = @import("connection_id.zig").ConnectionId;
-const Request = @import("requests/request.zig").Request;
+const Request = @import("../requests/request.zig").Request;
 
 pub const Job = struct {
     buffer_idx: u32,

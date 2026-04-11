@@ -3,7 +3,7 @@ const std = @import("std");
 const DIContainer = @import("../../dependency_injection/container.zig").Container;
 const Logger = @import("../../logger/logger.zig").Logger.scoped(.action_handler);
 
-const RequestContext = @import("./action_handler.zig").RequestContext;
+const RequestContext = @import("../../requests/request_context.zig").RequestContext;
 const ParamKind = @import("../params/param_kind.zig").ParamKind;
 
 const Deserializer = @import("../../serialization/deserializer.zig");
@@ -14,7 +14,7 @@ pub fn ActionHandlerArgs(comptime TFn: type, comptime path: []const u8, comptime
     if (fn_info != .@"fn") @compileError("Expected function type");
 
     return struct {
-        pub fn getArgs(allocator: std.mem.Allocator, context: RequestContext) !ParamsType(TFn) {
+        pub fn getArgs(allocator: std.mem.Allocator, context: *const RequestContext) !ParamsType(TFn) {
             const params_info = comptime getParamsInfo(TFn);
             const param_fields = params_info.fields;
 

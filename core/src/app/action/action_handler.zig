@@ -1,43 +1,13 @@
 const std = @import("std");
 
+const DIContainer = @import("../../dependency_injection/container.zig").Container;
+const RequestContext = @import("../../requests/request_context.zig").RequestContext;
 const ActionHandlerArgs = @import("./action_handler_args.zig").ActionHandlerArgs;
 
-const Body = @import("../../app/params/body_param.zig").Body;
-const ParamKind = @import("../../app/params/param_kind.zig").ParamKind;
-
-const Request = @import("../../server/requests/request.zig").Request;
-
-const RequestHeaders = @import("../../message_headers/request_headers.zig").RequestHeaders;
-const serializeMessageHeaders = @import("../../message_headers/serialize_message_headers.zig").serializeMessageHeaders;
-
-const ResponseContentType = @import("../../server/requests/http.zig").ResponseContentType;
-
+const ResponseContentType = @import("../../requests/http.zig").ResponseContentType;
 const Serializer = @import("../../serialization/serializer.zig");
-const Deserializer = @import("../../serialization/deserializer.zig");
-
-const ReactorContext = @import("../../server/reactor.zig").ReactorContext;
-const BufferPool = @import("../../utils/buffer_pool.zig").BufferPool;
-const Waker = @import("../../waker/waker.zig");
-const ParamIterator = @import("../router.zig").Router.ParamIterator;
-const ContentType = @import("../../server/requests/http.zig").ContentType;
 
 const Logger = @import("../../logger/logger.zig").Logger.scoped(.action_handler);
-
-const DIContainer = @import("../../dependency_injection/container.zig").Container;
-
-pub const RequestContext = struct {
-    allocator: std.mem.Allocator,
-    waker: Waker,
-
-    body: ?[]const u8,
-    body_content_type: ?ContentType,
-
-    output_writer: *std.Io.Writer,
-    accepts: ?[]const u8,
-
-    param_iterator: ParamIterator,
-    query: ?[]const u8,
-};
 
 /// returns the length of the serialized output
 pub const ActionHandler = *const fn (context: RequestContext) anyerror!usize;
