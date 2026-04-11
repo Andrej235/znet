@@ -22,6 +22,7 @@ pub fn HttpResponseWriter(comptime TBody: type) type {
             try self.writeDateHeader();
             try self.writeServerHeader();
             try self.writeConnectionHeader(response.connection);
+            try self.writeCacheHeaders(response.cache_config);
             try self.writeBody(response.body, response.content_type);
 
             return self.bytes_written;
@@ -40,7 +41,18 @@ pub fn HttpResponseWriter(comptime TBody: type) type {
         }
 
         fn writeDateHeader(self: *Self) !void {
-            const seconds = std.time.epoch.EpochSeconds{ .secs = @intCast(std.time.timestamp()) };
+            const header_name = "Date: ";
+            try self.writer.writeAll(header_name);
+            try self.writeDate(@intCast(std.time.timestamp()));
+            try self.writer.writeAll("\r\n");
+
+            self.bytes_written += comptime (header_name.len + 2); // the date header is always 29 bytes long + 2 for CRLF
+        }
+
+        /// Writes a date in the format specified by RFC 7231, e.g. "Sun, 06 Nov 1994 08:49:37 GMT"
+        /// Adds 29 to bytes_written, since the date is always 29 bytes long
+        fn writeDate(self: *Self, seconds_since_epoch: u64) !void {
+            const seconds = std.time.epoch.EpochSeconds{ .secs = seconds_since_epoch };
             const seconds_since_midnight = seconds.getDaySeconds();
 
             const day = seconds.getEpochDay();
@@ -73,10 +85,7 @@ pub fn HttpResponseWriter(comptime TBody: type) type {
                 .dec => "Dec",
             };
 
-            const header_name = "Date: ";
-            try self.writer.writeAll(header_name);
-
-            try self.writer.print("{s}, {d:0>2} {s} {d} {d:0>2}:{d:0>2}:{d:0>2} GMT\r\n", .{
+            try self.writer.print("{s}, {d:0>2} {s} {d} {d:0>2}:{d:0>2}:{d:0>2} GMT", .{
                 day_of_week_str,
                 month_day.day_index + 1,
                 month_str,
@@ -86,7 +95,7 @@ pub fn HttpResponseWriter(comptime TBody: type) type {
                 seconds_since_midnight.getSecondsIntoMinute(),
             });
 
-            self.bytes_written += comptime (header_name.len + 29 + 2); // the date header is always 29 bytes long + 2 for CRLF
+            self.bytes_written += 29; // the date is always 29 bytes long
         }
 
         fn writeServerHeader(self: *Self) !void {
@@ -94,6 +103,119 @@ pub fn HttpResponseWriter(comptime TBody: type) type {
             try self.writer.writeAll(header);
 
             self.bytes_written += header.len;
+        }
+
+        fn writeCacheHeaders(self: *Self, cache_config: ?http.CacheConfig) !void {
+            if (cache_config) |cfg| {
+                if (cfg.mode == .no_store) {
+                    const header = "Cache-Control: no-store\r\n";
+                    try self.writer.writeAll(header);
+                    self.bytes_written += header.len + 2; // +2 for CRLF
+                    return;
+                }
+
+                const header_name = "Cache-Control: ";
+                try self.writer.writeAll(header_name);
+
+                var first_directive = true;
+                var directives_written_bytes: usize = 0;
+
+                if (cfg.visibility != .none) {
+                    const visibility_str = cfg.visibility.toString();
+                    try self.writer.writeAll(visibility_str);
+
+                    directives_written_bytes += visibility_str.len;
+                    first_directive = false;
+                }
+
+                if (cfg.max_age) |max_age| {
+                    if (!first_directive) {
+                        try self.writer.writeAll(", ");
+                        self.bytes_written += 2;
+                    }
+
+                    var buff: [64]u8 = undefined;
+                    const max_age_str = std.fmt.bufPrint(buff[0..], "max-age={d}", .{max_age}) catch {
+                        return error.MaxAgeTooLarge;
+                    };
+
+                    try self.writer.writeAll(max_age_str);
+                    directives_written_bytes += max_age_str.len;
+                    first_directive = false;
+                }
+
+                if (cfg.s_maxage) |s_maxage| {
+                    if (!first_directive) {
+                        try self.writer.writeAll(", ");
+                        self.bytes_written += 2;
+                    }
+
+                    var buff: [64]u8 = undefined;
+                    const s_maxage_str = std.fmt.bufPrint(buff[0..], "s-maxage={d}", .{s_maxage}) catch {
+                        return error.SMaxAgeTooLarge;
+                    };
+
+                    try self.writer.writeAll(s_maxage_str);
+                    directives_written_bytes += s_maxage_str.len;
+                    first_directive = false;
+                }
+
+                if (cfg.immutable) {
+                    if (cfg.max_age == null and cfg.s_maxage == null) {
+                        return error.ImmutableMustHaveMaxAge;
+                    }
+
+                    if (!first_directive) {
+                        try self.writer.writeAll(", ");
+                        self.bytes_written += 2;
+                    }
+
+                    const immutable_str = "immutable";
+                    try self.writer.writeAll(immutable_str);
+                    directives_written_bytes += immutable_str.len;
+                    first_directive = false;
+                }
+
+                if (cfg.no_cache) {
+                    if (!first_directive) {
+                        try self.writer.writeAll(", ");
+                        self.bytes_written += 2;
+                    }
+
+                    const no_cache_str = "no-cache";
+                    try self.writer.writeAll(no_cache_str);
+                    directives_written_bytes += no_cache_str.len;
+                    first_directive = false;
+                }
+
+                try self.writer.writeAll("\r\n");
+                self.bytes_written += header_name.len + directives_written_bytes + 2; // +2 for CRLF
+
+                if (cfg.etag) |etag| {
+                    const etag_header_name = "ETag: ";
+                    try self.writer.writeAll(etag_header_name);
+                    try self.writer.writeByte('"');
+                    try self.writer.writeAll(etag);
+                    try self.writer.writeByte('"');
+                    try self.writer.writeAll("\r\n");
+
+                    self.bytes_written += etag_header_name.len + etag.len + 2 + 2; // +2 for the quotes around the etag, +2 for CRLF
+                }
+
+                if (cfg.last_modified) |last_modified| {
+                    const last_modified_header_name = "Last-Modified: ";
+                    try self.writer.writeAll(last_modified_header_name);
+                    try self.writeDate(@intCast(last_modified));
+                    try self.writer.writeAll("\r\n");
+
+                    self.bytes_written += last_modified_header_name.len + 2;
+                }
+            } else {
+                // If no cache config is provided, default to no caching
+                const header = "Cache-Control: no-store\r\n";
+                try self.writer.writeAll(header);
+                self.bytes_written += header.len;
+            }
         }
 
         fn writeConnectionHeader(self: *Self, connection: http.Connection) !void {
