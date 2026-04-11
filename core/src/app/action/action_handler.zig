@@ -97,10 +97,13 @@ pub fn createActionHandler(comptime callback: anytype, comptime path: []const u8
                 }
             }
 
+            var arena = std.heap.ArenaAllocator.init(context.allocator);
+            const allocator = arena.allocator();
+
             if (params_info.TBody) |TBody| {
                 if (context.body) |body| {
                     var reader: std.io.Reader = .fixed(body);
-                    const payload = try Deserializer.fromContentType(TBody, context.body_content_type, context.allocator, &reader);
+                    const payload = try Deserializer.fromContentType(TBody, context.body_content_type, allocator, &reader);
 
                     if (params_info.body_field_name) |name| {
                         @field(params, name) = .{ .value = payload };
@@ -156,13 +159,13 @@ pub fn createActionHandler(comptime callback: anytype, comptime path: []const u8
                 if (context.query) |query| {
                     var query_reader = std.io.Reader.fixed(query);
                     @field(params, query_field_name) = .{
-                        .value = try Deserializer.FormUrlEncoded.deserialize(context.allocator, &query_reader, params_info.TQuery.?),
+                        .value = try Deserializer.FormUrlEncoded.deserialize(allocator, &query_reader, params_info.TQuery.?),
                     };
                 } else {
                     const empty_query: []const u8 = "";
                     var query_reader = std.io.Reader.fixed(empty_query);
                     @field(params, query_field_name) = .{
-                        .value = try Deserializer.FormUrlEncoded.deserialize(context.allocator, &query_reader, params_info.TQuery.?),
+                        .value = try Deserializer.FormUrlEncoded.deserialize(allocator, &query_reader, params_info.TQuery.?),
                     };
                 }
             }
@@ -173,11 +176,10 @@ pub fn createActionHandler(comptime callback: anytype, comptime path: []const u8
             try Serializer.toContentTypeFromAcceptHeader(fn_info.@"fn".return_type.?, context.accepts, context.output_writer, output);
 
             // freeing the memory allocated by the arena is safe after serializing because the serializer will need to copy any data it needs into the output writer anyways
-            // todo: use an arena alloc for deserialization and destroy it here
+            arena.deinit();
 
             // todo: serializers should return the number of bytes written
             // todo: remove counting serializer and implement it as a count function within serializers
-            // todo: implement a generic serializer like the deserializer that can serialize to any format based on content type
             return 0;
         }
     }.handler;
