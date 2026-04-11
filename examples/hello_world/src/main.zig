@@ -77,9 +77,17 @@ pub fn hello2(path: z.Path(struct { id: []const u8 })) bool {
     return true;
 }
 
-pub fn deeplyNestedPath(path: z.Path(struct { id: u32, language: []const u8, action: []const u8 })) bool {
+pub fn deeplyNestedPath(path: z.Path(struct { id: u32, language: []const u8, action: []const u8 })) struct {
+    message: []const u8,
+    success: bool,
+    some_value: ?u32,
+} {
     z.Logger.info("Hello from deeply nested path! Passed params: {} | {s} | {s}", .{ path.value.id, path.value.language, path.value.action });
-    return true;
+    return .{
+        .message = "Hello from deeply nested path!",
+        .success = true,
+        .some_value = path.value.id * 2,
+    };
 }
 
 fn lookup(router: *const z.Router, path: []const u8, method: z.HttpMethod) void {
