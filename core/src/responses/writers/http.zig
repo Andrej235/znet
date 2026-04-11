@@ -23,6 +23,8 @@ pub fn HttpResponseWriter(comptime TBody: type) type {
             };
 
             try self.writeStatusLine(response.version, response.status_code);
+            try self.writeDateHeader();
+            try self.writeServerHeader();
             try self.writeBody(response.body, response.content_type);
 
             return self.bytes_written;
@@ -38,6 +40,63 @@ pub fn HttpResponseWriter(comptime TBody: type) type {
             try self.writer.writeAll("\r\n");
 
             self.bytes_written += version_str.len + 1 + status_code_str.len + 2;
+        }
+
+        fn writeDateHeader(self: *Self) !void {
+            const seconds = std.time.epoch.EpochSeconds{ .secs = @intCast(std.time.timestamp()) };
+            const seconds_since_midnight = seconds.getDaySeconds();
+
+            const day = seconds.getEpochDay();
+            const year_day = day.calculateYearDay();
+            const month_day = year_day.calculateMonthDay();
+
+            const day_of_week_str = switch (day.day % 7) {
+                0 => "Thu", // Jan 1, 1970 was a Thursday, so day 0 is a Thursday
+                1 => "Fri",
+                2 => "Sat",
+                3 => "Sun",
+                4 => "Mon",
+                5 => "Tue",
+                6 => "Wed",
+                else => unreachable,
+            };
+
+            const month_str = switch (month_day.month) {
+                .jan => "Jan",
+                .feb => "Feb",
+                .mar => "Mar",
+                .apr => "Apr",
+                .may => "May",
+                .jun => "Jun",
+                .jul => "Jul",
+                .aug => "Aug",
+                .sep => "Sep",
+                .oct => "Oct",
+                .nov => "Nov",
+                .dec => "Dec",
+            };
+
+            const header_name = "Date: ";
+            try self.writer.writeAll(header_name);
+
+            try self.writer.print("{s}, {d:0>2} {s} {d} {d:0>2}:{d:0>2}:{d:0>2} GMT\r\n", .{
+                day_of_week_str,
+                month_day.day_index + 1,
+                month_str,
+                year_day.year,
+                seconds_since_midnight.getHoursIntoDay(),
+                seconds_since_midnight.getMinutesIntoHour(),
+                seconds_since_midnight.getSecondsIntoMinute(),
+            });
+
+            self.bytes_written += comptime (header_name.len + 29 + 2); // the date header is always 29 bytes long + 2 for CRLF
+        }
+
+        fn writeServerHeader(self: *Self) !void {
+            const header = "Server: znet/0.1.0\r\n";
+            try self.writer.writeAll(header);
+
+            self.bytes_written += header.len;
         }
 
         /// Writes headers needed for the response body, ends headers with an additional CRLF, and writes the body itself
