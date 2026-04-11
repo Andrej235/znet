@@ -38,15 +38,23 @@ pub const HttpMethod = enum(u8) {
 };
 
 pub const HttpVersion = enum {
-    Http10,
-    Http11,
-    Http2,
+    http10,
+    http11,
+    http2,
 
     pub fn fromString(s: []const u8) ?HttpVersion {
-        if (std.mem.eql(u8, s, "HTTP/1.0")) return .Http10;
-        if (std.mem.eql(u8, s, "HTTP/1.1")) return .Http11;
-        if (std.mem.eql(u8, s, "HTTP/2.0")) return .Http2;
+        if (std.mem.eql(u8, s, "HTTP/1.0")) return .http10;
+        if (std.mem.eql(u8, s, "HTTP/1.1")) return .http11;
+        if (std.mem.eql(u8, s, "HTTP/2.0")) return .http2;
         return null;
+    }
+
+    pub fn toString(self: HttpVersion) []const u8 {
+        return switch (self) {
+            .http10 => "HTTP/1.0",
+            .http11 => "HTTP/1.1",
+            .http2 => "HTTP/2.0",
+        };
     }
 };
 
@@ -123,5 +131,21 @@ pub const ResponseContentType = enum {
         }
 
         return best_content_type;
+    }
+
+    pub fn toString(self: ResponseContentType) []const u8 {
+        return switch (self) {
+            .json => "application/json",
+            .octet_stream => "application/octet-stream",
+            .text => "text/plain",
+        };
+    }
+
+    pub fn toStringUtf8(self: ResponseContentType) []const u8 {
+        return switch (self) {
+            .json => "application/json; charset=utf-8",
+            .octet_stream => "application/octet-stream; charset=utf-8",
+            .text => "text/plain; charset=utf-8",
+        };
     }
 };
