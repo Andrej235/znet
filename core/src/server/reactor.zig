@@ -363,11 +363,12 @@ pub fn Reactor(comptime TApp: type) type {
                                                     Logger.warn("Action at {s} failed with error: {}", .{ m.action.path, err });
                                                     continue;
                                                 };
+                                                std.debug.print("\n--------------------\n{s}\n--------------------\n\n", .{self.current_output_buffer[0..response_payload_len]});
 
                                                 // release the input buffer
                                                 self.input_buffer_pool.release(job.buffer_idx);
 
-                                                const response_data = self.current_output_buffer[0 .. MessageHeadersByteSize.Response + response_payload_len];
+                                                const response_data = self.current_output_buffer[0..response_payload_len];
 
                                                 // response_data will be freed by the io thread after sending
                                                 client.enqueueMessage(OutMessage{
@@ -430,7 +431,7 @@ pub fn Reactor(comptime TApp: type) type {
                                     }
 
                                     var writer: std.Io.Writer = .fixed(self.current_output_buffer);
-                                    action.handler(
+                                    try action.handler(
                                         ReactorContext{
                                             .allocator = self.allocator,
                                             .input_buffer_pool = self.input_buffer_pool,

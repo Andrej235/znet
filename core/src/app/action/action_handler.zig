@@ -8,6 +8,8 @@ const Request = @import("../../server/requests/request.zig").Request;
 const RequestHeaders = @import("../../message_headers/request_headers.zig").RequestHeaders;
 const serializeMessageHeaders = @import("../../message_headers/serialize_message_headers.zig").serializeMessageHeaders;
 
+const ResponseContentType = @import("../../server/requests/http.zig").ResponseContentType;
+
 const Serializer = @import("../../serialization/serializer.zig");
 const Deserializer = @import("../../serialization/deserializer.zig");
 
@@ -184,14 +186,16 @@ pub fn createActionHandler(comptime callback: anytype, comptime path: []const u8
             }
 
             const output = @call(.always_inline, callback, params);
-            try Serializer.toContentTypeFromAcceptHeader(fn_info.@"fn".return_type.?, context.accepts, context.output_writer, output);
+            const content_type = if (context.accepts) |accepts| (ResponseContentType.fromAcceptHeader(accepts) orelse ResponseContentType.json) else ResponseContentType.json;
+            const bytes_written = try Serializer.countForContentType(fn_info.@"fn".return_type.?, content_type, output);
+            try Serializer.toContentType(fn_info.@"fn".return_type.?, content_type, context.output_writer, output);
 
             // freeing the memory allocated by the arena is safe after serializing because the serializer will need to copy any data it needs into the output writer anyways
             arena.deinit();
 
             // todo: serializers should return the number of bytes written
             // todo: remove counting serializer and implement it as a count function within serializers
-            return 0;
+            return bytes_written;
         }
     }.handler;
 }

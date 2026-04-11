@@ -10,4 +10,17 @@ pub const Serializer = struct {
             }
         };
     }
+
+    pub fn count(comptime T: type, data: T) SerializationErrors!usize {
+        var null_writer = std.io.Writer.Discarding.init(&[_]u8{});
+        const writer = &null_writer.writer;
+
+        const fmt = std.json.fmt(data, .{});
+        fmt.format(writer) catch |err| {
+            switch (err) {
+                else => return SerializationErrors.SerializationFailed,
+            }
+        };
+        return null_writer.fullCount();
+    }
 };
