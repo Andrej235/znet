@@ -146,7 +146,7 @@ pub fn main() !void {
 // ================= Bench functions =================
 
 inline fn ser(comptime T: type, v: T) void {
-    _ = znet.CountingSerializer.serialize(T, v) catch unreachable;
+    _ = znet.Serializer.count(T, v) catch unreachable;
 }
 
 // Scalars

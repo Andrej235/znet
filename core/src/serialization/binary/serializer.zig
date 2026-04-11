@@ -205,4 +205,161 @@ pub const Serializer = struct {
 
         try serializeInt(writer, @as(@Type(.{ .int = int_info_padded }), @intCast(@intFromEnum(data))), int_info_padded);
     }
+
+    pub fn count(comptime T: type, data: T) SerializationErrors!u32 {
+        const info = @typeInfo(T);
+
+        return (comptime tryCountInComptime(T)) orelse switch (info) {
+            .@"struct" => |struct_info| try countStruct(data, struct_info),
+            .@"union" => |union_info| try countUnion(data, union_info),
+            .array => |array_info| try countArray(data, array_info),
+            .pointer => |pointer_info| try countPointer(data, pointer_info),
+            .optional => |optional_info| try countOptional(data, optional_info),
+            .error_union => |error_union_info| try countErrorUnion(data, error_union_info),
+            .bool => 1,
+            .int => |int_info| countInt(int_info),
+            .float => |float_info| float_info.bits / 8,
+            .@"enum" => |enum_info| countEnum(enum_info),
+            .comptime_int => @compileError("Comptime integers cannot be countd directly, consider converting to a regular integer type before serialization"),
+            .comptime_float => @compileError("Comptime floats cannot be countd directly, consider converting to a regular float type before serialization"),
+            .error_set => @compileError("Direct serialization of error sets is not supported, consider using an error union instead"),
+            .vector => @compileError("Vectors are not a data format, they are a computation type tied to target ABI / SIMD width and thus cannot be countd directly. Consider converting to an array or slice before serialization"),
+            .frame => @compileError("Frames cannot be countd"),
+            .@"anyframe" => @compileError("AnyFrames cannot be countd"),
+            .void => @compileError("Void type cannot be countd, if you want to count nothing, consider using null or an empty struct"),
+            .null => @compileError("Null type cannot be countd, consider using an optional type instead"),
+            .undefined => @compileError("Undefined represents an uninitialized value and cannot be countd"),
+            .noreturn => @compileError("Noreturn type cannot be countd"),
+            .type => @compileError("Types only exist at compile time and cannot be countd"),
+            .@"fn" => @compileError("Functions cannot be countd"),
+            .@"opaque" => @compileError("Opaque types cannot be countd due to lack of type information at compile time"),
+            .enum_literal => @compileError("Enum literals cannot be countd directly, try using the enum type instead"),
+        };
+    }
+
+    inline fn countStruct(data: anytype, comptime struct_info: std.builtin.Type.Struct) SerializationErrors!u32 {
+        var total_bytes: u32 = 0;
+        inline for (struct_info.fields) |field| {
+            const field_value = @field(data, field.name);
+            total_bytes += try count(field.type, field_value);
+        }
+        return total_bytes;
+    }
+
+    inline fn countUnion(data: anytype, comptime union_info: std.builtin.Type.Union) SerializationErrors!u32 {
+        if (union_info.tag_type) |enum_tag_type| {
+            const active = @intFromEnum(data);
+            inline for (union_info.fields, 0..) |field, index| {
+                const current = @typeInfo(enum_tag_type).@"enum".fields[index].value;
+
+                if (active == current) {
+                    const field_value = @field(data, field.name);
+                    return try count(field.type, field_value) + countEnum(@typeInfo(enum_tag_type).@"enum");
+                }
+            }
+
+            return error.InvalidUnionTag;
+        } else {
+            @compileError("Untagged unions are not supported");
+        }
+    }
+
+    inline fn countArray(data: anytype, comptime array_info: std.builtin.Type.Array) SerializationErrors!u32 {
+        const len = array_info.len;
+        var size: u32 = 0;
+        comptime if (tryCountInComptime(array_info.child)) |child_size| {
+            return len * child_size;
+        };
+
+        for (0..len) |i| {
+            size += try count(array_info.child, data[i]);
+        }
+        return size;
+    }
+
+    inline fn countPointer(data: anytype, comptime pointer_info: std.builtin.Type.Pointer) SerializationErrors!u32 {
+        return blk: switch (pointer_info.size) {
+            .one => {
+                comptime if (tryCountInComptime(@TypeOf(data))) |child_size| {
+                    break :blk child_size;
+                };
+
+                break :blk try count(pointer_info.child, data.*);
+            },
+            .many => {
+                @compileError("Many pointers are not supported, consider using a slice instead");
+            },
+            .c => {
+                @compileError("C pointers are not supported, consider using a slice instead");
+            },
+            .slice => {
+                const len = data.len;
+                var size: u32 = @sizeOf(@TypeOf(len));
+
+                if (comptime tryCountInComptime(pointer_info.child)) |child_size| {
+                    break :blk child_size * @as(u32, @intCast(len)) + size;
+                }
+
+                for (0..len) |i| {
+                    size += try count(pointer_info.child, data[i]);
+                }
+                break :blk size;
+            },
+        };
+    }
+
+    inline fn tryCountInComptime(comptime T: type) ?u32 {
+        comptime {
+            const info = @typeInfo(T);
+            return switch (info) {
+                .@"struct" => |struct_info| blk: {
+                    var total_bytes: u32 = 0;
+                    for (struct_info.fields) |field| {
+                        total_bytes += tryCountInComptime(field.type) orelse break :blk null;
+                    }
+                    break :blk total_bytes;
+                },
+
+                .array => |array_info| blk: {
+                    const child = tryCountInComptime(array_info.child) orelse break :blk null;
+                    break :blk child * @as(u32, array_info.len);
+                },
+
+                .pointer => |pointer_info| switch (pointer_info.size) {
+                    .one => tryCountInComptime(pointer_info.child),
+                    else => null,
+                },
+
+                .bool => 1,
+                .float => |float_info| float_info.bits / 8,
+                .int => |int_info| countInt(int_info),
+                .@"enum" => |enum_info| countEnum(enum_info),
+                else => null,
+            };
+        }
+    }
+
+    inline fn countOptional(data: anytype, comptime optional_info: std.builtin.Type.Optional) SerializationErrors!u32 {
+        return if (data) |d| 1 + try count(optional_info.child, d) else 1;
+    }
+
+    inline fn countErrorUnion(data: anytype, comptime error_union_info: std.builtin.Type.ErrorUnion) SerializationErrors!u32 {
+        const safe_data = data catch return 3; // 1 byte for bool + 2 bytes for u16 error code
+        return try count(error_union_info.payload, safe_data) + 1;
+    }
+
+    inline fn countEnum(comptime enum_info: std.builtin.Type.Enum) u32 {
+        const int_info = @typeInfo(enum_info.tag_type).int;
+        if (int_info.signedness == .signed) {
+            @compileError("Signed enum tag types are not supported");
+        }
+
+        const bit_size_with_padding = comptime (int_info.bits + 7) / 8 * 8;
+        return bit_size_with_padding / 8;
+    }
+
+    inline fn countInt(comptime int_info: std.builtin.Type.Int) u32 {
+        const bit_size_with_padding = comptime (int_info.bits + 7) / 8 * 8;
+        return bit_size_with_padding / 8;
+    }
 };

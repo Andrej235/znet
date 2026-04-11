@@ -7,7 +7,6 @@ const MessageHeadersByteSize = @import("../message_headers/message_headers.zig")
 const serializeHeaders = @import("../message_headers/serialize_message_headers.zig").serializeMessageHeaders;
 
 const Serializer = @import("../serialization/binary/serializer.zig").Serializer;
-const CountingSerializer = @import("../serialization/binary/counting_serializer.zig").Serializer;
 const Deserializer = @import("../serialization/binary/deserializer.zig").Deserializer;
 
 const Queue = @import("../queues/mpsc_queue.zig").Queue;
@@ -121,7 +120,7 @@ pub const ClientInterface = struct {
         const request = try self.pending_requests_map.acquire();
         const promise = TPromise.init(request);
 
-        const payload_len = try CountingSerializer.serialize(@TypeOf(args), args);
+        const payload_len = try Serializer.count(@TypeOf(args), args);
         const headers = MessageHeaders{
             .Request = .{
                 .version = app_version,

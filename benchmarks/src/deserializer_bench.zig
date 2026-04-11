@@ -135,7 +135,7 @@ var deserializer: znet.Deserializer = undefined;
 
 fn serialize(comptime value: anytype) []const u8 {
     znet.Serializer.serialize(@TypeOf(value), &writer, value) catch unreachable;
-    const payload_len = znet.CountingSerializer.serialize(@TypeOf(value), value) catch unreachable;
+    const payload_len = znet.Serializer.count(@TypeOf(value), value) catch unreachable;
 
     if (current_offset + payload_len > buffer.len) unreachable;
     const data = buffer[current_offset .. current_offset + payload_len];

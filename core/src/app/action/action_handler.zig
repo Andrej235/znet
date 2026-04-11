@@ -13,7 +13,6 @@ const ResponseContentType = @import("../../server/requests/http.zig").ResponseCo
 const Serializer = @import("../../serialization/serializer.zig");
 const Deserializer = @import("../../serialization/deserializer.zig");
 
-const CountingSerializer = @import("../../serialization/binary/counting_serializer.zig").Serializer;
 const ReactorContext = @import("../../server/reactor.zig").ReactorContext;
 const BufferPool = @import("../../utils/buffer_pool.zig").BufferPool;
 const Waker = @import("../../waker/waker.zig");
@@ -193,8 +192,6 @@ pub fn createActionHandler(comptime callback: anytype, comptime path: []const u8
             // freeing the memory allocated by the arena is safe after serializing because the serializer will need to copy any data it needs into the output writer anyways
             arena.deinit();
 
-            // todo: serializers should return the number of bytes written
-            // todo: remove counting serializer and implement it as a count function within serializers
             return bytes_written;
         }
     }.handler;
