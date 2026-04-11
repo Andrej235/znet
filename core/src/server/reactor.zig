@@ -346,6 +346,8 @@ pub fn Reactor(comptime TApp: type) type {
                                                         .allocator = self.allocator,
                                                         .waker = self.waker,
 
+                                                        .connection = http_request.connection,
+
                                                         .body = http_request.body,
                                                         .body_content_type = http_request.content_type,
 
@@ -363,7 +365,6 @@ pub fn Reactor(comptime TApp: type) type {
                                                     Logger.warn("Action at {s} failed with error: {}", .{ m.action.path, err });
                                                     continue;
                                                 };
-                                                std.debug.print("\n--------------------\n{s}\n--------------------\n\n", .{self.current_output_buffer[0..response_payload_len]});
 
                                                 // release the input buffer
                                                 self.input_buffer_pool.release(job.buffer_idx);

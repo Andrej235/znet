@@ -1,9 +1,12 @@
 const std = @import("std");
 
+const Connection = @import("../http/connection.zig").Connection;
+
 pub const HttpRequest = struct {
     method: HttpMethod,
     path: []const u8,
     version: HttpVersion,
+    connection: Connection,
 
     body: ?[]const u8,
     content_type: ?ContentType,

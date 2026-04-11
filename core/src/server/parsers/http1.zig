@@ -7,6 +7,7 @@ const Request = @import("../../requests/request.zig").Request;
 const Method = @import("../../requests/http.zig").HttpMethod;
 const Version = @import("../../requests/http.zig").HttpVersion;
 const ContentType = @import("../../requests/http.zig").ContentType;
+const Connection = @import("../../http/connection.zig").Connection;
 
 const Logger = @import("../../logger/logger.zig").Logger.scoped(.http1_parser);
 
@@ -30,6 +31,8 @@ pub const Http1Parser = struct {
     path: ?[]const u8 = null,
 
     state: HttpState = .request_line,
+
+    connection: Connection = .keep_alive, // http 1.1 assumes keep-alive connections by default
 
     body_size: ?usize = null,
     transfer_encoding: TransferEncoding = .none,
@@ -139,6 +142,9 @@ pub const Http1Parser = struct {
                         .method = self.method.?,
                         .version = self.version.?,
                         .path = self.path.?,
+                        
+                        .connection = self.connection,
+
                         .body = buf[self.parse_offset .. self.parse_offset + size],
                         .accepts = self.accepts,
                         .content_type = self.content_type,
@@ -156,6 +162,9 @@ pub const Http1Parser = struct {
                     .method = self.method.?,
                     .version = self.version.?,
                     .path = self.path.?,
+                    
+                    .connection = self.connection,
+                    
                     .body = null,
                     .content_type = self.content_type,
                     .accepts = self.accepts,
@@ -170,6 +179,9 @@ pub const Http1Parser = struct {
         self.method = null;
         self.version = null;
         self.path = null;
+
+        self.connection = .keep_alive;
+
         self.state = .request_line;
         self.body_size = null;
         self.transfer_encoding = .none;
@@ -206,6 +218,14 @@ pub const Http1Parser = struct {
 
         if (std.ascii.eqlIgnoreCase(trimmed_name, "Accept")) {
             self.accepts = trimmed_value;
+            return;
+        }
+
+        if (std.ascii.eqlIgnoreCase(trimmed_name, "Connection")) {
+            if (std.ascii.eqlIgnoreCase(trimmed_value, "close")) {
+                self.connection = .close;
+            }
+
             return;
         }
     }

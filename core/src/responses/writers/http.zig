@@ -5,6 +5,7 @@ const HttpResponse = @import("../http.zig").HttpResponse;
 const StatusCode = @import("../../http/status_code.zig").StatusCode;
 const HttpVersion = @import("../../requests/http.zig").HttpVersion;
 const ContentType = @import("../../requests/http.zig").ResponseContentType;
+const Connection = @import("../../http/connection.zig").Connection;
 
 const Serializer = @import("../../serialization/serializer.zig");
 
@@ -25,6 +26,7 @@ pub fn HttpResponseWriter(comptime TBody: type) type {
             try self.writeStatusLine(response.version, response.status_code);
             try self.writeDateHeader();
             try self.writeServerHeader();
+            try self.writeConnectionHeader(response.connection);
             try self.writeBody(response.body, response.content_type);
 
             return self.bytes_written;
@@ -97,6 +99,17 @@ pub fn HttpResponseWriter(comptime TBody: type) type {
             try self.writer.writeAll(header);
 
             self.bytes_written += header.len;
+        }
+
+        fn writeConnectionHeader(self: *Self, connection: Connection) !void {
+            const header_name = "Connection: ";
+            const header_value = connection.toString();
+
+            try self.writer.writeAll(header_name);
+            try self.writer.writeAll(header_value);
+            try self.writer.writeAll("\r\n");
+
+            self.bytes_written += header_name.len + header_value.len + 2;
         }
 
         /// Writes headers needed for the response body, ends headers with an additional CRLF, and writes the body itself

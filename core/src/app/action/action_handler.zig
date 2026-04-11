@@ -34,7 +34,7 @@ pub fn createActionHandler(comptime callback: anytype, comptime path: []const u8
             // try Serializer.toContentType(fn_info.@"fn".return_type.?, response_content_type, context.output_writer, output);
             const TOut = fn_info.@"fn".return_type.?;
             const response = Response(TOut){
-                .http = .init(StatusCode.ok, context.accepts, output),
+                .http = .init(StatusCode.ok, context.connection, context.accepts, output),
             };
             const bytes_written = try ResponseWriter.write(TOut, response, context.output_writer);
 
