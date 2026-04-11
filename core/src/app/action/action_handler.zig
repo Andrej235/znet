@@ -80,13 +80,18 @@ pub fn createActionHandler(comptime callback: anytype, comptime path: []const u8
                 break :blk di.?.SliceScope(services);
             };
 
+            // Inject services using DI container if available, otherwise fail at compile time if there are any parameters that cannot be resolved
             var scope: if (TScope) |TS| TS else void = if (TScope) |TS| TS.init() else {};
             var params: TParams = undefined;
 
             inline for (param_fields) |field| {
                 const T = field.type;
-                if (comptime @typeInfo(T) == .@"struct" and @hasDecl(T, "param_kind") and @hasDecl(T, "Type"))
-                    comptime continue;
+
+                comptime if (T == std.mem.Allocator)
+                    continue;
+
+                comptime if (@typeInfo(T) == .@"struct" and @hasDecl(T, "param_kind") and @hasDecl(T, "Type"))
+                    continue;
 
                 // inject
                 if (di) |d| {
@@ -97,9 +102,14 @@ pub fn createActionHandler(comptime callback: anytype, comptime path: []const u8
                 }
             }
 
+            // Inject allocator
             var arena = std.heap.ArenaAllocator.init(context.allocator);
             const allocator = arena.allocator();
+            if (params_info.allocator_field_name) |field_name| {
+                @field(params, field_name) = allocator;
+            }
 
+            // Inject and deserialize body if needed
             if (params_info.TBody) |TBody| {
                 if (context.body) |body| {
                     var reader: std.io.Reader = .fixed(body);
@@ -113,6 +123,8 @@ pub fn createActionHandler(comptime callback: anytype, comptime path: []const u8
                 }
             }
 
+            // Extract path parameters from the path and inject them
+            // They need to be extracted in the order they appear in the path
             const sorted_path_param_fields: []const std.builtin.Type.StructField = comptime blk: {
                 if (params_info.TPath == null) {
                     break :blk &[_]std.builtin.Type.StructField{};
@@ -155,6 +167,7 @@ pub fn createActionHandler(comptime callback: anytype, comptime path: []const u8
                 @field(params, path_field_name) = .{ .value = path_param };
             }
 
+            // Inject and deserialize query parameters if needed
             if (params_info.query_field_name) |query_field_name| {
                 if (context.query) |query| {
                     var query_reader = std.io.Reader.fixed(query);
@@ -169,8 +182,6 @@ pub fn createActionHandler(comptime callback: anytype, comptime path: []const u8
                     };
                 }
             }
-
-            // todo: inject an arena allocator into the handler if asked
 
             const output = @call(.always_inline, callback, params);
             try Serializer.toContentTypeFromAcceptHeader(fn_info.@"fn".return_type.?, context.accepts, context.output_writer, output);
@@ -196,6 +207,8 @@ fn getParamsInfo(comptime TFn: type) struct {
 
     TQuery: ?type,
     query_field_name: ?[]const u8,
+
+    allocator_field_name: ?[]const u8,
 } {
     comptime {
         const fn_info = @typeInfo(TFn).@"fn";
@@ -209,6 +222,8 @@ fn getParamsInfo(comptime TFn: type) struct {
 
         var TQuery: ?type = null;
         var query_field_name: ?[]const u8 = null;
+
+        var allocator_field_name: ?[]const u8 = null;
 
         for (fn_info.params, 0..) |param, idx| {
             if (param.type) |T| {
@@ -239,6 +254,8 @@ fn getParamsInfo(comptime TFn: type) struct {
                             query_field_name = field_name;
                         },
                     }
+                } else if (T == std.mem.Allocator) {
+                    allocator_field_name = field_name;
                 }
             }
         }
@@ -254,6 +271,8 @@ fn getParamsInfo(comptime TFn: type) struct {
 
             .TQuery = TQuery,
             .query_field_name = query_field_name,
+
+            .allocator_field_name = allocator_field_name,
         };
     }
 }

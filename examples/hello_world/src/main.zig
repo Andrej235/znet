@@ -95,7 +95,15 @@ fn lookup(router: *const z.Router, path: []const u8, method: z.HttpMethod) void 
     }
 }
 
-fn post(body: z.Body(struct { message: []const u8 })) struct { success: bool } {
-    z.Logger.info("Hello {s}", .{body.value.message});
+fn post(body: z.Body(struct { message: []const u8 }), allocator: std.mem.Allocator) struct { success: bool } {
+    const msg = allocator.alloc(u8, body.value.message.len + 6) catch {
+        z.Logger.err("Failed to allocate memory for response message", .{});
+        return .{ .success = false };
+    };
+
+    @memcpy(msg[0..6], "hello ");
+    @memcpy(msg[6..], body.value.message);
+
+    z.Logger.info("Hi there, {s}", .{msg});
     return .{ .success = true };
 }
