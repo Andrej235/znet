@@ -40,8 +40,6 @@ pub fn createActionHandler(comptime callback: anytype, comptime path: []const u8
 
             switch (parse_args_result) {
                 .success => |args| {
-                    std.debug.print("Success\n", .{});
-                    
                     const output = @call(.always_inline, callback, args);
 
                     const TOut = fn_info.@"fn".return_type.?;
@@ -51,8 +49,6 @@ pub fn createActionHandler(comptime callback: anytype, comptime path: []const u8
                     bytes_written = try ResponseWriter.write(TOut, response, context.output_writer);
                 },
                 .failure => |errors| {
-                    std.debug.print("Failure\n", .{});
-                    
                     const response = Response(TArgs.ErrorsResult){
                         .http = .init(http.StatusCode.bad_request, context.connection, context.accepts, errors),
                     };

@@ -9,6 +9,9 @@ const ParamKind = @import("../params/param_kind.zig").ParamKind;
 const Deserializer = @import("../../serialization/deserializer.zig");
 const Serializer = @import("../../serialization/serializer.zig");
 
+const ValidationErrors = @import("./validation_errors.zig").ValidationErrors;
+const ValidationErrorsResponse = @import("./validation_errors.zig").ValidationErrorsResponse;
+
 pub fn ActionHandlerArgs(comptime TFn: type, comptime path: []const u8, comptime di: ?DIContainer) type {
     const fn_info = @typeInfo(TFn);
     if (fn_info != .@"fn") @compileError("Expected function type");
@@ -101,8 +104,8 @@ pub fn ActionHandlerArgs(comptime TFn: type, comptime path: []const u8, comptime
                         @field(params, name) = .{ .value = payload };
                     }
                 } else {
-                    const success = validation_errors.add(.body, null, "Missing request body"); // todo:? maybe don't return here?
-                    
+                    const success = validation_errors.add(.body, null, "Missing request body");
+
                     if (!success) {
                         return .{ .failure = validation_errors.toResponseBody() };
                     }
@@ -174,16 +177,9 @@ pub fn ActionHandlerArgs(comptime TFn: type, comptime path: []const u8, comptime
             // Inject and deserialize query parameters if needed
             if (params_info.query_field_name) |query_field_name| {
                 var query_reader = std.io.Reader.fixed(if (context.query) |q| q else "");
-                const query_params = Deserializer.FormUrlEncoded.deserialize(allocator, &query_reader, params_info.TQuery.?) catch blk: {
-                    // todo: implement detailed validation errors for query params, to do this I need to first separate query param deserialization
-                    // from the common deserialization interface in a way that would allow me to reuse the url decoding and type parsing logic from the deserializer
-                    const success = validation_errors.add(.query, null, "Invalid query parameters");
-                    if (!success) {
-                        return .{ .failure = validation_errors.toResponseBody() };
-                    }
+                const query_params = deserialize(allocator, &query_reader, validation_errors, params_info.TQuery.?) catch null;
 
-                    break :blk null;
-                };
+                // no need for early return in case the errors were truncated because this is the last step of validation
 
                 if (query_params) |q| {
                     @field(params, query_field_name) = .{ .value = q };
@@ -357,82 +353,73 @@ inline fn parsePathParam(comptime T: type, value: []const u8) ParsePathParamErro
     }
 }
 
-const ErrorSource = enum {
-    path,
-    query,
-    body,
-};
-
-const ErrorDetails = struct {
-    source: ErrorSource,
-    field: ?[]const u8,
-    issue: []const u8,
-};
-
-const ValidationErrorsResponse = struct {
-    message: []const u8,
-    details: ?[]const ErrorDetails,
-    truncated: bool,
-};
-
-const ValidationErrors = struct {
-    message_buffer: [1024]u8 = undefined, // todo: make configurable
-
-    consumed_bytes: usize = 0,
-    errors_count: usize = 0,
-
-    message: []const u8 = undefined,
-    details: [16]ErrorDetails = undefined, // todo: make configurable
-    truncated: bool = false, // indicates that there were more errors that are not included in the details
-
-    pub fn init(message: []const u8) error{MessageTooLong}!ValidationErrors {
-        var errors = ValidationErrors{
-            .consumed_bytes = message.len,
-        };
-
-        if (message.len > errors.message_buffer.len) {
-            return error.MessageTooLong;
-        }
-
-        @memcpy(errors.message_buffer[0..message.len], message);
-        errors.message = errors.message_buffer[0..message.len];
-        errors.consumed_bytes = message.len;
-
-        return errors;
+fn deserialize(allocator: std.mem.Allocator, reader: *std.Io.Reader, errors: *ValidationErrors, comptime T: type) !T {
+    const info = @typeInfo(T);
+    if (info != .@"struct") {
+        @compileError("FormUrlEncodedDeserializer can only deserialize into structs");
     }
 
-    /// Returns true if the error was added, false if there was no more space to add it
-    /// If adding fails, truncated will be set to true to indicate that there were more errors that are not included in the details
-    pub fn add(self: *ValidationErrors, source: ErrorSource, field: ?[]const u8, issue: []const u8) bool {
-        const needed_space = if (field) |f| f.len + issue.len else issue.len;
-        if (self.errors_count >= self.details.len or self.consumed_bytes + needed_space > self.message_buffer.len) {
-            self.truncated = true;
-            return false;
+    var valid = true;
+    var result: T = undefined;
+    const fields = info.@"struct".fields;
+
+    inline for (fields) |field| {
+        comptime if (@typeInfo(field.type) != .optional) continue;
+
+        // initialize all optionals to null in case they are not present in the input
+        // this prevents undefined behavior from uninitialized memory
+        @field(result, field.name) = null;
+    }
+    var seen = [_]bool{false} ** fields.len;
+
+    while (reader.takeDelimiter('&') catch |err| blk: {
+        Logger.err("Failed to read key-value pair: {}", .{err});
+        break :blk null;
+    }) |kv| {
+        const eq_index = std.mem.indexOfScalar(u8, kv, '=');
+        const key = if (eq_index) |i| kv[0..i] else kv;
+        const value = if (eq_index) |i| kv[i + 1 ..] else &[_]u8{};
+
+        inline for (fields, 0..) |field, i| {
+            if (std.mem.eql(u8, field.name, key)) {
+                const deserialized_value = Deserializer.FormUrlEncoded.deserializeValue(allocator, value, field.type) catch |err| blk: {
+                    const success = switch (err) {
+                        Deserializer.DeserializerErrors.IntegerDeserializationFailed => errors.add(.query, field.name, "Expected a valid integer"),
+                        Deserializer.DeserializerErrors.FloatDeserializationFailed => errors.add(.query, field.name, "Expected a valid float"),
+                        else => errors.add(.query, field.name, "Invalid value for query parameter"),
+                    };
+
+                    if (!success) {
+                        return error.InvalidQueryParameters;
+                    }
+
+                    valid = false;
+                    break :blk null;
+                };
+
+                if (deserialized_value) |v|
+                    @field(result, field.name) = v;
+
+                seen[i] = true;
+                break;
+            }
         }
-
-        if (field) |f| {
-            @memcpy(self.message_buffer[self.consumed_bytes .. self.consumed_bytes + f.len], f);
-            @memcpy(self.message_buffer[self.consumed_bytes + f.len .. self.consumed_bytes + needed_space], issue);
-        } else {
-            @memcpy(self.message_buffer[self.consumed_bytes .. self.consumed_bytes + issue.len], issue);
-        }
-
-        self.details[self.errors_count] = .{
-            .source = source,
-            .field = if (field) |f| self.message_buffer[self.consumed_bytes .. self.consumed_bytes + f.len] else null,
-            .issue = if (field) |f| self.message_buffer[self.consumed_bytes + f.len .. self.consumed_bytes + needed_space] else self.message_buffer[self.consumed_bytes .. self.consumed_bytes + issue.len],
-        };
-
-        self.consumed_bytes += needed_space;
-        self.errors_count += 1;
-        return true;
     }
 
-    pub fn toResponseBody(self: *const ValidationErrors) ValidationErrorsResponse {
-        return .{
-            .message = self.message,
-            .details = if (self.errors_count == 0) null else self.details[0..self.errors_count],
-            .truncated = self.truncated,
-        };
+    inline for (seen, 0..) |s, i| {
+        comptime if (@typeInfo(fields[i].type) == .optional) continue;
+
+        if (!s) {
+            const success = errors.add(.query, fields[i].name, "Missing required query parameter");
+            if (!success) {
+                valid = false;
+                return Deserializer.Errors.MissingRequiredField;
+            }
+        }
     }
-};
+
+    if (!valid)
+        return error.InvalidQueryParameters;
+
+    return result;
+}

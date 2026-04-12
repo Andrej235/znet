@@ -4,7 +4,8 @@ const ContentType = @import("../http/http.zig").RequestContentType;
 pub const Json = @import("json/deserializer.zig").Deserializer;
 pub const FormUrlEncoded = @import("form_url_encoded/deserializer.zig").Deserializer;
 
-pub const Errors = @import("./errors.zig").DeserializationErrors || error{
+pub const DeserializerErrors = @import("./errors.zig").DeserializationErrors;
+pub const Errors = DeserializerErrors || error{
     UnsupportedContentType,
 };
 

@@ -54,7 +54,7 @@ pub const Deserializer = struct {
         return result;
     }
 
-    fn deserializeValue(allocator: std.mem.Allocator, value: []const u8, T: type) DeserializationErrors!T {
+    pub fn deserializeValue(allocator: std.mem.Allocator, value: []const u8, T: type) DeserializationErrors!T {
         if (T == []const u8) {
             return value;
         }
