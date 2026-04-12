@@ -44,16 +44,6 @@ pub fn App(comptime scopes: anytype, comptime options: AppOptions) type {
         }
     }
 
-    const flat_scopes = comptime blk: {
-        var flat_scopes: []const type = &[_]type{};
-        for (scope_fields) |field| {
-            const Scope = @field(scopes, field.name);
-            flat_scopes = flat_scopes ++ Scope.flatten();
-        }
-
-        break :blk flat_scopes;
-    };
-
     return struct {
         pub const DIContainer = options.di;
 
@@ -73,27 +63,6 @@ pub fn App(comptime scopes: anytype, comptime options: AppOptions) type {
 
         pub fn compileRouter(allocator: std.mem.Allocator) !Router {
             return try Router.fromScopes(comptime compileServerCallTable(), allocator);
-        }
-
-        pub fn actionToId(comptime action_fn: anytype) ActionId {
-            comptime {
-                const action_method_type_info = @typeInfo(@TypeOf(action_fn));
-                if (action_method_type_info != .@"fn") {
-                    @compileError("actionToId only accepts function pointers");
-                }
-
-                for (flat_scopes, 0..) |TScope, scope_idx| {
-                    const lookup_fn = @field(TScope, "lookupAction");
-                    if (lookup_fn(action_fn)) |action_idx| {
-                        return .{
-                            .scope_idx = scope_idx,
-                            .action_idx = action_idx,
-                        };
-                    }
-                }
-
-                @compileError("No action found with the provided method");
-            }
         }
     };
 }

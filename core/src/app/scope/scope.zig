@@ -17,7 +17,7 @@ pub fn Scope(comptime name: ScopeName, comptime children: anytype, comptime opti
     for (children_arr, 0..) |Child, i| {
         validateScope(Child) catch |scope_err| { // not a scope
             validateAction(Child) catch |action_err| { // not an action
-                @compileError(std.fmt.comptimePrint("Child at index {} of scope {s} is invalid: {s} is not a scope ({s}) nor an action ({s})", .{ i, string_name, @errorName(scope_err), @errorName(action_err) }));
+                @compileError(std.fmt.comptimePrint("Child at index {} of scope {s} is not a scope ({s}) nor an action ({s})", .{ i, string_name, @errorName(scope_err), @errorName(action_err) }));
             };
         };
 
@@ -54,36 +54,6 @@ pub fn Scope(comptime name: ScopeName, comptime children: anytype, comptime opti
                 return &[_]RuntimeScope{self} ++ runtime_scopes;
             }
         }
-
-        pub fn flatten() []const type {
-            comptime {
-                var child_scopes: []const type = &[_]type{};
-                var child_actions: []const type = &[_]type{};
-
-                for (children_arr) |Child| {
-                    if (isScope(Child)) {
-                        child_scopes = child_scopes ++ Child.flatten();
-                    } else {
-                        child_actions = child_actions ++ &[_]type{Child};
-                    }
-                }
-
-                return &[_]type{Scope(name, child_actions, options)} ++ child_scopes;
-            }
-        }
-
-        /// Can ONLY be used on a flat scope, assumes all children are actions
-        pub fn lookupAction(comptime handler: anytype) ?u16 {
-            comptime {
-                for (children_arr, 0..) |TChild, i| {
-                    const lookup_fn = @field(TChild, "compare");
-                    if (lookup_fn(handler))
-                        return i;
-                }
-
-                return null;
-            }
-        }
     };
 }
 
@@ -93,16 +63,6 @@ pub const ScopeValidationError = error{
     ScopeCompileFnInvalidReturnType,
     ScopeCompileFnInvalidParameterCount,
     ScopeCompileFnInvalidParameterType,
-
-    ScopeMissingFlattenFn,
-    ScopeFlattenFnNotFunction,
-    ScopeFlattenFnInvalidReturnType,
-    ScopeFlattenFnInvalidParameterCount,
-
-    ScopeMissingLookupActionFn,
-    ScopeLookupActionFnNotFunction,
-    ScopeLookupActionFnInvalidReturnType,
-    ScopeLookupActionFnInvalidParameterCount,
 
     ScopeMissingScopeName,
     ScopeInvalidScopeNameType,
@@ -131,44 +91,6 @@ pub fn validateScope(comptime TScope: type) !void {
 
         if (compile_fn_type_info.@"fn".params[0].type != ResolvedScopeOptions) {
             return ScopeValidationError.ScopeCompileFnInvalidParameterType;
-        }
-
-        if (!@hasDecl(TScope, "flatten")) {
-            return ScopeValidationError.ScopeMissingFlattenFn;
-        }
-
-        const flatten_fn = @field(TScope, "flatten");
-        const flatten_fn_type_info = @typeInfo(@TypeOf(flatten_fn));
-
-        if (flatten_fn_type_info != .@"fn") {
-            return ScopeValidationError.ScopeFlattenFnNotFunction;
-        }
-
-        if (flatten_fn_type_info.@"fn".return_type != []const type) {
-            return ScopeValidationError.ScopeFlattenFnInvalidReturnType;
-        }
-
-        if (flatten_fn_type_info.@"fn".params.len != 0) {
-            return ScopeValidationError.ScopeFlattenFnInvalidParameterCount;
-        }
-
-        if (!@hasDecl(TScope, "lookupAction")) {
-            return ScopeValidationError.ScopeMissingLookupActionFn;
-        }
-
-        const lookup_fn = @field(TScope, "lookupAction");
-        const lookup_fn_type_info = @typeInfo(@TypeOf(lookup_fn));
-
-        if (lookup_fn_type_info != .@"fn") {
-            return ScopeValidationError.ScopeLookupActionFnNotFunction;
-        }
-
-        if (lookup_fn_type_info.@"fn".return_type != ?u16) {
-            return ScopeValidationError.ScopeLookupActionFnInvalidReturnType;
-        }
-
-        if (lookup_fn_type_info.@"fn".params.len != 1) {
-            return ScopeValidationError.ScopeLookupActionFnInvalidParameterCount;
         }
 
         if (!@hasDecl(TScope, "scope_name")) {

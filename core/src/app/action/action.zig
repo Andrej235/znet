@@ -35,10 +35,6 @@ pub fn Action(comptime name: ActionName, comptime handler_fn: anytype, comptime 
                 .http_method = options.http_method orelse .GET,
             };
         }
-
-        pub fn compare(comptime other_handler_fn: anytype) bool {
-            return comptime handler_fn == other_handler_fn;
-        }
     };
 }
 
@@ -63,11 +59,6 @@ const ActionValidationError = error{
     ActionCompileFnInvalidReturnType,
     ActionCompileFnInvalidParameterCount,
     ActionCompileFnInvalidParameterType,
-
-    ActionMissingCompareFn,
-    ActionCompareFnNotFunction,
-    ActionCompareFnInvalidReturnType,
-    ActionCompareFnInvalidParameterCount,
 
     ActionMissingActionName,
     ActionInvalidActionNameType,
@@ -96,25 +87,6 @@ pub fn validateAction(comptime TAction: type) !void {
 
         if (compile_fn_type_info.@"fn".params[0].type != ResolvedScopeOptions) {
             return ActionValidationError.ActionCompileFnInvalidParameterType;
-        }
-
-        if (!@hasDecl(TAction, "compare")) {
-            return ActionValidationError.ActionMissingCompareFn;
-        }
-
-        const compare_fn = @field(TAction, "compare");
-        const compare_fn_type_info = @typeInfo(@TypeOf(compare_fn));
-
-        if (compare_fn_type_info != .@"fn") {
-            return ActionValidationError.ActionCompareFnNotFunction;
-        }
-
-        if (compare_fn_type_info.@"fn".return_type != bool) {
-            return ActionValidationError.ActionCompareFnInvalidReturnType;
-        }
-
-        if (compare_fn_type_info.@"fn".params.len != 1) {
-            return ActionValidationError.ActionCompareFnInvalidParameterCount;
         }
 
         if (!@hasDecl(TAction, "action_name")) {
