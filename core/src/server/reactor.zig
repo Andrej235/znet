@@ -1,4 +1,5 @@
 const std = @import("std");
+const http = @import("../http/http.zig");
 const posix = std.posix;
 const builtin = @import("builtin");
 
@@ -17,6 +18,10 @@ const OutMessage = @import("out_message.zig").OutMessage;
 const ServerOptions = @import("server_options.zig").ServerOptions;
 const ShutdownState = @import("server.zig").ShutdownState;
 const Worker = @import("worker.zig").Worker;
+
+const Response = @import("../responses/response.zig").Response;
+const HttpResponse = @import("../responses/http.zig").HttpResponse;
+const ResponseWriter = @import("../responses/response_writer.zig").ResponseWriter;
 
 const Logger = @import("../logger/logger.zig").Logger.scoped(.reactor);
 
@@ -321,7 +326,7 @@ pub fn Reactor(comptime TApp: type) type {
                                     if (match) |m| {
                                         switch (m.action.executor) {
                                             .io => { // execute the action on the reactor thread
-                                                // acquire a new output buffer
+                                                // acquire a new output buffer if needed
                                                 if (self.current_output_buffer_idx == null) {
                                                     const buffer_idx = self.output_buffer_pool.acquire() orelse {
                                                         // no output buffers available, drop the message and release the input buffer
@@ -336,7 +341,7 @@ pub fn Reactor(comptime TApp: type) type {
                                                 }
 
                                                 var writer: std.Io.Writer = .fixed(self.current_output_buffer);
-                                                const response_payload_len = m.action.handler(
+                                                const bytes_written = m.action.handler(
                                                     .{
                                                         .allocator = self.allocator,
                                                         .waker = self.waker,
@@ -364,7 +369,7 @@ pub fn Reactor(comptime TApp: type) type {
                                                 // release the input buffer
                                                 self.input_buffer_pool.release(job.buffer_idx);
 
-                                                const response_data = self.current_output_buffer[0..response_payload_len];
+                                                const response_data = self.current_output_buffer[0..bytes_written];
 
                                                 // response_data will be freed by the io thread after sending
                                                 client.enqueueMessage(OutMessage{
@@ -394,8 +399,53 @@ pub fn Reactor(comptime TApp: type) type {
                                                 self.worker_pool_semaphore.release();
                                             },
                                         }
-                                    } else {
-                                        Logger.debug("No match for path: {s}", .{http_request.path});
+                                    } else { // route not found, return 404
+                                        // acquire a new output buffer if needed
+                                        if (self.current_output_buffer_idx == null) {
+                                            const buffer_idx = self.output_buffer_pool.acquire() orelse {
+                                                // no output buffers available, drop the message and release the input buffer
+                                                self.input_buffer_pool.release(job.buffer_idx);
+
+                                                Logger.info("No output buffers available, dropping message", .{});
+                                                continue;
+                                            };
+
+                                            self.current_output_buffer_idx = buffer_idx;
+                                            self.current_output_buffer = self.output_buffer_pool.buffer(buffer_idx);
+                                        }
+
+                                        const response: Response(void) = .{
+                                            .http = HttpResponse(void).init(
+                                                http.StatusCode.not_found,
+                                                http_request.connection,
+                                                null,
+                                                {},
+                                            ),
+                                        };
+
+                                        var writer: std.Io.Writer = .fixed(self.current_output_buffer);
+                                        const bytes_written = try ResponseWriter.write(void, response, &writer);
+
+                                        // release the input buffer
+                                        self.input_buffer_pool.release(job.buffer_idx);
+
+                                        const response_data = self.current_output_buffer[0..bytes_written];
+
+                                        // response_data will be freed by the io thread after sending
+                                        client.enqueueMessage(OutMessage{
+                                            .offset = 0,
+                                            .data = response_data,
+                                            .buffer_idx = self.current_output_buffer_idx.?,
+                                            .keep_alive = http_request.connection == .keep_alive,
+                                        }) catch {
+                                            // client's response queue is full
+                                            // we can't really do anything about it, so just move on to the next job
+                                            // keep the current output buffer to avoid just re-acquiring it in the next iteration
+                                            continue;
+                                        };
+
+                                        // released in reactor thread, set to null here to indicate that we don't have a current buffer anymore
+                                        self.current_output_buffer_idx = null;
                                     }
                                 },
                             }
