@@ -384,8 +384,7 @@ fn deserialize(allocator: std.mem.Allocator, reader: *std.Io.Reader, errors: *Va
             if (std.mem.eql(u8, field.name, key)) {
                 const deserialized_value = Deserializer.FormUrlEncoded.deserializeValue(allocator, value, field.type) catch |err| blk: {
                     const success = switch (err) {
-                        Deserializer.DeserializerErrors.IntegerDeserializationFailed => errors.add(.query, field.name, "Expected a valid integer"),
-                        Deserializer.DeserializerErrors.FloatDeserializationFailed => errors.add(.query, field.name, "Expected a valid float"),
+                        Deserializer.DeserializerErrors.IntegerDeserializationFailed, Deserializer.DeserializerErrors.FloatDeserializationFailed => errors.add(.query, field.name, "Expected a valid number"),
                         else => errors.add(.query, field.name, "Invalid value for query parameter"),
                     };
 

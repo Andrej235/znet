@@ -66,9 +66,9 @@ pub fn hello() bool {
 
 pub fn helloWithQuery(
     path: z.Path(struct { id:  u8 }),
-    query: z.Query(struct { search: ?[]const u8, required: u32 }),
+    query: z.Query(struct { search: ?[]const u8, some_needed_val: u32, numeric: f64 }),
 ) bool {
-    z.Logger.scoped(.action).info("Hello id {}! Search query: {?s}, Required: {}", .{ path.value.id, query.value.search, query.value.required });
+    z.Logger.scoped(.action).info("Hello id {}! Search query: {?s}, Required: {}, Numeric: {}", .{ path.value.id, query.value.search, query.value.some_needed_val, query.value.numeric });
     return true;
 }
 

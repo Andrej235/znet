@@ -3,10 +3,7 @@ const posix = std.posix;
 const builtin = @import("builtin");
 
 const Router = @import("../app/router.zig").Router;
-const RuntimeScope = @import("../app/scope/runtime_scope.zig").RuntimeScope;
 const Listener = @import("../listener/listener.zig");
-const deserializeMessageHeaders = @import("../message_headers/deserialize_message_headers.zig").deserializeMessageHeaders;
-const MessageHeadersByteSize = @import("../message_headers/message_headers.zig").HeadersByteSize;
 const Poller = @import("../poller/poller.zig");
 const SPMCQueue = @import("../queues/spmc_queue.zig").Queue;
 const SPSCQueue = @import("../queues/spsc_queue.zig").Queue;
@@ -372,15 +369,12 @@ pub fn Reactor(comptime TApp: type) type {
                                                 // response_data will be freed by the io thread after sending
                                                 client.enqueueMessage(OutMessage{
                                                     .offset = 0,
-                                                    .data = .{
-                                                        .single = .{
-                                                            .data = response_data,
-                                                            .buffer_idx = self.current_output_buffer_idx.?,
-                                                        },
-                                                    },
+                                                    .data = response_data,
+                                                    .buffer_idx = self.current_output_buffer_idx.?,
+                                                    .keep_alive = http_request.connection == .keep_alive,
                                                 }) catch {
                                                     // client's response queue is full
-                                                    // we can't really do anything about it, so just move on to the next job, input buffer was released in the handler
+                                                    // we can't really do anything about it, so just move on to the next job
                                                     // keep the current output buffer to avoid just re-acquiring it in the next iteration
                                                     continue;
                                                 };
@@ -442,14 +436,9 @@ pub fn Reactor(comptime TApp: type) type {
 
                         // has messages queued to send
                         if (latest_out_message) |out| {
-                            const data = switch (out.data) {
-                                .single => |single| single.data,
-                                .shared => |shared| shared.get(),
-                            };
-
                             var sent: usize = 0;
-                            while (out.offset < data.len and sent < self.options.max_write_per_tick) {
-                                const n = posix.send(client.socket, data[out.offset..], 0) catch |err| switch (err) {
+                            while (out.offset < out.data.len and sent < self.options.max_write_per_tick) {
+                                const n = posix.send(client.socket, out.data[out.offset..], 0) catch |err| switch (err) {
                                     error.WouldBlock => break,
                                     else => return err,
                                 };
@@ -460,14 +449,17 @@ pub fn Reactor(comptime TApp: type) type {
                                 out.offset += n;
                             }
 
-                            if (out.offset >= data.len) {
+                            if (out.offset >= out.data.len) {
                                 // message fully sent, remove it from the queue
                                 _ = client.out_message_queue.tryPop();
+                                self.output_buffer_pool.release(out.buffer_idx);
+                            }
 
-                                switch (out.data) {
-                                    .single => |single| self.output_buffer_pool.release(single.buffer_idx),
-                                    .shared => |shared| shared.release(),
-                                }
+                            if (!out.keep_alive) {
+                                // client requested connection close or sent a malformed request, close the connection after sending the response
+                                Logger.info("[{f} | {}/{}] disconnected (due to keep_alive)", .{ client.address.in, client_idx, client.id.gen });
+                                self.removeClient(client_idx);
+                                continue; // move on to the next client
                             }
 
                             if (client.out_message_queue.isEmpty()) {

@@ -61,10 +61,7 @@ pub const ClientConnection = struct {
 
     pub fn deinit(self: *const ClientConnection) void {
         while (self.out_message_queue.tryPop()) |msg| {
-            switch (msg.data) {
-                .single => |single| self.output_buffer_pool.release(single.buffer_idx),
-                .shared => |shared| shared.release(),
-            }
+            self.output_buffer_pool.release(msg.buffer_idx);
         }
 
         self.reader.deinit();
