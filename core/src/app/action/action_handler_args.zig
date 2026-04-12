@@ -13,8 +13,15 @@ pub fn ActionHandlerArgs(comptime TFn: type, comptime path: []const u8, comptime
     const fn_info = @typeInfo(TFn);
     if (fn_info != .@"fn") @compileError("Expected function type");
 
+    const TReturnType = union(enum) {
+        success: ParamsType(TFn),
+        failure: ValidationErrorsResponse,
+    };
+
     return struct {
-        pub fn getArgs(allocator: std.mem.Allocator, context: *const RequestContext) !ParamsType(TFn) {
+        pub const ErrorsResult = ValidationErrorsResponse;
+
+        pub fn getArgs(allocator: std.mem.Allocator, context: *const RequestContext, validation_errors: *ValidationErrors) TReturnType {
             const params_info = comptime getParamsInfo(TFn);
             const param_fields = params_info.fields;
 
@@ -77,16 +84,28 @@ pub fn ActionHandlerArgs(comptime TFn: type, comptime path: []const u8, comptime
             }
 
             // Inject and deserialize body if needed
-            if (params_info.TBody) |TBody| {
+            if (params_info.TBody) |TBody| body_blk: {
                 if (context.body) |body| {
                     var reader: std.io.Reader = .fixed(body);
-                    const payload = try Deserializer.fromContentType(TBody, context.body_content_type, allocator, &reader);
+                    const payload = Deserializer.fromContentType(TBody, context.body_content_type, allocator, &reader) catch {
+                        const success = validation_errors.add(.body, null, "Failed to deserialize request body");
+
+                        if (!success) {
+                            return .{ .failure = validation_errors.toResponseBody() };
+                        } else {
+                            break :body_blk;
+                        }
+                    };
 
                     if (params_info.body_field_name) |name| {
                         @field(params, name) = .{ .value = payload };
                     }
                 } else {
-                    return error.MissingRequestBody;
+                    const success = validation_errors.add(.body, null, "Missing request body"); // todo:? maybe don't return here?
+                    
+                    if (!success) {
+                        return .{ .failure = validation_errors.toResponseBody() };
+                    }
                 }
             }
 
@@ -123,12 +142,30 @@ pub fn ActionHandlerArgs(comptime TFn: type, comptime path: []const u8, comptime
 
                 var it = context.param_iterator;
                 inline for (sorted_path_param_fields) |field| {
-                    const param = it.next() orelse {
-                        Logger.err("Expected path parameter '{s}' not found in request", .{field.name});
-                        return error.InvalidPathParameter;
+                    const current = it.next() orelse switch (validation_errors.add(.path, field.name, "Expected path parameter not found in request")) {
+                        true => null,
+                        false => return .{ .failure = validation_errors.toResponseBody() },
                     };
 
-                    @field(path_param, field.name) = try parsePathParam(field.type, param.value);
+                    if (current) |param| {
+                        const value = parsePathParam(field.type, param.value) catch |err| blk: {
+                            const success = switch (err) {
+                                error.FailedToParseInteger, error.FailedToParseFloat => validation_errors.add(.path, field.name, "Expected a valid number"),
+                                error.InvalidBooleanValue => validation_errors.add(.path, field.name, "Expected 'true' or 'false' for boolean path parameter"),
+                                error.InvalidEnumValue => validation_errors.add(.path, field.name, "Invalid value for enum path parameter"),
+                            };
+
+                            if (!success) {
+                                return .{ .failure = validation_errors.toResponseBody() };
+                            }
+
+                            break :blk null;
+                        };
+
+                        if (value) |v| {
+                            @field(path_param, field.name) = v;
+                        }
+                    }
                 }
 
                 @field(params, path_field_name) = .{ .value = path_param };
@@ -136,21 +173,32 @@ pub fn ActionHandlerArgs(comptime TFn: type, comptime path: []const u8, comptime
 
             // Inject and deserialize query parameters if needed
             if (params_info.query_field_name) |query_field_name| {
-                if (context.query) |query| {
-                    var query_reader = std.io.Reader.fixed(query);
-                    @field(params, query_field_name) = .{
-                        .value = try Deserializer.FormUrlEncoded.deserialize(allocator, &query_reader, params_info.TQuery.?),
-                    };
-                } else {
-                    const empty_query: []const u8 = "";
-                    var query_reader = std.io.Reader.fixed(empty_query);
-                    @field(params, query_field_name) = .{
-                        .value = try Deserializer.FormUrlEncoded.deserialize(allocator, &query_reader, params_info.TQuery.?),
-                    };
+                var query_reader = std.io.Reader.fixed(if (context.query) |q| q else "");
+                const query_params = Deserializer.FormUrlEncoded.deserialize(allocator, &query_reader, params_info.TQuery.?) catch blk: {
+                    // todo: implement detailed validation errors for query params, to do this I need to first separate query param deserialization
+                    // from the common deserialization interface in a way that would allow me to reuse the url decoding and type parsing logic from the deserializer
+                    const success = validation_errors.add(.query, null, "Invalid query parameters");
+                    if (!success) {
+                        return .{ .failure = validation_errors.toResponseBody() };
+                    }
+
+                    break :blk null;
+                };
+
+                if (query_params) |q| {
+                    @field(params, query_field_name) = .{ .value = q };
                 }
             }
 
-            return params;
+            if (validation_errors.errors_count > 0) {
+                return .{ .failure = validation_errors.toResponseBody() };
+            }
+
+            return .{ .success = params };
+        }
+
+        pub fn initErrors() ValidationErrors {
+            return ValidationErrors.init("Failed to parse request parameters") catch unreachable;
         }
     };
 }
@@ -264,7 +312,14 @@ fn ParamsType(comptime TFn: type) type {
     });
 }
 
-inline fn parsePathParam(comptime T: type, value: []const u8) !T {
+const ParsePathParamError = error{
+    FailedToParseInteger,
+    FailedToParseFloat,
+    InvalidBooleanValue,
+    InvalidEnumValue,
+};
+
+inline fn parsePathParam(comptime T: type, value: []const u8) ParsePathParamError!T {
     const info = @typeInfo(T);
 
     if (T == []const u8) {
@@ -274,11 +329,11 @@ inline fn parsePathParam(comptime T: type, value: []const u8) !T {
     switch (info) {
         .int => {
             return std.fmt.parseInt(T, value, 10) catch
-                return error.InvalidPathParameter;
+                return error.FailedToParseInteger;
         },
         .float => {
             return std.fmt.parseFloat(T, value) catch
-                return error.InvalidPathParameter;
+                return error.FailedToParseFloat;
         },
         .bool => {
             if (std.mem.eql(u8, value, "true")) {
@@ -286,7 +341,7 @@ inline fn parsePathParam(comptime T: type, value: []const u8) !T {
             } else if (std.mem.eql(u8, value, "false")) {
                 return false;
             } else {
-                return error.InvalidPathParameter;
+                return error.InvalidBooleanValue;
             }
         },
         .@"enum" => |enum_info| {
@@ -296,8 +351,88 @@ inline fn parsePathParam(comptime T: type, value: []const u8) !T {
                 }
             }
 
-            return error.InvalidPathParameter;
+            return error.InvalidEnumValue;
         },
         else => @compileError(std.fmt.comptimePrint("Unsupported path parameter type: {s}", .{@typeName(T)})),
     }
 }
+
+const ErrorSource = enum {
+    path,
+    query,
+    body,
+};
+
+const ErrorDetails = struct {
+    source: ErrorSource,
+    field: ?[]const u8,
+    issue: []const u8,
+};
+
+const ValidationErrorsResponse = struct {
+    message: []const u8,
+    details: ?[]const ErrorDetails,
+    truncated: bool,
+};
+
+const ValidationErrors = struct {
+    message_buffer: [1024]u8 = undefined, // todo: make configurable
+
+    consumed_bytes: usize = 0,
+    errors_count: usize = 0,
+
+    message: []const u8 = undefined,
+    details: [16]ErrorDetails = undefined, // todo: make configurable
+    truncated: bool = false, // indicates that there were more errors that are not included in the details
+
+    pub fn init(message: []const u8) error{MessageTooLong}!ValidationErrors {
+        var errors = ValidationErrors{
+            .consumed_bytes = message.len,
+        };
+
+        if (message.len > errors.message_buffer.len) {
+            return error.MessageTooLong;
+        }
+
+        @memcpy(errors.message_buffer[0..message.len], message);
+        errors.message = errors.message_buffer[0..message.len];
+        errors.consumed_bytes = message.len;
+
+        return errors;
+    }
+
+    /// Returns true if the error was added, false if there was no more space to add it
+    /// If adding fails, truncated will be set to true to indicate that there were more errors that are not included in the details
+    pub fn add(self: *ValidationErrors, source: ErrorSource, field: ?[]const u8, issue: []const u8) bool {
+        const needed_space = if (field) |f| f.len + issue.len else issue.len;
+        if (self.errors_count >= self.details.len or self.consumed_bytes + needed_space > self.message_buffer.len) {
+            self.truncated = true;
+            return false;
+        }
+
+        if (field) |f| {
+            @memcpy(self.message_buffer[self.consumed_bytes .. self.consumed_bytes + f.len], f);
+            @memcpy(self.message_buffer[self.consumed_bytes + f.len .. self.consumed_bytes + needed_space], issue);
+        } else {
+            @memcpy(self.message_buffer[self.consumed_bytes .. self.consumed_bytes + issue.len], issue);
+        }
+
+        self.details[self.errors_count] = .{
+            .source = source,
+            .field = if (field) |f| self.message_buffer[self.consumed_bytes .. self.consumed_bytes + f.len] else null,
+            .issue = if (field) |f| self.message_buffer[self.consumed_bytes + f.len .. self.consumed_bytes + needed_space] else self.message_buffer[self.consumed_bytes .. self.consumed_bytes + issue.len],
+        };
+
+        self.consumed_bytes += needed_space;
+        self.errors_count += 1;
+        return true;
+    }
+
+    pub fn toResponseBody(self: *const ValidationErrors) ValidationErrorsResponse {
+        return .{
+            .message = self.message,
+            .details = if (self.errors_count == 0) null else self.details[0..self.errors_count],
+            .truncated = self.truncated,
+        };
+    }
+};
