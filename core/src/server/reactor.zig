@@ -402,51 +402,15 @@ pub fn Reactor(comptime TApp: type) type {
                                             },
                                         }
                                     } else { // route not found, return 404
-                                        // acquire a new output buffer if needed
-                                        if (self.current_output_buffer_idx == null) {
-                                            const buffer_idx = self.output_buffer_pool.acquire() orelse {
-                                                // no output buffers available, drop the message and release the input buffer
-                                                self.input_buffer_pool.release(job.buffer_idx);
+                                        self.sendErrorToClient(client, .not_found, http_request.connection, null) catch {
+                                            // no output buffers available, drop the message and release the input buffer
+                                            self.input_buffer_pool.release(job.buffer_idx);
 
-                                                Logger.info("No output buffers available, dropping message", .{});
-                                                continue;
-                                            };
-
-                                            self.current_output_buffer_idx = buffer_idx;
-                                            self.current_output_buffer = self.output_buffer_pool.buffer(buffer_idx);
-                                        }
-
-                                        const response: Response(void) = .{
-                                            .http = HttpResponse(void).init(
-                                                http.StatusCode.not_found,
-                                                http_request.connection,
-                                                null,
-                                                {},
-                                            ),
-                                        };
-
-                                        var writer: std.Io.Writer = .fixed(self.current_output_buffer);
-                                        const bytes_written = try ResponseWriter.write(void, response, &writer);
-
-                                        // release the input buffer
-                                        self.input_buffer_pool.release(job.buffer_idx);
-
-                                        const response_data = self.current_output_buffer[0..bytes_written];
-
-                                        // response_data will be freed by the io thread after sending
-                                        client.enqueueMessage(OutMessage{
-                                            .offset = 0,
-                                            .data = response_data,
-                                            .buffer_idx = self.current_output_buffer_idx.?,
-                                            .keep_alive = http_request.connection == .keep_alive,
-                                        }) catch {
-                                            // client's response queue is full
-                                            // we can't really do anything about it, so just move on to the next job
-                                            // keep the current output buffer to avoid just re-acquiring it in the next iteration
+                                            Logger.info("No output buffers available, dropping message", .{});
                                             continue;
                                         };
 
-                                        // released in reactor thread, set to null here to indicate that we don't have a current buffer anymore
+                                        // released in io thread after sending, set to null here to indicate that we don't have a current buffer anymore
                                         self.current_output_buffer_idx = null;
                                     }
                                 },
@@ -475,6 +439,7 @@ pub fn Reactor(comptime TApp: type) type {
                                     self.removeClient(client_idx);
                                     continue; // move on to the next client
                                 },
+
                                 Http1Parser.Errors.MissingHostHeader,
 
                                 Http1Parser.Errors.InvalidHeaders,
@@ -485,48 +450,32 @@ pub fn Reactor(comptime TApp: type) type {
                                 Http1Parser.Errors.UnsupportedTransferEncoding,
                                 Http1Parser.Errors.UnsupportedVersion,
                                 => {
-                                    // acquire a new output buffer if needed
-                                    if (self.current_output_buffer_idx == null) {
-                                        const buffer_idx = self.output_buffer_pool.acquire() orelse {
-                                            // no output buffers available
-                                            Logger.warn("No output buffers available, failed to send response", .{});
-                                            continue;
-                                        };
-
-                                        self.current_output_buffer_idx = buffer_idx;
-                                        self.current_output_buffer = self.output_buffer_pool.buffer(buffer_idx);
-                                    }
-
-                                    const response: Response(void) = .{
-                                        .http = HttpResponse(void).init(
-                                            http.StatusCode.bad_request,
-                                            .keep_alive,
-                                            null,
-                                            {},
-                                        ),
-                                    };
-
-                                    var writer: std.Io.Writer = .fixed(self.current_output_buffer);
-                                    const bytes_written = try ResponseWriter.write(void, response, &writer);
-
-                                    const response_data = self.current_output_buffer[0..bytes_written];
-
-                                    // response_data will be freed by the io thread after sending
-                                    client.enqueueMessage(OutMessage{
-                                        .offset = 0,
-                                        .data = response_data,
-                                        .buffer_idx = self.current_output_buffer_idx.?,
-                                        .keep_alive = true,
-                                    }) catch {
-                                        // client's response queue is full
-                                        // we can't really do anything about it, so just move on to the next job
-                                        // keep the current output buffer to avoid just re-acquiring it in the next iteration
-                                        continue;
-                                    };
-
-                                    // released in reactor thread, set to null here to indicate that we don't have a current buffer anymore
-                                    self.current_output_buffer_idx = null;
+                                    self.sendErrorToClient(
+                                        client,
+                                        .bad_request,
+                                        .keep_alive,
+                                        ClientError{
+                                            .message = "Failed to parse HTTP request",
+                                            .details = &[_]ClientErrorDetails{
+                                                .{
+                                                    .source = "http_parser",
+                                                    .message = switch (err) {
+                                                        Http1Parser.Errors.MissingHostHeader => "Missing host header",
+                                                        Http1Parser.Errors.InvalidHeaders => "Invalid headers",
+                                                        Http1Parser.Errors.InvalidRequestLine => "Invalid request line",
+                                                        Http1Parser.Errors.InvalidHostHeader => "Invalid host header",
+                                                        Http1Parser.Errors.UnsupportedMethod => "Unsupported method",
+                                                        Http1Parser.Errors.UnsupportedTransferEncoding => "Unsupported transfer encoding",
+                                                        Http1Parser.Errors.UnsupportedVersion => "Unsupported version",
+                                                        else => unreachable,
+                                                    },
+                                                },
+                                            },
+                                            .truncated = false,
+                                        },
+                                    ) catch continue;
                                 },
+
                                 else => {
                                     Logger.err("Error reading from client {}: {}", .{ client_idx, err });
 
@@ -646,6 +595,85 @@ pub fn Reactor(comptime TApp: type) type {
             client.deinit();
 
             self.connected -= 1;
+        }
+
+        const ClientErrorDetails = struct {
+            source: []const u8,
+            message: []const u8,
+        };
+
+        const ClientError = struct {
+            message: []const u8,
+            details: []const ClientErrorDetails,
+            truncated: bool,
+        };
+
+        fn sendErrorToClient(self: *Self, client: *ClientConnection, status: http.StatusCode, connection: http.Connection, client_error: ?ClientError) error{ FailedToAcquireBuffer, FailedToWrite, ClientQueueFull }!void {
+            // acquire a new output buffer if needed
+            if (self.current_output_buffer_idx == null) {
+                const buffer_idx = self.output_buffer_pool.acquire() orelse {
+                    // no output buffers available
+                    Logger.warn("No output buffers available, failed to send response", .{});
+                    return error.FailedToAcquireBuffer;
+                };
+
+                self.current_output_buffer_idx = buffer_idx;
+                self.current_output_buffer = self.output_buffer_pool.buffer(buffer_idx);
+            }
+
+            var writer: std.Io.Writer = .fixed(self.current_output_buffer);
+
+            const bytes_written = blk: {
+                if (client_error) |c_err| {
+                    const response: Response(ClientError) = .{
+                        .http = HttpResponse(ClientError).init(
+                            status,
+                            connection,
+                            null,
+                            c_err,
+                        ),
+                    };
+
+                    break :blk ResponseWriter.write(ClientError, response, &writer) catch |err| {
+                        Logger.err("Failed to write error response: {}", .{err});
+                        // keep the current output buffer to avoid just re-acquiring it in the next iteration
+                        return error.FailedToWrite;
+                    };
+                } else {
+                    const response: Response(void) = .{
+                        .http = HttpResponse(void).init(
+                            status,
+                            connection,
+                            null,
+                            {},
+                        ),
+                    };
+
+                    break :blk ResponseWriter.write(void, response, &writer) catch |err| {
+                        Logger.err("Failed to write error response: {}", .{err});
+                        // keep the current output buffer to avoid just re-acquiring it in the next iteration
+                        return error.FailedToWrite;
+                    };
+                }
+            };
+
+            const response_data = self.current_output_buffer[0..bytes_written];
+
+            // response_data will be freed by the io thread after sending
+            client.enqueueMessage(OutMessage{
+                .offset = 0,
+                .data = response_data,
+                .buffer_idx = self.current_output_buffer_idx.?,
+                .keep_alive = true,
+            }) catch {
+                // client's response queue is full
+                // we can't really do anything about it, so just move on to the next job
+                // keep the current output buffer to avoid just re-acquiring it in the next iteration
+                return error.ClientQueueFull;
+            };
+
+            // released in reactor thread, set to null here to indicate that we don't have a current buffer anymore
+            self.current_output_buffer_idx = null;
         }
     };
 }
