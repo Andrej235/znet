@@ -3,6 +3,8 @@ const http = @import("../http/http.zig");
 const posix = std.posix;
 const builtin = @import("builtin");
 
+const Http1Parser = @import("./parsers/http1.zig").Http1Parser;
+
 const HostRouter = @import("../app/host_router.zig").HostRouter;
 const Listener = @import("../listener/listener.zig");
 const Poller = @import("../poller/poller.zig");
@@ -322,14 +324,7 @@ pub fn Reactor(comptime TApp: type) type {
                                 .http => |http_request| {
                                     Logger.debug("Received HTTP request: {} {s}", .{ http_request.method, http_request.path });
 
-                                    if (http_request.host == null) { // todo: return 400
-                                        Logger.warn("HTTP request missing Host header, rejecting", .{});
-                                        // release the input buffer
-                                        self.input_buffer_pool.release(job.buffer_idx);
-                                        continue;
-                                    }
-
-                                    const match = self.router.lookup(http_request.host.?, http_request.path, http_request.method);
+                                    const match = self.router.lookup(http_request.host, http_request.path, http_request.method);
                                     if (match) |m| {
                                         switch (m.action.executor) {
                                             .io => { // execute the action on the reactor thread
@@ -475,15 +470,71 @@ pub fn Reactor(comptime TApp: type) type {
                             switch (err) {
                                 error.Closed, error.ConnectionResetByPeer => {
                                     Logger.info("[{f} | {}/{}] disconnected", .{ client.address.in, client_idx, client.id.gen });
+
+                                    // removeClient will swap the last client into position i, do not increment i
+                                    self.removeClient(client_idx);
+                                    continue; // move on to the next client
+                                },
+                                Http1Parser.Errors.MissingHostHeader,
+
+                                Http1Parser.Errors.InvalidHeaders,
+                                Http1Parser.Errors.InvalidRequestLine,
+                                Http1Parser.Errors.InvalidHostHeader,
+
+                                Http1Parser.Errors.UnsupportedMethod,
+                                Http1Parser.Errors.UnsupportedTransferEncoding,
+                                Http1Parser.Errors.UnsupportedVersion,
+                                => {
+                                    // acquire a new output buffer if needed
+                                    if (self.current_output_buffer_idx == null) {
+                                        const buffer_idx = self.output_buffer_pool.acquire() orelse {
+                                            // no output buffers available
+                                            Logger.warn("No output buffers available, failed to send response", .{});
+                                            continue;
+                                        };
+
+                                        self.current_output_buffer_idx = buffer_idx;
+                                        self.current_output_buffer = self.output_buffer_pool.buffer(buffer_idx);
+                                    }
+
+                                    const response: Response(void) = .{
+                                        .http = HttpResponse(void).init(
+                                            http.StatusCode.bad_request,
+                                            .keep_alive,
+                                            null,
+                                            {},
+                                        ),
+                                    };
+
+                                    var writer: std.Io.Writer = .fixed(self.current_output_buffer);
+                                    const bytes_written = try ResponseWriter.write(void, response, &writer);
+
+                                    const response_data = self.current_output_buffer[0..bytes_written];
+
+                                    // response_data will be freed by the io thread after sending
+                                    client.enqueueMessage(OutMessage{
+                                        .offset = 0,
+                                        .data = response_data,
+                                        .buffer_idx = self.current_output_buffer_idx.?,
+                                        .keep_alive = true,
+                                    }) catch {
+                                        // client's response queue is full
+                                        // we can't really do anything about it, so just move on to the next job
+                                        // keep the current output buffer to avoid just re-acquiring it in the next iteration
+                                        continue;
+                                    };
+
+                                    // released in reactor thread, set to null here to indicate that we don't have a current buffer anymore
+                                    self.current_output_buffer_idx = null;
                                 },
                                 else => {
                                     Logger.err("Error reading from client {}: {}", .{ client_idx, err });
+
+                                    // removeClient will swap the last client into position i, do not increment i
+                                    self.removeClient(client_idx);
+                                    continue; // move on to the next client
                                 },
                             }
-
-                            // removeClient will swap the last client into position i, do not increment i
-                            self.removeClient(client_idx);
-                            continue; // move on to the next client
                         };
                     }
 

@@ -43,7 +43,19 @@ pub const Http1Parser = struct {
         };
     }
 
-    pub fn parse(self: *Http1Parser, conn: *ConnectionReader) !?Parser.ParseResult {
+    pub const Errors = error{
+        MissingHostHeader,
+
+        InvalidHeaders,
+        InvalidRequestLine,
+        InvalidHostHeader,
+
+        UnsupportedMethod,
+        UnsupportedVersion,
+        UnsupportedTransferEncoding,
+    };
+
+    pub fn parse(self: *Http1Parser, conn: *ConnectionReader) Errors!?Parser.ParseResult {
         if (self.state == .complete) {
             self.resetState();
         }
@@ -68,20 +80,20 @@ pub const Http1Parser = struct {
                     }
 
                     var line_reader = std.io.Reader.fixed(line[0 .. line.len - 2]); // exclude \r\n
-                    if (try line_reader.takeDelimiter(' ')) |method| {
-                        if (try line_reader.takeDelimiter(' ')) |path| {
+                    if (line_reader.takeDelimiter(' ') catch return Errors.InvalidRequestLine) |method| {
+                        if (line_reader.takeDelimiter(' ') catch return Errors.InvalidRequestLine) |path| {
                             const version = line_reader.buffer[line_reader.seek..];
 
                             self.state = .headers;
                             self.method = http.Method.fromString(method) orelse {
                                 Logger.err("Unsupported HTTP method: {s}", .{method});
                                 // todo: implement arbitrary methods because spec supports them
-                                return error.UnsupportedMethod;
+                                return Errors.UnsupportedMethod;
                             };
                             self.path = path;
                             self.version = http.Version.fromString(version) orelse {
                                 Logger.err("Unsupported HTTP version: {s}", .{version});
-                                return error.UnsupportedVersion;
+                                return Errors.UnsupportedVersion;
                             };
                         }
                     }
@@ -96,13 +108,13 @@ pub const Http1Parser = struct {
 
                     const colon_index = std.mem.indexOfScalar(u8, line, ':') orelse {
                         Logger.err("Invalid HTTP header line (no colon found): {any}", .{line});
-                        return error.InvalidHeaders;
+                        return Errors.InvalidHeaders;
                     };
 
                     const header_name = line[0..colon_index];
                     const header_value = std.mem.trim(u8, line[colon_index + 1 .. line.len - 2], &std.ascii.whitespace);
 
-                    self.parseHeader(header_name, header_value);
+                    try self.parseHeader(header_name, header_value);
                 },
 
                 .body => {
@@ -124,50 +136,40 @@ pub const Http1Parser = struct {
 
         if (self.transfer_encoding == .chunked) {
             Logger.err("Chunked transfer encoding is not supported yet", .{});
-            return error.UnsupportedTransferEncoding;
+            return Errors.UnsupportedTransferEncoding;
         }
 
+        var body: ?[]const u8 = null;
         if (self.body_size) |size| {
             if (conn.buffered_bytes < self.parse_offset + size) {
                 // not enough data buffered yet
                 return null;
             }
 
-            self.state = .complete;
-            return Parser.ParseResult{
-                .request = Request{
-                    .http = .{
-                        .method = self.method.?,
-                        .version = self.version.?,
-                        .path = self.path.?,
-                        .host = self.host,
-
-                        .connection = self.connection,
-
-                        .body = buf[self.parse_offset .. self.parse_offset + size],
-                        .accepts = self.accepts,
-                        .content_type = self.content_type,
-                    },
-                },
-                .consumed_bytes = self.parse_offset + size,
-            };
+            body = buf[self.parse_offset .. self.parse_offset + size];
+            // consume body data, no need to parse it here
+            self.parse_offset += size;
         }
 
-        // no body
         self.state = .complete;
+
+        if (self.host == null) {
+            return Errors.MissingHostHeader;
+        }
+
         return Parser.ParseResult{
             .request = Request{
                 .http = .{
                     .method = self.method.?,
                     .version = self.version.?,
                     .path = self.path.?,
-                    .host = self.host,
+                    .host = self.host.?,
 
                     .connection = self.connection,
 
-                    .body = null,
-                    .content_type = self.content_type,
+                    .body = body,
                     .accepts = self.accepts,
+                    .content_type = self.content_type,
                 },
             },
             .consumed_bytes = self.parse_offset,
@@ -187,11 +189,19 @@ pub const Http1Parser = struct {
         self.transfer_encoding = .none;
     }
 
-    inline fn parseHeader(self: *Http1Parser, name: []const u8, value: []const u8) void {
+    inline fn parseHeader(self: *Http1Parser, name: []const u8, value: []const u8) Errors!void {
         const trimmed_name = std.mem.trim(u8, name, &std.ascii.whitespace);
         const trimmed_value = std.mem.trim(u8, value, &std.ascii.whitespace);
 
         if (std.ascii.eqlIgnoreCase(trimmed_name, "Host")) {
+            if (self.host) |_| {
+                return Errors.InvalidHostHeader; // multiple Host headers are not allowed
+            }
+
+            if (!validateHostHeader(trimmed_value)) {
+                return Errors.InvalidHostHeader;
+            }
+
             self.host = trimmed_value;
             return;
         }
@@ -235,3 +245,17 @@ pub const Http1Parser = struct {
         }
     }
 };
+
+fn validateHostHeader(host: []const u8) bool {
+    if (host.len == 0) {
+        return false;
+    }
+
+    for (host) |c| {
+        if (std.ascii.isControl(c) or std.ascii.isWhitespace(c)) {
+            return false;
+        }
+    }
+
+    return true;
+}

@@ -80,6 +80,7 @@ pub const ConnectionReader = struct {
             }
 
             // try to parse a message from the buffered data
+            // todo:? free input buffer if parser fails to parse the message (e.g. if it's an invalid http request)
             if (try self.parser.?.parse(self)) |parse_result| {
                 const buffer_idx = try self.passBufferOwnership(parse_result.consumed_bytes);
 
