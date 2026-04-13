@@ -126,9 +126,9 @@ pub const Router = struct {
         };
     }
 
-    pub fn print(self: *const Router) void {
+    pub fn print(self: *const Router, indent: usize) void {
         for (self.nodes) |*node| {
-            printWithIndent(node, 0, false);
+            printWithIndent(node, indent, false);
         }
     }
 

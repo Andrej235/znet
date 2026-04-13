@@ -4,6 +4,29 @@ const z = @import("znet");
 const App = z.App(
     .{
         z.Host("example.com", .{z.Scope(null, .{z.Action(null, helloFromExample, .{})}, .{})}, .{}),
+        z.Host(
+            null,
+            .{
+                z.Scope(
+                    null,
+                    .{
+                        z.Action(null, hello, .{}),
+                        z.Action(.@"deeply-nested/{id}/{language}/post/{action}/edit", deeplyNestedPath, .{}),
+                        z.Action(.@"hello/{id}", helloWithQuery, .{}),
+                    },
+                    .{},
+                ),
+                z.Scope(
+                    .posts,
+                    .{
+                        z.Action(null, post, .{ .http_method = .POST }),
+                        z.Action(.@"{id}", hello2, .{}),
+                    },
+                    .{},
+                ),
+            },
+            .{},
+        ),
         z.Host("api.example.com", .{z.Scope(null, .{z.Action(null, helloFromExampleApi, .{})}, .{})}, .{}),
     },
     .{
@@ -18,20 +41,20 @@ pub fn main() !void {
     server.join();
 }
 
-pub fn helloFromExample() struct { message: []const u8 } {
+fn helloFromExample() struct { message: []const u8 } {
     return .{ .message = "Hello from example.com!" };
 }
 
-pub fn helloFromExampleApi() struct { message: []const u8 } {
+fn helloFromExampleApi() struct { message: []const u8 } {
     return .{ .message = "Hello from api.example.com!" };
 }
 
-pub fn hello() bool {
+fn hello() bool {
     z.Logger.scoped(.action).info("Hello world!", .{});
     return true;
 }
 
-pub fn helloWithQuery(
+fn helloWithQuery(
     path: z.Path(struct { id: u8 }),
     query: z.Query(struct { search: ?[]const u8, some_needed_val: u32, numeric: f64 }),
 ) bool {
@@ -39,12 +62,12 @@ pub fn helloWithQuery(
     return true;
 }
 
-pub fn hello2(path: z.Path(struct { id: []const u8 })) bool {
+fn hello2(path: z.Path(struct { id: []const u8 })) bool {
     z.Logger.scoped(.action).info("Hello id {s}!", .{path.value.id});
     return true;
 }
 
-pub fn deeplyNestedPath(path: z.Path(struct { id: u32, language: []const u8, action: []const u8 })) struct {
+fn deeplyNestedPath(path: z.Path(struct { id: u32, language: []const u8, action: []const u8 })) struct {
     message: []const u8,
     success: bool,
     some_value: ?u32,
@@ -55,19 +78,6 @@ pub fn deeplyNestedPath(path: z.Path(struct { id: u32, language: []const u8, act
         .success = true,
         .some_value = path.value.id * 2,
     };
-}
-
-fn lookup(router: *const z.Router, path: []const u8, method: z.HttpMethod) void {
-    if (router.lookup(path, method)) |match| {
-        z.Logger.info("Found match for path: {s}", .{match.action.path});
-        var params = match.params;
-
-        while (params.next()) |param| {
-            z.Logger.info("Param: {s} = {s}", .{ param.name, param.value });
-        }
-    } else {
-        z.Logger.err("No match for path: {s}", .{path});
-    }
 }
 
 fn post(body: z.Body(struct { message: []const u8 }), allocator: std.mem.Allocator) struct { msg: ?[]const u8, success: bool } {

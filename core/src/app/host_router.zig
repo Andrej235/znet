@@ -109,4 +109,18 @@ pub const HostRouter = struct {
 
         return normalized;
     }
+
+    pub fn print(self: *const HostRouter) void {
+        for (self.hosts) |host_node| {
+            std.debug.print("{s}\n", .{host_node.host_name});
+            host_node.router.print(1);
+            std.debug.print("\n", .{});
+        }
+
+        if (self.fallback) |fallback| {
+            std.debug.print("Fallback Host\n", .{});
+            fallback.router.print(1);
+            std.debug.print("\n", .{});
+        }
+    }
 };
