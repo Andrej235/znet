@@ -3,44 +3,52 @@ const z = @import("znet");
 
 const App = z.App(
     .{
-        z.Scope(
+        z.Host("example.com", .{z.Scope(null, .{z.Action(null, helloFromExample, .{})}, .{})}, .{}),
+        z.Host(
             null,
             .{
-                z.Action(null, hello, .{}),
-                z.Action(.@"deeply-nested/{id}/{language}/post/{action}/edit", deeplyNestedPath, .{}),
-            },
-            .{},
-        ),
-        z.Scope(
-            .api,
-            .{
                 z.Scope(
-                    .users,
+                    null,
                     .{
                         z.Action(null, hello, .{}),
-                        z.Action(.@"{id}", hello2, .{}),
-                        z.Action(.@"{id}/q", helloWithQuery, .{}),
-                        z.Action(.all, hello, .{}),
-                        z.Action(.@"all/preview", hello, .{}),
-                        z.Action(.register, hello, .{}),
-                        z.Action(.login, hello, .{}),
+                        z.Action(.@"deeply-nested/{id}/{language}/post/{action}/edit", deeplyNestedPath, .{}),
                     },
                     .{},
                 ),
                 z.Scope(
-                    .posts,
+                    .api,
                     .{
-                        z.Action(null, post, .{ .http_method = .POST }),
-                        z.Action(.all, hello, .{}),
-                        z.Action(.@"all/preview", hello, .{}),
-                        z.Action(.@"{id}", hello2, .{}),
-                        z.Action(.@"{id}/preview", hello2, .{}),
+                        z.Scope(
+                            .users,
+                            .{
+                                z.Action(null, hello, .{}),
+                                z.Action(.@"{id}", hello2, .{}),
+                                z.Action(.@"{id}/q", helloWithQuery, .{}),
+                                z.Action(.all, hello, .{}),
+                                z.Action(.@"all/preview", hello, .{}),
+                                z.Action(.register, hello, .{}),
+                                z.Action(.login, hello, .{}),
+                            },
+                            .{},
+                        ),
+                        z.Scope(
+                            .posts,
+                            .{
+                                z.Action(null, post, .{ .http_method = .POST }),
+                                z.Action(.all, hello, .{}),
+                                z.Action(.@"all/preview", hello, .{}),
+                                z.Action(.@"{id}", hello2, .{}),
+                                z.Action(.@"{id}/preview", hello2, .{}),
+                            },
+                            .{},
+                        ),
                     },
                     .{},
                 ),
             },
             .{},
         ),
+        z.Host("api.example.com", .{z.Scope(null, .{z.Action(null, helloFromExampleApi, .{})}, .{})}, .{}),
     },
     .{
         .default_action_executor = .io,
@@ -48,15 +56,18 @@ const App = z.App(
 );
 
 pub fn main() !void {
-    // const router = try App.compileRouter(std.heap.page_allocator);
-    // router.print();
-
-    // lookup(&router, "/deeply-nested/123/english/post/some-action/edit/", .GET);
-
     const server = try z.Server(App).init(std.heap.page_allocator, .{});
 
     try server.run(try std.net.Address.parseIp("127.0.0.1", 5000));
     server.join();
+}
+
+pub fn helloFromExample() struct { message: []const u8 } {
+    return .{ .message = "Hello from example.com!" };
+}
+
+pub fn helloFromExampleApi() struct { message: []const u8 } {
+    return .{ .message = "Hello from api.example.com!" };
 }
 
 pub fn hello() bool {
@@ -65,7 +76,7 @@ pub fn hello() bool {
 }
 
 pub fn helloWithQuery(
-    path: z.Path(struct { id:  u8 }),
+    path: z.Path(struct { id: u8 }),
     query: z.Query(struct { search: ?[]const u8, some_needed_val: u32, numeric: f64 }),
 ) bool {
     z.Logger.scoped(.action).info("Hello id {}! Search query: {?s}, Required: {}, Numeric: {}", .{ path.value.id, query.value.search, query.value.some_needed_val, query.value.numeric });

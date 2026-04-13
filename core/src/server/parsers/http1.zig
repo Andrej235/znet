@@ -26,6 +26,7 @@ pub const Http1Parser = struct {
     method: ?http.Method = null,
     version: ?http.Version = null,
     path: ?[]const u8 = null,
+    host: ?[]const u8 = null,
 
     state: HttpState = .request_line,
 
@@ -139,6 +140,7 @@ pub const Http1Parser = struct {
                         .method = self.method.?,
                         .version = self.version.?,
                         .path = self.path.?,
+                        .host = self.host,
 
                         .connection = self.connection,
 
@@ -159,6 +161,7 @@ pub const Http1Parser = struct {
                     .method = self.method.?,
                     .version = self.version.?,
                     .path = self.path.?,
+                    .host = self.host,
 
                     .connection = self.connection,
 
@@ -187,6 +190,11 @@ pub const Http1Parser = struct {
     inline fn parseHeader(self: *Http1Parser, name: []const u8, value: []const u8) void {
         const trimmed_name = std.mem.trim(u8, name, &std.ascii.whitespace);
         const trimmed_value = std.mem.trim(u8, value, &std.ascii.whitespace);
+
+        if (std.ascii.eqlIgnoreCase(trimmed_name, "Host")) {
+            self.host = trimmed_value;
+            return;
+        }
 
         if (std.ascii.eqlIgnoreCase(trimmed_name, "Content-Length")) {
             const length = std.fmt.parseInt(usize, trimmed_value, 10) catch {

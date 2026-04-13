@@ -3,8 +3,9 @@ const std = @import("std");
 const http = @import("../http/http.zig");
 
 pub const HttpRequest = struct {
-    method: http.Method,
+    host: ?[]const u8,
     path: []const u8,
+    method: http.Method,
     version: http.Version,
     connection: http.Connection,
 

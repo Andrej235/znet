@@ -3,7 +3,7 @@ const http = @import("../http/http.zig");
 const posix = std.posix;
 const builtin = @import("builtin");
 
-const Router = @import("../app/router.zig").Router;
+const HostRouter = @import("../app/host_router.zig").HostRouter;
 const Listener = @import("../listener/listener.zig");
 const Poller = @import("../poller/poller.zig");
 const SPMCQueue = @import("../queues/spmc_queue.zig").Queue;
@@ -42,7 +42,7 @@ pub fn Reactor(comptime TApp: type) type {
 
         options: ServerOptions,
         allocator: std.mem.Allocator,
-        router: *const Router,
+        router: *const HostRouter,
 
         // number of connected clients
         connected: usize,
@@ -82,7 +82,7 @@ pub fn Reactor(comptime TApp: type) type {
             io_thread_id: usize,
             options: ServerOptions,
             ready_count: *std.atomic.Value(u32),
-            router: *const Router,
+            router: *const HostRouter,
         ) !ReactorHandle {
             const waker = try Waker.init();
 
@@ -152,7 +152,7 @@ pub fn Reactor(comptime TApp: type) type {
             io_thread_id: usize,
             options: ServerOptions,
             ready_count: *std.atomic.Value(u32),
-            router: *const Router,
+            router: *const HostRouter,
         ) !void {
             // pin thread to a specific cpu core to improve cache locality and reduce latency
             // this needs to be done before any allocations to ensure memory is allocated in the local NUMA node (first touch policy)
@@ -322,7 +322,14 @@ pub fn Reactor(comptime TApp: type) type {
                                 .http => |http_request| {
                                     Logger.debug("Received HTTP request: {} {s}", .{ http_request.method, http_request.path });
 
-                                    const match = self.router.lookup(http_request.path, http_request.method);
+                                    if (http_request.host == null) { // todo: return 400
+                                        Logger.warn("HTTP request missing Host header, rejecting", .{});
+                                        // release the input buffer
+                                        self.input_buffer_pool.release(job.buffer_idx);
+                                        continue;
+                                    }
+
+                                    const match = self.router.lookup(http_request.host.?, http_request.path, http_request.method);
                                     if (match) |m| {
                                         switch (m.action.executor) {
                                             .io => { // execute the action on the reactor thread

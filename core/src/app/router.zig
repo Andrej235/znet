@@ -54,7 +54,7 @@ pub const Router = struct {
 
     nodes: []const Node,
 
-    pub fn fromScopes(scopes: []const RuntimeScope, allocator: std.mem.Allocator) !Router {
+    pub fn fromScopes(comptime scopes: []const RuntimeScope, allocator: std.mem.Allocator) !Router {
         var root = Node{
             .segment = "/",
             .static_children = std.ArrayList(Node){},

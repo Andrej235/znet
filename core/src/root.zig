@@ -19,6 +19,7 @@ pub const Logger = @import("logger/logger.zig").Logger;
 pub const Options = @import("options.zig").Options;
 
 pub const App = @import("app/app.zig").App;
+pub const Host = @import("app/host/host.zig").Host;
 pub const Scope = @import("app/scope/scope.zig").Scope;
 pub const Action = @import("app/action/action.zig").Action;
 
@@ -30,4 +31,4 @@ pub const DIC = @import("dependency_injection/container.zig").Container;
 pub const DIService = @import("dependency_injection/service.zig").Service;
 
 pub const Router = @import("app/router.zig").Router;
-pub const HttpMethod = @import("requests/http.zig").HttpMethod;
+pub const http = @import("http/http.zig");

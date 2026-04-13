@@ -48,11 +48,6 @@ fn concatPathSegment(comptime prefix: []const u8, comptime segment: []const u8) 
     return prefix ++ "/" ++ segment;
 }
 
-pub const ActionId = struct {
-    scope_idx: u16,
-    action_idx: u16,
-};
-
 const ActionValidationError = error{
     ActionMissingCompileFn,
     ActionCompileFnNotFunction,

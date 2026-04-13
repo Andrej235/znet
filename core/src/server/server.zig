@@ -4,7 +4,7 @@ const net = std.net;
 
 const ServerOptions = @import("server_options.zig").ServerOptions;
 
-const Router = @import("../app/router.zig").Router;
+const HostRouter = @import("../app/host_router.zig").HostRouter;
 const Reactor = @import("reactor.zig").Reactor;
 const ReactorHandle = @import("reactor.zig").ReactorHandle;
 
@@ -25,11 +25,11 @@ const ServerInterface = struct {
 
     reactors: []ReactorHandle,
     shutdown_state: std.atomic.Value(ShutdownState),
-    router: *const Router,
+    router: *const HostRouter,
 
     reactors_ready_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
-    pub fn init(allocator: std.mem.Allocator, router: *const Router, comptime options: ServerOptions) !*ServerInterface {
+    pub fn init(allocator: std.mem.Allocator, router: *const HostRouter, comptime options: ServerOptions) !*ServerInterface {
         const reactors = try allocator.alloc(ReactorHandle, options.reactor_thread_count);
 
         const self = try allocator.create(ServerInterface);
@@ -101,7 +101,7 @@ pub fn Server(comptime TApp: type) type {
         interface: *ServerInterface,
 
         pub fn init(allocator: std.mem.Allocator, comptime options: ServerOptions) !Self {
-            const router = try allocator.create(Router);
+            const router = try allocator.create(HostRouter);
             router.* = try TApp.compileRouter(allocator);
 
             const server_interface = try ServerInterface.init(allocator, router, options);
