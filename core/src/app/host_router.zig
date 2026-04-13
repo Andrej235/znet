@@ -76,24 +76,29 @@ pub const HostRouter = struct {
     // todo: implement wildcards in host names, e.g. *.example.com, and make host router match them correctly
     // prioritize exact matches over wildcard matches, and more specific wildcard matches over less specific ones (e.g. a*.example.com should be prioritized over *.example.com for a host named api.example.com)`
 
-    // todo: implement ports
-    // todo: implement ip based routing, both ipv4 and ipv6
+    // todo: support ports
+    // todo: support ip hosts, both ipv4 and ipv6
     // todo: validate host structure, e.g. example..com is invalid
 
-    pub fn lookup(self: *const HostRouter, host: []const u8, path: []const u8, method: http.Method) ?Router.Match {
+    pub const LookupError = error{
+        HostNotFound,
+        PathNotFound,
+    };
+
+    pub fn lookup(self: *const HostRouter, host: []const u8, path: []const u8, method: http.Method) LookupError!Router.Match {
         const normalized_host = normalize(host);
 
         for (self.hosts) |host_node| {
             if (std.ascii.eqlIgnoreCase(normalized_host, host_node.host_name)) {
-                return host_node.router.lookup(path, method);
+                return host_node.router.lookup(path, method) orelse return LookupError.PathNotFound;
             }
         }
 
         if (self.fallback) |fallback| {
-            return fallback.router.lookup(path, method);
+            return fallback.router.lookup(path, method) orelse return LookupError.PathNotFound;
         }
 
-        return null;
+        return LookupError.HostNotFound;
     }
 
     fn normalize(host: []const u8) []const u8 {

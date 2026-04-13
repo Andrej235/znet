@@ -4,50 +4,6 @@ const z = @import("znet");
 const App = z.App(
     .{
         z.Host("example.com", .{z.Scope(null, .{z.Action(null, helloFromExample, .{})}, .{})}, .{}),
-        z.Host(
-            null,
-            .{
-                z.Scope(
-                    null,
-                    .{
-                        z.Action(null, hello, .{}),
-                        z.Action(.@"deeply-nested/{id}/{language}/post/{action}/edit", deeplyNestedPath, .{}),
-                    },
-                    .{},
-                ),
-                z.Scope(
-                    .api,
-                    .{
-                        z.Scope(
-                            .users,
-                            .{
-                                z.Action(null, hello, .{}),
-                                z.Action(.@"{id}", hello2, .{}),
-                                z.Action(.@"{id}/q", helloWithQuery, .{}),
-                                z.Action(.all, hello, .{}),
-                                z.Action(.@"all/preview", hello, .{}),
-                                z.Action(.register, hello, .{}),
-                                z.Action(.login, hello, .{}),
-                            },
-                            .{},
-                        ),
-                        z.Scope(
-                            .posts,
-                            .{
-                                z.Action(null, post, .{ .http_method = .POST }),
-                                z.Action(.all, hello, .{}),
-                                z.Action(.@"all/preview", hello, .{}),
-                                z.Action(.@"{id}", hello2, .{}),
-                                z.Action(.@"{id}/preview", hello2, .{}),
-                            },
-                            .{},
-                        ),
-                    },
-                    .{},
-                ),
-            },
-            .{},
-        ),
         z.Host("api.example.com", .{z.Scope(null, .{z.Action(null, helloFromExampleApi, .{})}, .{})}, .{}),
     },
     .{
