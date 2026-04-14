@@ -1,10 +1,11 @@
 const std = @import("std");
+const http = @import("../../http/http.zig");
+
 const ConnectionReader = @import("../connection_reader.zig").ConnectionReader;
 
 const Parser = @import("./parser.zig").Parser;
 const Request = @import("../../requests/request.zig").Request;
-
-const http = @import("../../http/http.zig");
+const ParsedHost = @import("../../app/host/parsed_host.zig").ParsedHost;
 
 const Logger = @import("../../logger/logger.zig").Logger.scoped(.http1_parser);
 
@@ -26,7 +27,7 @@ pub const Http1Parser = struct {
     method: ?http.Method = null,
     version: ?http.Version = null,
     path: ?[]const u8 = null,
-    host: ?[]const u8 = null,
+    host: ?ParsedHost = null,
 
     state: HttpState = .request_line,
 
@@ -160,10 +161,11 @@ pub const Http1Parser = struct {
         return Parser.ParseResult{
             .request = Request{
                 .http = .{
+                    .host = self.host.?,
+
                     .method = self.method.?,
                     .version = self.version.?,
                     .path = self.path.?,
-                    .host = self.host.?,
 
                     .connection = self.connection,
 
@@ -198,11 +200,7 @@ pub const Http1Parser = struct {
                 return Errors.InvalidHostHeader; // multiple Host headers are not allowed
             }
 
-            if (!validateHostHeader(trimmed_value)) {
-                return Errors.InvalidHostHeader;
-            }
-
-            self.host = trimmed_value;
+            self.host = ParsedHost.fromHostStr(trimmed_value) catch return Errors.InvalidHostHeader;
             return;
         }
 
@@ -245,17 +243,3 @@ pub const Http1Parser = struct {
         }
     }
 };
-
-fn validateHostHeader(host: []const u8) bool {
-    if (host.len == 0) {
-        return false;
-    }
-
-    for (host) |c| {
-        if (std.ascii.isControl(c) or std.ascii.isWhitespace(c)) {
-            return false;
-        }
-    }
-
-    return true;
-}

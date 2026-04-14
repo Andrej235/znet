@@ -324,7 +324,7 @@ pub fn Reactor(comptime TApp: type) type {
                                 .http => |http_request| {
                                     Logger.debug("Received HTTP request: {} {s}", .{ http_request.method, http_request.path });
 
-                                    const match = self.router.lookup(http_request.host, http_request.path, http_request.method) catch |err| switch (err) {
+                                    const match = self.router.lookup(&http_request.host, http_request.path, http_request.method) catch |err| switch (err) {
                                         error.HostNotFound => {
                                             self.sendErrorToClient(
                                                 client,

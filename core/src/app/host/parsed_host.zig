@@ -6,21 +6,34 @@ pub const HostType = enum {
     ip_v6,
 };
 
-pub const Host = struct {
+pub const ParsedHost = struct {
     type: HostType,
-    host_name: []const u8,
+    /// this field is NOT guaranteed to be lowercase, in case of a domain it must be compared using a case-insensitive comparison, for ipv4 and ipv6 there are no letters so case sensitivity is not an issue
+    hostname: []const u8,
     port: ?u16,
+
+    pub fn isDefaultHost(self: *const ParsedHost) bool {
+        return self.hostname.len == 0;
+    }
+
+    pub fn equal(self: *const ParsedHost, other: *const ParsedHost) bool {
+        return self.type == other.type and self.port == other.port and (if (self.type == .domain) std.ascii.eqlIgnoreCase(self.hostname, other.hostname) else std.mem.eql(u8, self.hostname, other.hostname));
+    }
+
+    pub fn fromHostStr(host_str: []const u8) ParseHostError!ParsedHost {
+        return parseHost(host_str);
+    }
 };
 
 const ParseHostError = error{
     InvalidHost,
 };
 
-pub fn parseHost(host: []const u8) ParseHostError!Host {
+fn parseHost(host: []const u8) ParseHostError!ParsedHost {
     return parseTrimmedHost(std.mem.trim(u8, host, &std.ascii.whitespace));
 }
 
-fn parseTrimmedHost(host: []const u8) ParseHostError!Host {
+fn parseTrimmedHost(host: []const u8) ParseHostError!ParsedHost {
     if (host.len == 0) {
         return error.InvalidHost;
     }
@@ -52,9 +65,9 @@ fn parseTrimmedHost(host: []const u8) ParseHostError!Host {
             return error.InvalidHost;
         };
 
-        return Host{
+        return ParsedHost{
             .type = .ip_v6,
-            .host_name = ipv6_address,
+            .hostname = ipv6_address,
             .port = port,
         };
     } else {
@@ -121,9 +134,9 @@ fn parseTrimmedHost(host: []const u8) ParseHostError!Host {
 
         if (has_alpha) {
             // domain
-            return Host{
+            return ParsedHost{
                 .type = .domain,
-                .host_name = hostname,
+                .hostname = hostname,
                 .port = port,
             };
         }
@@ -152,9 +165,9 @@ fn parseTrimmedHost(host: []const u8) ParseHostError!Host {
             }
         }
 
-        return Host{
+        return ParsedHost{
             .type = .ip_v4,
-            .host_name = hostname,
+            .hostname = hostname,
             .port = port,
         };
     }

@@ -4,10 +4,11 @@ const http = @import("../http/http.zig");
 const Router = @import("router.zig").Router;
 const AppOptions = @import("./app.zig").AppOptions;
 const validateHost = @import("host/host.zig").validateHost;
+const ParsedHost = @import("host/parsed_host.zig").ParsedHost;
 
 pub const HostRouter = struct {
     pub const Node = struct {
-        host_name: []const u8, // empty string for default / fallback host
+        host: ParsedHost, // empty hostname for fallback / default host
         router: Router,
     };
 
@@ -47,22 +48,27 @@ pub const HostRouter = struct {
             const TChild = @field(hosts, child.name);
             const name: []const u8 = @field(TChild, "host_name");
             const router: Router = try TChild.compileRouter(allocator, app_options);
+            const host = comptime if (name.len == 0) ParsedHost{
+                .hostname = "",
+                .port = null,
+                .type = .domain,
+            } else ParsedHost.fromHostStr(name) catch @compileError(std.fmt.comptimePrint("Invalid hostname {s}", .{name}));
 
             if (fallback_host_idx) |fallback| {
                 if (i == fallback) {
                     host_router.fallback = Node{
-                        .host_name = name,
+                        .host = host,
                         .router = router,
                     };
                 } else {
                     nodes[i - (if (i > fallback) 1 else 0)] = Node{
-                        .host_name = name,
+                        .host = host,
                         .router = router,
                     };
                 }
             } else {
                 nodes[i] = Node{
-                    .host_name = name,
+                    .host = host,
                     .router = router,
                 };
             }
@@ -71,25 +77,17 @@ pub const HostRouter = struct {
         return host_router;
     }
 
-    // todo: return an error set instead of null, error set should have 2 errors one for host not found and one for path not found, return 400 on host not found and 404 on path not found
-
     // todo: implement wildcards in host names, e.g. *.example.com, and make host router match them correctly
     // prioritize exact matches over wildcard matches, and more specific wildcard matches over less specific ones (e.g. a*.example.com should be prioritized over *.example.com for a host named api.example.com)`
-
-    // todo: support ports
-    // todo: support ip hosts, both ipv4 and ipv6
-    // todo: validate host structure, e.g. example..com is invalid
 
     pub const LookupError = error{
         HostNotFound,
         PathNotFound,
     };
 
-    pub fn lookup(self: *const HostRouter, host: []const u8, path: []const u8, method: http.Method) LookupError!Router.Match {
-        const normalized_host = normalize(host);
-
+    pub fn lookup(self: *const HostRouter, host: *const ParsedHost, path: []const u8, method: http.Method) LookupError!Router.Match {
         for (self.hosts) |host_node| {
-            if (std.ascii.eqlIgnoreCase(normalized_host, host_node.host_name)) {
+            if (host.equal(&host_node.host)) {
                 return host_node.router.lookup(path, method) orelse return LookupError.PathNotFound;
             }
         }
@@ -101,18 +99,9 @@ pub const HostRouter = struct {
         return LookupError.HostNotFound;
     }
 
-    fn normalize(host: []const u8) []const u8 {
-        var normalized = host;
-
-        // remove trailing dots
-        normalized = std.mem.trimEnd(u8, host, ".");
-
-        return normalized;
-    }
-
     pub fn print(self: *const HostRouter) void {
         for (self.hosts) |host_node| {
-            std.debug.print("{s}\n", .{host_node.host_name});
+            std.debug.print("{s}\n", .{host_node.host});
             host_node.router.print(1);
             std.debug.print("\n", .{});
         }
