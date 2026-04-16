@@ -509,7 +509,6 @@ pub fn Reactor(comptime TApp: type) type {
                                 Http1Parser.Errors.InvalidRequestLine,
                                 Http1Parser.Errors.InvalidHostHeader,
 
-                                Http1Parser.Errors.UnsupportedMethod,
                                 Http1Parser.Errors.UnsupportedTransferEncoding,
                                 Http1Parser.Errors.UnsupportedVersion,
                                 => {
@@ -528,7 +527,6 @@ pub fn Reactor(comptime TApp: type) type {
                                                             Http1Parser.Errors.InvalidHeaders => "Invalid headers",
                                                             Http1Parser.Errors.InvalidRequestLine => "Invalid request line",
                                                             Http1Parser.Errors.InvalidHostHeader => "Invalid host header",
-                                                            Http1Parser.Errors.UnsupportedMethod => "Unsupported method",
                                                             Http1Parser.Errors.UnsupportedTransferEncoding => "Unsupported transfer encoding",
                                                             Http1Parser.Errors.UnsupportedVersion => "Unsupported version",
                                                             else => unreachable,
@@ -538,6 +536,12 @@ pub fn Reactor(comptime TApp: type) type {
                                                 .truncated = false,
                                             },
                                         ),
+                                    }) catch continue;
+                                },
+
+                                Http1Parser.Errors.UnsupportedMethod => {
+                                    self.sendResponseToClient(client, void, .{
+                                        .http = HttpResponse(void).init(.not_implemented, .keep_alive, null, {}),
                                     }) catch continue;
                                 },
 

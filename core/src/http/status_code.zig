@@ -6,6 +6,7 @@ pub const StatusCode = enum(u16) {
     not_found = 404,
     method_not_allowed = 405,
     internal_server_error = 500,
+    not_implemented = 501,
 
     pub fn toReasonString(self: StatusCode) []const u8 {
         return switch (self) {
@@ -16,6 +17,7 @@ pub const StatusCode = enum(u16) {
             .not_found => "Not Found",
             .method_not_allowed => "Method Not Allowed",
             .internal_server_error => "Internal Server Error",
+            .not_implemented => "Not Implemented",
         };
     }
 
@@ -28,6 +30,7 @@ pub const StatusCode = enum(u16) {
             .not_found => "404 Not Found",
             .method_not_allowed => "405 Method Not Allowed",
             .internal_server_error => "500 Internal Server Error",
+            .not_implemented => "501 Not Implemented",
         };
     }
 };
