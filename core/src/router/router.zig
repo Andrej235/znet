@@ -1,8 +1,10 @@
 const std = @import("std");
-const RuntimeScope = @import("scope/runtime_scope.zig").RuntimeScope;
-const RuntimeAction = @import("action/runtime_action.zig").RuntimeAction;
+const RuntimeScope = @import("../app/scope/runtime_scope.zig").RuntimeScope;
+const RuntimeAction = @import("../app/action/runtime_action.zig").RuntimeAction;
+const ParamIterator = @import("param_router.zig").ParamIterator;
 
 const HttpMethod = @import("../http/http.zig").Method;
+const MethodsBitmap = @import("route_method_bitmap.zig").RouteMethodBitmap;
 
 pub const Router = struct {
     pub const Node = struct {
@@ -11,7 +13,7 @@ pub const Router = struct {
         param_child: ?*Node, // only one param child allowed per node
         actions: [HttpMethod.count]?RuntimeAction, // each index corresponds to an HTTP method, null if no action for that method
         has_actions: bool, // optimization to avoid iterating over actions array when printing
-        methods_bitmap: u16, // bitmap of allowed methods for this node and its children, used for 405 Method Not Allowed
+        methods_bitmap: MethodsBitmap, // bitmap of allowed methods for this node and its children, used for 405 Method Not Allowed
     };
 
     pub const Match = struct {
@@ -23,41 +25,7 @@ pub const Router = struct {
     pub const MatchResult = union(enum) {
         match: Match,
         not_found,
-        method_not_allowed: u16, // bitmap of allowed methods
-    };
-
-    pub const ParamIterator = struct {
-        request_path: []const u8,
-        request_template_path: []const u8,
-
-        request_path_index: usize,
-        request_template_path_index: usize,
-
-        pub fn next(self: *ParamIterator) ?struct { name: []const u8, value: []const u8 } {
-            while (true) {
-                self.request_template_path_index = (std.mem.indexOfScalarPos(u8, self.request_template_path, self.request_template_path_index, '/') orelse return null) + 1;
-                self.request_path_index = (std.mem.indexOfScalarPos(u8, self.request_path, self.request_path_index, '/') orelse return null) + 1;
-
-                if (self.request_template_path[self.request_template_path_index] != '{') // not a param segment
-                    continue;
-
-                const request_template_path_end_index = std.mem.indexOfScalarPos(u8, self.request_template_path, self.request_template_path_index, '/') orelse self.request_template_path.len;
-                const request_path_end_index = std.mem.indexOfScalarPos(u8, self.request_path, self.request_path_index, '/') orelse self.request_path.len;
-
-                const param_name = self.request_template_path[self.request_template_path_index + 1 .. request_template_path_end_index - 1]; // remove { and }
-                const param_value = self.request_path[self.request_path_index..request_path_end_index];
-
-                self.request_template_path_index = request_template_path_end_index;
-                self.request_path_index = request_path_end_index;
-
-                return .{
-                    .name = param_name,
-                    .value = param_value,
-                };
-            }
-
-            return null;
-        }
+        method_not_allowed: MethodsBitmap, // bitmap of allowed methods
     };
 
     nodes: []const Node,
@@ -69,7 +37,7 @@ pub const Router = struct {
             .param_child = null,
             .actions = [_]?RuntimeAction{null} ** HttpMethod.count,
             .has_actions = false,
-            .methods_bitmap = 0,
+            .methods_bitmap = .init(0),
         };
 
         for (scopes) |scope| {
@@ -96,7 +64,7 @@ pub const Router = struct {
                                 .param_child = null,
                                 .actions = [_]?RuntimeAction{null} ** HttpMethod.count,
                                 .has_actions = false,
-                                .methods_bitmap = 0,
+                                .methods_bitmap = .init(0),
                             };
                             current.param_child = new_node;
                             current = new_node;
@@ -120,7 +88,7 @@ pub const Router = struct {
                                 .param_child = null,
                                 .actions = [_]?RuntimeAction{null} ** HttpMethod.count,
                                 .has_actions = false,
-                                .methods_bitmap = 0,
+                                .methods_bitmap = .init(0),
                             };
                             try current.static_children.append(allocator, new_node);
                             current = @constCast(&current.static_children.items[current.static_children.items.len - 1]);
@@ -128,12 +96,12 @@ pub const Router = struct {
                     }
                 }
 
-                const method_idx = @intFromEnum(action.http_method);
-                std.debug.assert(current.actions[method_idx] == null);
+                std.debug.assert(!current.methods_bitmap.hasMethod(action.http_method));
 
-                current.actions[method_idx] = action;
+                const http_method_index = @intFromEnum(action.http_method);
+                current.actions[http_method_index] = action;
                 current.has_actions = true;
-                current.methods_bitmap |= @as(u16, 1) << method_idx;
+                current.methods_bitmap.addMethod(action.http_method);
             }
         }
 

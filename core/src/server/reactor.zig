@@ -5,7 +5,7 @@ const builtin = @import("builtin");
 
 const Http1Parser = @import("./parsers/http1.zig").Http1Parser;
 
-const HostRouter = @import("../app/host_router.zig").HostRouter;
+const HostRouter = @import("../router/host_router.zig").HostRouter;
 const Listener = @import("../listener/listener.zig");
 const Poller = @import("../poller/poller.zig");
 const SPMCQueue = @import("../queues/spmc_queue.zig").Queue;

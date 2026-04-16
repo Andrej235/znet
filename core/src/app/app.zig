@@ -1,8 +1,8 @@
 const std = @import("std");
 
 const DIContainer = @import("../dependency_injection/container.zig").Container;
-const HostRouter = @import("host_router.zig").HostRouter;
-const Router = @import("router.zig").Router;
+const HostRouter = @import("../router/host_router.zig").HostRouter;
+const Router = @import("../router/router.zig").Router;
 
 const validateHost = @import("host/host.zig").validateHost;
 const validateScope = @import("scope/scope.zig").validateScope;

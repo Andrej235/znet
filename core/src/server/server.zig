@@ -4,7 +4,7 @@ const net = std.net;
 
 const ServerOptions = @import("server_options.zig").ServerOptions;
 
-const HostRouter = @import("../app/host_router.zig").HostRouter;
+const HostRouter = @import("../router/host_router.zig").HostRouter;
 const Reactor = @import("reactor.zig").Reactor;
 const ReactorHandle = @import("reactor.zig").ReactorHandle;
 

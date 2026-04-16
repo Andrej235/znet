@@ -2,10 +2,11 @@ const std = @import("std");
 const http = @import("../http/http.zig");
 
 const Router = @import("router.zig").Router;
-const AppOptions = @import("./app.zig").AppOptions;
-const validateHost = @import("host/host.zig").validateHost;
-const RequestHost = @import("host/request_host.zig").RequestHost;
-const PatternHost = @import("host/host_pattern.zig").HostPattern;
+const AppOptions = @import("../app/app.zig").AppOptions;
+const validateHost = @import("../app/host/host.zig").validateHost;
+const RequestHost = @import("../app/host/request_host.zig").RequestHost;
+const PatternHost = @import("../app/host/host_pattern.zig").HostPattern;
+const MethodsBitmap = @import("route_method_bitmap.zig").RouteMethodBitmap;
 
 pub const HostRouter = struct {
     pub const Node = struct {
@@ -17,7 +18,7 @@ pub const HostRouter = struct {
         match: Router.Match,
         host_not_found,
         not_found,
-        method_not_allowed: u16, // bitmap of allowed methods for this path
+        method_not_allowed: MethodsBitmap, // bitmap of allowed methods for this path
     };
 
     /// sorted by host specificity (most specific first), fallback host (if exists) is always last
@@ -55,8 +56,6 @@ pub const HostRouter = struct {
             .hosts = nodes,
         };
     }
-
-
 
     pub fn lookup(self: *const HostRouter, host: *const RequestHost, path: []const u8, method: http.Method) MatchResult {
         for (self.hosts) |host_node| {

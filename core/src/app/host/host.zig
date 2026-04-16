@@ -3,7 +3,7 @@ const std = @import("std");
 const HostOptions = @import("host_options.zig").HostOptions;
 
 const validateScope = @import("../scope/scope.zig").validateScope;
-const Router = @import("../router.zig").Router;
+const Router = @import("../../router/router.zig").Router;
 const RuntimeScope = @import("../scope/runtime_scope.zig").RuntimeScope;
 const AppOptions = @import("../app.zig").AppOptions;
 const ResolvedScopeOptions = @import("../scope/resolved_scope_options.zig").ResolvedScopeOptions;
