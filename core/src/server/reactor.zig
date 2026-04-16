@@ -404,21 +404,23 @@ pub fn Reactor(comptime TApp: type) type {
                                         },
 
                                         .host_not_found => {
-                                            self.sendErrorToClient(
-                                                client,
-                                                .bad_request,
-                                                http_request.connection,
-                                                ClientError{
-                                                    .message = "Host not found",
-                                                    .details = &[_]ClientErrorDetails{
-                                                        .{
-                                                            .source = "router",
-                                                            .message = "No matching host found for the given host header",
+                                            self.sendResponseToClient(client, ClientError, .{
+                                                .http = HttpResponse(ClientError).init(
+                                                    .bad_request,
+                                                    http_request.connection,
+                                                    http_request.accepts,
+                                                    ClientError{
+                                                        .message = "Host not found",
+                                                        .details = &[_]ClientErrorDetails{
+                                                            .{
+                                                                .source = "router",
+                                                                .message = "No matching host found for the given host header",
+                                                            },
                                                         },
+                                                        .truncated = false,
                                                     },
-                                                    .truncated = false,
-                                                },
-                                            ) catch {
+                                                ),
+                                            }) catch {
                                                 // no output buffers available or the client's response queue is full
                                                 self.input_buffer_pool.release(job.buffer_idx);
                                                 Logger.info("No output buffers available, dropping message", .{});
@@ -428,7 +430,18 @@ pub fn Reactor(comptime TApp: type) type {
                                         },
 
                                         .not_found => {
-                                            self.sendErrorToClient(client, .not_found, http_request.connection, null) catch {
+                                            self.sendResponseToClient(
+                                                client,
+                                                void,
+                                                .{
+                                                    .http = HttpResponse(void).init(
+                                                        .not_found,
+                                                        http_request.connection,
+                                                        null,
+                                                        {},
+                                                    ),
+                                                },
+                                            ) catch {
                                                 // no output buffers available or the client's response queue is full
                                                 self.input_buffer_pool.release(job.buffer_idx);
                                                 Logger.info("No output buffers available, dropping message", .{});
@@ -437,22 +450,24 @@ pub fn Reactor(comptime TApp: type) type {
                                             continue;
                                         },
 
-                                        .method_not_allowed => {
-                                            self.sendErrorToClient(
-                                                client,
-                                                .method_not_allowed,
-                                                http_request.connection,
-                                                ClientError{
-                                                    .message = "Method not allowed",
-                                                    .details = &[_]ClientErrorDetails{
-                                                        .{
-                                                            .source = "router",
-                                                            .message = "The requested path exists but does not support the requested HTTP method",
+                                        .method_not_allowed => |allowed_methods| {
+                                            self.sendResponseToClient(client, ClientError, .{
+                                                .http = HttpResponse(ClientError).init(
+                                                    .method_not_allowed,
+                                                    http_request.connection,
+                                                    http_request.accepts,
+                                                    ClientError{
+                                                        .message = "Method not allowed",
+                                                        .details = &[_]ClientErrorDetails{
+                                                            .{
+                                                                .source = "router",
+                                                                .message = "The requested path exists but does not support the requested HTTP method",
+                                                            },
                                                         },
+                                                        .truncated = false,
                                                     },
-                                                    .truncated = false,
-                                                },
-                                            ) catch {
+                                                ).withAllowedMethods(allowed_methods),
+                                            }) catch {
                                                 // no output buffers available or the client's response queue is full
                                                 self.input_buffer_pool.release(job.buffer_idx);
                                                 Logger.info("No output buffers available, dropping message", .{});
@@ -498,30 +513,32 @@ pub fn Reactor(comptime TApp: type) type {
                                 Http1Parser.Errors.UnsupportedTransferEncoding,
                                 Http1Parser.Errors.UnsupportedVersion,
                                 => {
-                                    self.sendErrorToClient(
-                                        client,
-                                        .bad_request,
-                                        .keep_alive,
-                                        ClientError{
-                                            .message = "Failed to parse HTTP request",
-                                            .details = &[_]ClientErrorDetails{
-                                                .{
-                                                    .source = "http_parser",
-                                                    .message = switch (err) {
-                                                        Http1Parser.Errors.MissingHostHeader => "Missing host header",
-                                                        Http1Parser.Errors.InvalidHeaders => "Invalid headers",
-                                                        Http1Parser.Errors.InvalidRequestLine => "Invalid request line",
-                                                        Http1Parser.Errors.InvalidHostHeader => "Invalid host header",
-                                                        Http1Parser.Errors.UnsupportedMethod => "Unsupported method",
-                                                        Http1Parser.Errors.UnsupportedTransferEncoding => "Unsupported transfer encoding",
-                                                        Http1Parser.Errors.UnsupportedVersion => "Unsupported version",
-                                                        else => unreachable,
+                                    self.sendResponseToClient(client, ClientError, .{
+                                        .http = HttpResponse(ClientError).init(
+                                            .bad_request,
+                                            .keep_alive,
+                                            null,
+                                            ClientError{
+                                                .message = "Failed to parse HTTP request",
+                                                .details = &[_]ClientErrorDetails{
+                                                    .{
+                                                        .source = "http_parser",
+                                                        .message = switch (err) {
+                                                            Http1Parser.Errors.MissingHostHeader => "Missing host header",
+                                                            Http1Parser.Errors.InvalidHeaders => "Invalid headers",
+                                                            Http1Parser.Errors.InvalidRequestLine => "Invalid request line",
+                                                            Http1Parser.Errors.InvalidHostHeader => "Invalid host header",
+                                                            Http1Parser.Errors.UnsupportedMethod => "Unsupported method",
+                                                            Http1Parser.Errors.UnsupportedTransferEncoding => "Unsupported transfer encoding",
+                                                            Http1Parser.Errors.UnsupportedVersion => "Unsupported version",
+                                                            else => unreachable,
+                                                        },
                                                     },
                                                 },
+                                                .truncated = false,
                                             },
-                                            .truncated = false,
-                                        },
-                                    ) catch continue;
+                                        ),
+                                    }) catch continue;
                                 },
 
                                 else => {
@@ -657,7 +674,7 @@ pub fn Reactor(comptime TApp: type) type {
             truncated: bool,
         };
 
-        fn sendErrorToClient(self: *Self, client: *ClientConnection, status: http.StatusCode, connection: http.Connection, client_error: ?ClientError) error{ FailedToAcquireBuffer, FailedToWrite, ClientQueueFull }!void {
+        fn sendResponseToClient(self: *Self, client: *ClientConnection, TBody: type, response: Response(TBody)) error{ FailedToAcquireBuffer, FailedToWrite, ClientQueueFull }!void {
             // acquire a new output buffer if needed
             if (self.current_output_buffer_idx == null) {
                 const buffer_idx = self.output_buffer_pool.acquire() orelse {
@@ -672,38 +689,10 @@ pub fn Reactor(comptime TApp: type) type {
 
             var writer: std.Io.Writer = .fixed(self.current_output_buffer);
 
-            const bytes_written = blk: {
-                if (client_error) |c_err| {
-                    const response: Response(ClientError) = .{
-                        .http = HttpResponse(ClientError).init(
-                            status,
-                            connection,
-                            null,
-                            c_err,
-                        ),
-                    };
-
-                    break :blk ResponseWriter.write(ClientError, response, &writer) catch |err| {
-                        Logger.err("Failed to write error response: {}", .{err});
-                        // keep the current output buffer to avoid just re-acquiring it in the next iteration
-                        return error.FailedToWrite;
-                    };
-                } else {
-                    const response: Response(void) = .{
-                        .http = HttpResponse(void).init(
-                            status,
-                            connection,
-                            null,
-                            {},
-                        ),
-                    };
-
-                    break :blk ResponseWriter.write(void, response, &writer) catch |err| {
-                        Logger.err("Failed to write error response: {}", .{err});
-                        // keep the current output buffer to avoid just re-acquiring it in the next iteration
-                        return error.FailedToWrite;
-                    };
-                }
+            const bytes_written = ResponseWriter.write(TBody, response, &writer) catch |err| {
+                Logger.err("Failed to write error response: {}", .{err});
+                // keep the current output buffer to avoid just re-acquiring it in the next iteration
+                return error.FailedToWrite;
             };
 
             const response_data = self.current_output_buffer[0..bytes_written];

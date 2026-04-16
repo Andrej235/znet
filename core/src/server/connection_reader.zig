@@ -107,6 +107,7 @@ pub const ConnectionReader = struct {
             return Parser{ .tls = .init() };
         }
 
+        // todo: make better http detection
         if (std.ascii.isUpper(buf[0]) and std.ascii.isUpper(buf[1]) and std.ascii.isUpper(buf[2]) and std.mem.indexOfScalar(u8, buf, ' ') != null) {
             // likely http 1.1
             return Parser{ .http1 = .init() };

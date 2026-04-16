@@ -3,6 +3,7 @@ const http = @import("../../http/http.zig");
 
 const HttpResponse = @import("../http.zig").HttpResponse;
 const Serializer = @import("../../serialization/serializer.zig");
+const RouteMethodBitmap = @import("../../router/route_method_bitmap.zig").RouteMethodBitmap;
 
 pub fn HttpResponseWriter(comptime TBody: type) type {
     return struct {
@@ -23,6 +24,7 @@ pub fn HttpResponseWriter(comptime TBody: type) type {
             try self.writeServerHeader();
             try self.writeConnectionHeader(response.connection);
             try self.writeCacheHeaders(response.cache_config);
+            try self.writeAllowedMethodsHeader(response.allowed_methods);
             try self.writeBody(response.body, response.content_type);
 
             return self.bytes_written;
@@ -215,6 +217,34 @@ pub fn HttpResponseWriter(comptime TBody: type) type {
                 const header = "Cache-Control: no-store\r\n";
                 try self.writer.writeAll(header);
                 self.bytes_written += header.len;
+            }
+        }
+
+        fn writeAllowedMethodsHeader(self: *Self, allowed_methods: ?RouteMethodBitmap) !void {
+            if (allowed_methods) |methods| {
+                const header_name = "Allow: ";
+                try self.writer.writeAll(header_name);
+
+                var first = true;
+                var bytes_written_for_methods: usize = 0;
+                var it = methods.iterator();
+
+                while (it.next()) |method| {
+                    std.debug.print("method: {}\n", .{method});
+                    if (!first) {
+                        try self.writer.writeAll(", ");
+                        self.bytes_written += 2;
+                    }
+
+                    const method_str = method.toString();
+                    try self.writer.writeAll(method_str);
+                    bytes_written_for_methods += method_str.len;
+
+                    first = false;
+                }
+
+                try self.writer.writeAll("\r\n");
+                self.bytes_written += header_name.len + bytes_written_for_methods + 2; // +2 for CRLF
             }
         }
 

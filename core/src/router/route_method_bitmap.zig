@@ -26,9 +26,13 @@ pub const RouteMethodBitmap = struct {
         self.bitmap = 0;
     }
 
+    pub fn iterator(self: RouteMethodBitmap) BitmapIterator {
+        return BitmapIterator{ .bitmap = self.bitmap };
+    }
+
     pub fn toString(self: RouteMethodBitmap, writer: *std.io.Writer) !void {
         var first = true;
-        var iter = BitmapIterator{ .bitmap = self.bitmap };
+        var iter = self.iterator();
 
         while (iter.next()) |method| {
             if (!first) {
@@ -44,12 +48,15 @@ const BitmapIterator = struct {
     bitmap: u16,
 
     pub fn next(self: *BitmapIterator) ?http.Method {
-        const zero_bits = @clz(self.bitmap);
+        const zero_bits = @ctz(self.bitmap);
         if (zero_bits >= http.Method.count)
             return null;
 
         const method: http.Method = @enumFromInt(zero_bits);
-        self.bitmap &= ~(@as(u16, 1) << zero_bits); // clear the bit we just returned
+        // clear the bit we just returned
+        // int cast is required to avoid overflow as clz of u16 can be 16, which is out of range for a u4 required to shift a u16
+        // this is safe from overflow because of the check above ensuring zero_bits is less than the number of methods (which is equal to 9)
+        self.bitmap &= ~(@as(u16, 1) << @intCast(zero_bits));
         return method;
     }
 };

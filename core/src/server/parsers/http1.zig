@@ -89,6 +89,7 @@ pub const Http1Parser = struct {
                             self.method = http.Method.fromString(method) orelse {
                                 Logger.err("Unsupported HTTP method: {s}", .{method});
                                 // todo: implement arbitrary methods because spec supports them
+                                // todo: reject requests with unsupported methods with a 501 Not Implemented response
                                 return Errors.UnsupportedMethod;
                             };
                             self.path = path;

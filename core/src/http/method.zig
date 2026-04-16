@@ -12,15 +12,15 @@ pub const HttpMethod = enum(u4) {
     PATCH = 8,
 
     pub fn fromString(s: []const u8) ?HttpMethod {
-        if (std.ascii.eqlIgnoreCase(s, "GET")) return .GET;
-        if (std.ascii.eqlIgnoreCase(s, "POST")) return .POST;
-        if (std.ascii.eqlIgnoreCase(s, "PUT")) return .PUT;
-        if (std.ascii.eqlIgnoreCase(s, "DELETE")) return .DELETE;
-        if (std.ascii.eqlIgnoreCase(s, "HEAD")) return .HEAD;
-        if (std.ascii.eqlIgnoreCase(s, "OPTIONS")) return .OPTIONS;
-        if (std.ascii.eqlIgnoreCase(s, "CONNECT")) return .CONNECT;
-        if (std.ascii.eqlIgnoreCase(s, "TRACE")) return .TRACE;
-        if (std.ascii.eqlIgnoreCase(s, "PATCH")) return .PATCH;
+        if (std.mem.eql(u8, s, "GET")) return .GET;
+        if (std.mem.eql(u8, s, "POST")) return .POST;
+        if (std.mem.eql(u8, s, "PUT")) return .PUT;
+        if (std.mem.eql(u8, s, "DELETE")) return .DELETE;
+        if (std.mem.eql(u8, s, "HEAD")) return .HEAD;
+        if (std.mem.eql(u8, s, "OPTIONS")) return .OPTIONS;
+        if (std.mem.eql(u8, s, "CONNECT")) return .CONNECT;
+        if (std.mem.eql(u8, s, "TRACE")) return .TRACE;
+        if (std.mem.eql(u8, s, "PATCH")) return .PATCH;
         return null;
     }
 
