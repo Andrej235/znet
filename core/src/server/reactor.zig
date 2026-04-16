@@ -324,8 +324,86 @@ pub fn Reactor(comptime TApp: type) type {
                                 .http => |http_request| {
                                     Logger.debug("Received HTTP request: {} {s}", .{ http_request.method, http_request.path });
 
-                                    const match = self.router.lookup(&http_request.host, http_request.path, http_request.method) catch |err| switch (err) {
-                                        error.HostNotFound => {
+                                    const match_result = self.router.lookup(&http_request.host, http_request.path, http_request.method);
+
+                                    switch (match_result) {
+                                        .match => |match| switch (match.action.executor) {
+                                            .io => { // execute the action on the reactor thread
+                                                // acquire a new output buffer if needed
+                                                if (self.current_output_buffer_idx == null) {
+                                                    const buffer_idx = self.output_buffer_pool.acquire() orelse {
+                                                        // no output buffers available, drop the message and release the input buffer
+                                                        self.input_buffer_pool.release(job.buffer_idx);
+
+                                                        Logger.info("No output buffers available, dropping message", .{});
+                                                        continue;
+                                                    };
+
+                                                    self.current_output_buffer_idx = buffer_idx;
+                                                    self.current_output_buffer = self.output_buffer_pool.buffer(buffer_idx);
+                                                }
+
+                                                var writer: std.Io.Writer = .fixed(self.current_output_buffer);
+                                                const bytes_written = match.action.handler(
+                                                    .{
+                                                        .allocator = self.allocator,
+                                                        .waker = self.waker,
+
+                                                        .connection = http_request.connection,
+
+                                                        .body = http_request.body,
+                                                        .body_content_type = http_request.content_type,
+
+                                                        .output_writer = &writer,
+                                                        .accepts = http_request.accepts,
+
+                                                        .param_iterator = match.params,
+                                                        .query = match.query,
+                                                    },
+                                                ) catch |err| {
+                                                    // keep the current output buffer to avoid just re-acquiring it in the next iteration
+                                                    // release the input buffer
+
+                                                    self.input_buffer_pool.release(job.buffer_idx);
+                                                    Logger.warn("Action at {s} failed with error: {}", .{ match.action.path, err });
+                                                    continue;
+                                                };
+
+                                                // release the input buffer
+                                                self.input_buffer_pool.release(job.buffer_idx);
+
+                                                const response_data = self.current_output_buffer[0..bytes_written];
+
+                                                // response_data will be freed by the io thread after sending
+                                                client.enqueueMessage(OutMessage{
+                                                    .offset = 0,
+                                                    .data = response_data,
+                                                    .buffer_idx = self.current_output_buffer_idx.?,
+                                                    .keep_alive = http_request.connection == .keep_alive,
+                                                }) catch {
+                                                    // client's response queue is full
+                                                    // we can't really do anything about it, so just move on to the next job
+                                                    // keep the current output buffer to avoid just re-acquiring it in the next iteration
+                                                    continue;
+                                                };
+
+                                                // released in reactor thread, set to null here to indicate that we don't have a current buffer anymore
+                                                self.current_output_buffer_idx = null;
+                                            },
+                                            .worker_pool => { // pass the job over to the worker pool, guaranteed to be a valid request
+                                                self.worker_pool_job_queue.tryPush(job) catch {
+                                                    // queue full, drop the message and release the input buffer
+                                                    self.input_buffer_pool.release(job.buffer_idx);
+
+                                                    Logger.info("Worker pool job queue full, dropping message", .{});
+                                                    continue;
+                                                };
+
+                                                self.worker_pool_semaphore.release();
+                                            },
+                                        },
+
+                                        .host_not_found => {
                                             self.sendErrorToClient(
                                                 client,
                                                 .bad_request,
@@ -349,7 +427,7 @@ pub fn Reactor(comptime TApp: type) type {
                                             continue;
                                         },
 
-                                        error.PathNotFound => {
+                                        .not_found => {
                                             self.sendErrorToClient(client, .not_found, http_request.connection, null) catch {
                                                 // no output buffers available or the client's response queue is full
                                                 self.input_buffer_pool.release(job.buffer_idx);
@@ -358,80 +436,29 @@ pub fn Reactor(comptime TApp: type) type {
 
                                             continue;
                                         },
-                                    };
-                                    switch (match.action.executor) {
-                                        .io => { // execute the action on the reactor thread
-                                            // acquire a new output buffer if needed
-                                            if (self.current_output_buffer_idx == null) {
-                                                const buffer_idx = self.output_buffer_pool.acquire() orelse {
-                                                    // no output buffers available, drop the message and release the input buffer
-                                                    self.input_buffer_pool.release(job.buffer_idx);
 
-                                                    Logger.info("No output buffers available, dropping message", .{});
-                                                    continue;
-                                                };
-
-                                                self.current_output_buffer_idx = buffer_idx;
-                                                self.current_output_buffer = self.output_buffer_pool.buffer(buffer_idx);
-                                            }
-
-                                            var writer: std.Io.Writer = .fixed(self.current_output_buffer);
-                                            const bytes_written = match.action.handler(
-                                                .{
-                                                    .allocator = self.allocator,
-                                                    .waker = self.waker,
-
-                                                    .connection = http_request.connection,
-
-                                                    .body = http_request.body,
-                                                    .body_content_type = http_request.content_type,
-
-                                                    .output_writer = &writer,
-                                                    .accepts = http_request.accepts,
-
-                                                    .param_iterator = match.params,
-                                                    .query = match.query,
+                                        .method_not_allowed => {
+                                            self.sendErrorToClient(
+                                                client,
+                                                .method_not_allowed,
+                                                http_request.connection,
+                                                ClientError{
+                                                    .message = "Method not allowed",
+                                                    .details = &[_]ClientErrorDetails{
+                                                        .{
+                                                            .source = "router",
+                                                            .message = "The requested path exists but does not support the requested HTTP method",
+                                                        },
+                                                    },
+                                                    .truncated = false,
                                                 },
-                                            ) catch |err| {
-                                                // keep the current output buffer to avoid just re-acquiring it in the next iteration
-                                                // release the input buffer
-
+                                            ) catch {
+                                                // no output buffers available or the client's response queue is full
                                                 self.input_buffer_pool.release(job.buffer_idx);
-                                                Logger.warn("Action at {s} failed with error: {}", .{ match.action.path, err });
-                                                continue;
+                                                Logger.info("No output buffers available, dropping message", .{});
                                             };
 
-                                            // release the input buffer
-                                            self.input_buffer_pool.release(job.buffer_idx);
-
-                                            const response_data = self.current_output_buffer[0..bytes_written];
-
-                                            // response_data will be freed by the io thread after sending
-                                            client.enqueueMessage(OutMessage{
-                                                .offset = 0,
-                                                .data = response_data,
-                                                .buffer_idx = self.current_output_buffer_idx.?,
-                                                .keep_alive = http_request.connection == .keep_alive,
-                                            }) catch {
-                                                // client's response queue is full
-                                                // we can't really do anything about it, so just move on to the next job
-                                                // keep the current output buffer to avoid just re-acquiring it in the next iteration
-                                                continue;
-                                            };
-
-                                            // released in reactor thread, set to null here to indicate that we don't have a current buffer anymore
-                                            self.current_output_buffer_idx = null;
-                                        },
-                                        .worker_pool => { // pass the job over to the worker pool, guaranteed to be a valid request
-                                            self.worker_pool_job_queue.tryPush(job) catch {
-                                                // queue full, drop the message and release the input buffer
-                                                self.input_buffer_pool.release(job.buffer_idx);
-
-                                                Logger.info("Worker pool job queue full, dropping message", .{});
-                                                continue;
-                                            };
-
-                                            self.worker_pool_semaphore.release();
+                                            continue;
                                         },
                                     }
                                 },

@@ -10,12 +10,20 @@ pub const Router = struct {
         static_children: std.ArrayList(Node),
         param_child: ?*Node, // only one param child allowed per node
         actions: [HttpMethod.count]?RuntimeAction, // each index corresponds to an HTTP method, null if no action for that method
+        has_actions: bool, // optimization to avoid iterating over actions array when printing
+        methods_bitmap: u16, // bitmap of allowed methods for this node and its children, used for 405 Method Not Allowed
     };
 
     pub const Match = struct {
         action: RuntimeAction,
         params: ParamIterator,
         query: ?[]const u8,
+    };
+
+    pub const MatchResult = union(enum) {
+        match: Match,
+        not_found,
+        method_not_allowed: u16, // bitmap of allowed methods
     };
 
     pub const ParamIterator = struct {
@@ -60,6 +68,8 @@ pub const Router = struct {
             .static_children = std.ArrayList(Node){},
             .param_child = null,
             .actions = [_]?RuntimeAction{null} ** HttpMethod.count,
+            .has_actions = false,
+            .methods_bitmap = 0,
         };
 
         for (scopes) |scope| {
@@ -85,6 +95,8 @@ pub const Router = struct {
                                 .static_children = std.ArrayList(Node){},
                                 .param_child = null,
                                 .actions = [_]?RuntimeAction{null} ** HttpMethod.count,
+                                .has_actions = false,
+                                .methods_bitmap = 0,
                             };
                             current.param_child = new_node;
                             current = new_node;
@@ -107,6 +119,8 @@ pub const Router = struct {
                                 .static_children = std.ArrayList(Node){},
                                 .param_child = null,
                                 .actions = [_]?RuntimeAction{null} ** HttpMethod.count,
+                                .has_actions = false,
+                                .methods_bitmap = 0,
                             };
                             try current.static_children.append(allocator, new_node);
                             current = @constCast(&current.static_children.items[current.static_children.items.len - 1]);
@@ -118,6 +132,8 @@ pub const Router = struct {
                 std.debug.assert(current.actions[method_idx] == null);
 
                 current.actions[method_idx] = action;
+                current.has_actions = true;
+                current.methods_bitmap |= @as(u16, 1) << method_idx;
             }
         }
 
@@ -132,20 +148,39 @@ pub const Router = struct {
         }
     }
 
-    pub fn lookup(self: *const Router, path: []const u8, method: HttpMethod) ?Match {
+    pub fn lookup(self: *const Router, path: []const u8, method: HttpMethod) MatchResult {
         const query_index = std.mem.indexOfScalar(u8, path, '?');
         const query = if (query_index) |i| path[i + 1 ..] else null;
 
         const path_without_query = if (query_index) |i| path[0..i] else path;
         const normalized_path = normalizePath(path_without_query);
 
-        for (self.nodes) |*node| {
-            if (lookupNode(node, normalized_path, query, method)) |match| {
-                return match;
+        for (self.nodes) |*root| {
+            if (lookupNode(root, normalized_path)) |node| {
+                const method_idx = @intFromEnum(method);
+
+                if (node.actions[method_idx]) |action| {
+                    return .{
+                        .match = Match{
+                            .action = action,
+                            .params = .{
+                                .request_path = path,
+                                .request_template_path = normalizePath(action.path),
+                                .request_path_index = 0,
+                                .request_template_path_index = 0,
+                            },
+                            .query = query,
+                        },
+                    };
+                }
+
+                return .{
+                    .method_not_allowed = node.methods_bitmap,
+                };
             }
         }
 
-        return null;
+        return .{ .not_found = {} };
     }
 };
 
@@ -164,7 +199,7 @@ fn printWithIndent(node: *const Router.Node, indent: usize, is_param: bool) void
         std.debug.print("{s}", .{segment});
     }
 
-    if (hasActions(node)) {
+    if (node.has_actions) {
         std.debug.print(" (", .{});
 
         var found = false;
@@ -192,32 +227,10 @@ fn printWithIndent(node: *const Router.Node, indent: usize, is_param: bool) void
     }
 }
 
-fn hasActions(node: *const Router.Node) bool {
-    for (node.actions) |action| {
-        if (action) |_| {
-            return true;
-        }
-    }
-    return false;
-}
-
-fn lookupNode(node: *const Router.Node, path: []const u8, query: ?[]const u8, method: HttpMethod) ?Router.Match {
+fn lookupNode(node: *const Router.Node, path: []const u8) ?*const Router.Node {
     if (path.len == 0) {
         // root path
-        const method_idx = @intFromEnum(method);
-        if (node.actions[method_idx]) |action| {
-            return Router.Match{
-                .action = action,
-                .params = .{
-                    .request_path = "",
-                    .request_template_path = "",
-                    .request_path_index = 0,
-                    .request_template_path_index = 0,
-                },
-                .query = null,
-            };
-        }
-        return null;
+        return node;
     }
 
     var segments = std.mem.splitScalar(u8, path, '/');
@@ -251,21 +264,7 @@ fn lookupNode(node: *const Router.Node, path: []const u8, query: ?[]const u8, me
         }
     }
 
-    const method_idx = @intFromEnum(method);
-    if (current.actions[method_idx]) |action| {
-        return Router.Match{
-            .action = action,
-            .params = .{
-                .request_path = path,
-                .request_template_path = normalizePath(action.path),
-                .request_path_index = 0,
-                .request_template_path_index = 0,
-            },
-            .query = query,
-        };
-    }
-
-    return null;
+    return current;
 }
 
 fn normalizePath(path: []const u8) []const u8 {

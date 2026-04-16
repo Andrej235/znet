@@ -13,6 +13,13 @@ pub const HostRouter = struct {
         router: Router,
     };
 
+    pub const MatchResult = union(enum) {
+        match: Router.Match,
+        host_not_found,
+        not_found,
+        method_not_allowed: u16, // bitmap of allowed methods for this path
+    };
+
     /// sorted by host specificity (most specific first), fallback host (if exists) is always last
     hosts: []Node,
 
@@ -49,19 +56,21 @@ pub const HostRouter = struct {
         };
     }
 
-    pub const LookupError = error{
-        HostNotFound,
-        PathNotFound,
-    };
 
-    pub fn lookup(self: *const HostRouter, host: *const RequestHost, path: []const u8, method: http.Method) LookupError!Router.Match {
+
+    pub fn lookup(self: *const HostRouter, host: *const RequestHost, path: []const u8, method: http.Method) MatchResult {
         for (self.hosts) |host_node| {
             if (host_node.host.match(host)) {
-                return host_node.router.lookup(path, method) orelse return LookupError.PathNotFound;
+                const match_result = host_node.router.lookup(path, method);
+                switch (match_result) {
+                    .match => |m| return .{ .match = m },
+                    .not_found => return .not_found,
+                    .method_not_allowed => |allowed_methods| return .{ .method_not_allowed = allowed_methods },
+                }
             }
         }
 
-        return LookupError.HostNotFound;
+        return .host_not_found;
     }
 
     pub fn print(self: *const HostRouter) void {

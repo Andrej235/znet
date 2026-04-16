@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub const HttpMethod = enum(u8) {
+pub const HttpMethod = enum(u4) {
     GET = 0,
     POST = 1,
     PUT = 2,
