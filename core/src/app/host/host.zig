@@ -38,7 +38,7 @@ pub fn Host(comptime name: ?HostName, comptime scopes: anytype, comptime options
     }
 
     return struct {
-        pub const host_name: []const u8 = if (name) |n| n else "";
+        pub const host_name: []const u8 = if (name) |n| n else "*"; // fallback hostname is represented as '*'
 
         pub fn compileRouter(allocator: std.mem.Allocator, comptime app_options: AppOptions) !Router {
             return try Router.fromScopes(comptime compileServerCallTable(app_options), allocator);

@@ -27,6 +27,7 @@ const App = z.App(
             },
             .{},
         ),
+        z.Host("*.example.com", .{z.Scope(null, .{z.Action(null, helloFromExampleWildcard, .{})}, .{})}, .{}),
         z.Host("api.example.com", .{z.Scope(null, .{z.Action(null, helloFromExampleApi, .{})}, .{})}, .{}),
     },
     .{
@@ -47,6 +48,10 @@ fn helloFromExample() struct { message: []const u8 } {
 
 fn helloFromExampleApi() struct { message: []const u8 } {
     return .{ .message = "Hello from api.example.com!" };
+}
+
+fn helloFromExampleWildcard() struct { message: []const u8 } {
+    return .{ .message = "Hello from *.example.com!" };
 }
 
 fn hello() bool {

@@ -4,15 +4,16 @@ const http = @import("../http/http.zig");
 const Router = @import("router.zig").Router;
 const AppOptions = @import("./app.zig").AppOptions;
 const validateHost = @import("host/host.zig").validateHost;
-const ParsedHost = @import("host/parsed_host.zig").ParsedHost;
+const RequestHost = @import("host/request_host.zig").RequestHost;
+const PatternHost = @import("host/host_pattern.zig").HostPattern;
 
 pub const HostRouter = struct {
     pub const Node = struct {
-        host: ParsedHost, // empty hostname for fallback / default host
+        host: PatternHost, // fallback has hostname set to '*'
         router: Router,
     };
 
-    fallback: ?Node,
+    /// sorted by host specificity (most specific first), fallback host (if exists) is always last
     hosts: []Node,
 
     pub fn fromHosts(comptime hosts: anytype, comptime app_options: AppOptions, allocator: std.mem.Allocator) !HostRouter {
@@ -22,93 +23,75 @@ pub const HostRouter = struct {
         };
 
         const children_fields = hosts_type_info.@"struct".fields;
-        const fallback_host_idx: ?usize = comptime blk: {
-            for (children_fields, 0..) |child, i| {
-                const TChild = @field(hosts, child.name);
-                validateHost(TChild) catch |err| {
-                    @compileError(std.fmt.comptimePrint("Host router child '{s}' is not a valid host: {s}", .{ child.name, @errorName(err) }));
-                };
-
-                if (@field(TChild, "host_name").len == 0) {
-                    break :blk i;
-                }
-            }
-
-            break :blk null;
-        };
-
-        const nodes_count = comptime if (fallback_host_idx) |_| children_fields.len - 1 else children_fields.len;
-        var nodes = try allocator.alloc(Node, nodes_count);
-        var host_router = HostRouter{
-            .fallback = null,
-            .hosts = nodes,
-        };
+        var nodes = try allocator.alloc(Node, children_fields.len);
 
         inline for (children_fields, 0..) |child, i| {
             const TChild = @field(hosts, child.name);
             const name: []const u8 = @field(TChild, "host_name");
             const router: Router = try TChild.compileRouter(allocator, app_options);
-            const host = comptime if (name.len == 0) ParsedHost{
-                .hostname = "",
-                .port = null,
-                .type = .domain,
-            } else ParsedHost.fromHostStr(name) catch @compileError(std.fmt.comptimePrint("Invalid hostname {s}", .{name}));
+            const host = PatternHost.fromHostStr(name);
 
-            if (fallback_host_idx) |fallback| {
-                if (i == fallback) {
-                    host_router.fallback = Node{
-                        .host = host,
-                        .router = router,
-                    };
-                } else {
-                    nodes[i - (if (i > fallback) 1 else 0)] = Node{
-                        .host = host,
-                        .router = router,
-                    };
-                }
-            } else {
-                nodes[i] = Node{
-                    .host = host,
-                    .router = router,
-                };
-            }
+            nodes[i] = Node{
+                .host = host,
+                .router = router,
+            };
         }
 
-        return host_router;
-    }
+        const SpecificityComparator = struct {
+            pub fn lessThan(_: void, a: Node, b: Node) bool {
+                return @intFromEnum(a.host.specificity) > @intFromEnum(b.host.specificity);
+            }
+        };
+        std.mem.sort(Node, nodes, {}, SpecificityComparator.lessThan);
 
-    // todo: implement wildcards in host names, e.g. *.example.com, and make host router match them correctly
-    // prioritize exact matches over wildcard matches, and more specific wildcard matches over less specific ones (e.g. a*.example.com should be prioritized over *.example.com for a host named api.example.com)`
+        return HostRouter{
+            .hosts = nodes,
+        };
+    }
 
     pub const LookupError = error{
         HostNotFound,
         PathNotFound,
     };
 
-    pub fn lookup(self: *const HostRouter, host: *const ParsedHost, path: []const u8, method: http.Method) LookupError!Router.Match {
+    pub fn lookup(self: *const HostRouter, host: *const RequestHost, path: []const u8, method: http.Method) LookupError!Router.Match {
         for (self.hosts) |host_node| {
-            if (host.equal(&host_node.host)) {
+            if (host_node.host.match(host)) {
                 return host_node.router.lookup(path, method) orelse return LookupError.PathNotFound;
             }
-        }
-
-        if (self.fallback) |fallback| {
-            return fallback.router.lookup(path, method) orelse return LookupError.PathNotFound;
         }
 
         return LookupError.HostNotFound;
     }
 
     pub fn print(self: *const HostRouter) void {
-        for (self.hosts) |host_node| {
-            std.debug.print("{s}\n", .{host_node.host});
-            host_node.router.print(1);
-            std.debug.print("\n", .{});
-        }
+        for (self.hosts) |*host_node| {
+            switch (host_node.host.hostname) {
+                .domain => |parts| {
+                    if (parts.len == 1 and parts[0][0] == '*') {
+                        std.debug.print("* (fallback)\n", .{});
+                    } else {
+                        for (parts[0 .. parts.len - 1]) |part| {
+                            std.debug.print("{s}.", .{part});
+                        }
+                        std.debug.print("{s}", .{parts[parts.len - 1]});
 
-        if (self.fallback) |fallback| {
-            std.debug.print("Fallback Host\n", .{});
-            fallback.router.print(1);
+                        std.debug.print("\n", .{});
+                    }
+                },
+                .ip_v4 => |ip| {
+                    std.debug.print("Host: {}.{}.{}.{}\n", .{ ip[0], ip[1], ip[2], ip[3] });
+                },
+                .ip_v6 => |ip| {
+                    for (ip[0..15]) |part| {
+                        std.debug.print("{x}:", .{part});
+                    }
+                    std.debug.print("{x}", .{ip[15]});
+                    std.debug.print("\n", .{});
+                },
+            }
+
+            host_node.router.print(1);
             std.debug.print("\n", .{});
         }
     }

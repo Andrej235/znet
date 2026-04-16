@@ -5,7 +5,7 @@ const ConnectionReader = @import("../connection_reader.zig").ConnectionReader;
 
 const Parser = @import("./parser.zig").Parser;
 const Request = @import("../../requests/request.zig").Request;
-const ParsedHost = @import("../../app/host/parsed_host.zig").ParsedHost;
+const RequestHost = @import("../../app/host/request_host.zig").RequestHost;
 
 const Logger = @import("../../logger/logger.zig").Logger.scoped(.http1_parser);
 
@@ -27,7 +27,7 @@ pub const Http1Parser = struct {
     method: ?http.Method = null,
     version: ?http.Version = null,
     path: ?[]const u8 = null,
-    host: ?ParsedHost = null,
+    host: ?RequestHost = null,
 
     state: HttpState = .request_line,
 
@@ -200,7 +200,7 @@ pub const Http1Parser = struct {
                 return Errors.InvalidHostHeader; // multiple Host headers are not allowed
             }
 
-            self.host = ParsedHost.fromHostStr(trimmed_value) catch return Errors.InvalidHostHeader;
+            self.host = RequestHost.fromHostStr(trimmed_value) catch return Errors.InvalidHostHeader;
             return;
         }
 

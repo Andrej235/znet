@@ -558,7 +558,8 @@ pub fn Reactor(comptime TApp: type) type {
         pub fn attachClientSocket(self: *Self, socket: posix.socket_t, address: std.net.Address) !void {
             const idx = self.popIndex();
             if (idx == null) {
-                // todo: send a "server full" message before closing the connection
+                // todo: add better backpressure handling
+                // todo: send a 503 to the client as the last line of defense against overload, if we can't parse the request line just force close the connection immediately
                 Logger.warn("Max clients reached, rejecting connection from {f}", .{address.in});
                 return error.ReactorFull; // socket will be closed in the caller
             }

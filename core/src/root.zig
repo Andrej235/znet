@@ -30,5 +30,4 @@ pub const Body = @import("app/params/body_param.zig").Body;
 pub const DIC = @import("dependency_injection/container.zig").Container;
 pub const DIService = @import("dependency_injection/service.zig").Service;
 
-pub const Router = @import("app/router.zig").Router;
 pub const http = @import("http/http.zig");

@@ -1,10 +1,10 @@
 const std = @import("std");
 
 const http = @import("../http/http.zig");
-const ParsedHost = @import("../app/host/parsed_host.zig").ParsedHost;
+const RequestHost = @import("../app/host/request_host.zig").RequestHost;
 
 pub const HttpRequest = struct {
-    host: ParsedHost,
+    host: RequestHost,
     path: []const u8,
     method: http.Method,
     version: http.Version,

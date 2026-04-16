@@ -15,11 +15,6 @@ const Response = @import("../../responses/response.zig").Response;
 /// returns the length of the serialized output
 pub const ActionHandler = *const fn (context: RequestContext) anyerror!usize;
 
-// todo: make action_handler_args return a union of either the args or a pointer to errors
-// these errors would be stack allocated aboe the line where we get the args and passed in as a pointer
-// getargs then fills in the error struct if it fails to validate path and query params, (maybe body as well?)
-// return 400 if the error struct is filled in, otherwise proceed normally
-
 // todo:? seeing as the errors struct would be created here we could make it have N error slots up to M
 // where N is the number of possible errors (path params count + query params count) and M is some max we set (maybe 8/16? or defined in config)
 

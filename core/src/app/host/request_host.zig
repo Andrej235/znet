@@ -1,26 +1,19 @@
 const std = @import("std");
+const HostType = @import("host_type.zig").HostType;
 
-pub const HostType = enum {
-    domain,
-    ip_v4,
-    ip_v6,
-};
-
-pub const ParsedHost = struct {
+pub const RequestHost = struct {
     type: HostType,
-    /// this field is NOT guaranteed to be lowercase, in case of a domain it must be compared using a case-insensitive comparison, for ipv4 and ipv6 there are no letters so case sensitivity is not an issue
-    hostname: []const u8,
+    hostname: union(HostType) {
+        /// NOT guaranteed to be lowercase
+        domain: []const u8,
+        /// binary representation of the ipv4 address, 4 bytes long
+        ip_v4: [4]u8,
+        /// binary representation of the ipv6 address, 16 bytes long
+        ip_v6: [16]u8,
+    },
     port: ?u16,
 
-    pub fn isDefaultHost(self: *const ParsedHost) bool {
-        return self.hostname.len == 0;
-    }
-
-    pub fn equal(self: *const ParsedHost, other: *const ParsedHost) bool {
-        return self.type == other.type and self.port == other.port and (if (self.type == .domain) std.ascii.eqlIgnoreCase(self.hostname, other.hostname) else std.mem.eql(u8, self.hostname, other.hostname));
-    }
-
-    pub fn fromHostStr(host_str: []const u8) ParseHostError!ParsedHost {
+    pub fn fromHostStr(host_str: []const u8) ParseHostError!RequestHost {
         return parseHost(host_str);
     }
 };
@@ -29,11 +22,11 @@ const ParseHostError = error{
     InvalidHost,
 };
 
-fn parseHost(host: []const u8) ParseHostError!ParsedHost {
+fn parseHost(host: []const u8) ParseHostError!RequestHost {
     return parseTrimmedHost(std.mem.trim(u8, host, &std.ascii.whitespace));
 }
 
-fn parseTrimmedHost(host: []const u8) ParseHostError!ParsedHost {
+fn parseTrimmedHost(host: []const u8) ParseHostError!RequestHost {
     if (host.len == 0) {
         return error.InvalidHost;
     }
@@ -61,13 +54,15 @@ fn parseTrimmedHost(host: []const u8) ParseHostError!ParsedHost {
 
         // std's parse will fail if the ipv6 address is invalid, so we can rely on it to validate the address for us
         // manually validating ipv6 addresses is hell so little bit of extra overhead from std's parse is worth it for the correctness guarantees it provides
-        _ = std.net.Ip6Address.parse(ipv6_address, 0) catch {
+        const address = std.net.Ip6Address.parse(ipv6_address, 0) catch {
             return error.InvalidHost;
         };
 
-        return ParsedHost{
-            .type = .ip_v6,
-            .hostname = ipv6_address,
+        return RequestHost{
+            .type = HostType.ip_v6,
+            .hostname = .{
+                .ip_v6 = address.sa.addr,
+            },
             .port = port,
         };
     } else {
@@ -134,9 +129,11 @@ fn parseTrimmedHost(host: []const u8) ParseHostError!ParsedHost {
 
         if (has_alpha) {
             // domain
-            return ParsedHost{
-                .type = .domain,
-                .hostname = hostname,
+            return RequestHost{
+                .type = HostType.domain,
+                .hostname = .{
+                    .domain = hostname,
+                },
                 .port = port,
             };
         }
@@ -165,9 +162,11 @@ fn parseTrimmedHost(host: []const u8) ParseHostError!ParsedHost {
             }
         }
 
-        return ParsedHost{
-            .type = .ip_v4,
-            .hostname = hostname,
+        return RequestHost{
+            .type = HostType.ip_v4,
+            .hostname = .{
+                .ip_v4 = [4]u8{ 0, 0, 0, 0 },
+            },
             .port = port,
         };
     }
