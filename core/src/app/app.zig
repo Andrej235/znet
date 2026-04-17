@@ -62,11 +62,6 @@ pub fn App(comptime children: anytype, comptime options: AppOptions) type {
     return struct {
         pub const DIContainer = options.di;
 
-        /// Deprecated
-        pub fn compileServerCallTable() []const RuntimeScope { // todo: Remove
-            return &[_]RuntimeScope{};
-        }
-
         pub fn compileRouter(allocator: std.mem.Allocator) !HostRouter {
             return try HostRouter.fromHosts(hosts, options, allocator);
         }
