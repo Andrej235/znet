@@ -508,6 +508,14 @@ pub const Reactor = struct {
                                 continue; // move on to the next client
                             },
 
+                            error.UnsupportedProtocol => {
+                                Logger.info("[{f} | {}/{}] sent a message with an unsupported protocol, disconnecting", .{ client.address.in, client_idx, client.id.gen });
+
+                                // removeClient will swap the last client into position i, do not increment i
+                                self.removeClient(client_idx);
+                                continue; // move on to the next client
+                            },
+
                             Http1Parser.Errors.MissingHostHeader,
 
                             Http1Parser.Errors.InvalidHeaders,

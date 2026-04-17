@@ -77,7 +77,7 @@ pub const ConnectionReader = struct {
 
             if (self.parser == null) {
                 // if we don't have a parser yet, try to determine the protocol and get the appropriate parser
-                self.parser = self.tryGetParser() orelse continue;
+                self.parser = self.tryGetParser() orelse return error.UnsupportedProtocol;
             }
 
             // try to parse a message from the buffered data
