@@ -56,6 +56,8 @@ pub const Http1Parser = struct {
         UnsupportedTransferEncoding,
     };
 
+    // todo: implement better error handling, make sure to consume the entire request even if invalid
+    // only reject a request if it's structurally invalid, in which case do not persist the connection
     pub fn parse(self: *Http1Parser, conn: *ConnectionReader) Errors!?Parser.ParseResult {
         if (self.state == .complete) {
             self.resetState();

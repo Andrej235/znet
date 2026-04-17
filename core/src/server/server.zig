@@ -46,9 +46,9 @@ const ServerInterface = struct {
         return self;
     }
 
-    pub fn run(self: *ServerInterface, comptime TApp: type, address: net.Address) !void {
+    pub fn run(self: *ServerInterface, address: net.Address) !void {
         for (self.reactors, 0..) |*reactor, idx| {
-            const handle = try Reactor(TApp).init(
+            const handle = try Reactor.init(
                 self.allocator,
                 address,
                 &self.shutdown_state,
@@ -112,7 +112,7 @@ pub fn Server(comptime TApp: type) type {
         }
 
         pub inline fn run(self: *const Self, address: net.Address) !void {
-            try self.interface.run(TApp, address);
+            try self.interface.run(address);
         }
 
         pub inline fn join(self: *const Self) void {

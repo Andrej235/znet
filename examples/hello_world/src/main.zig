@@ -31,7 +31,7 @@ const App = z.App(
         z.Host("api.example.com", .{z.Scope(null, .{z.Action(null, helloFromExampleApi, .{})}, .{})}, .{}),
     },
     .{
-        .default_action_executor = .io,
+        .default_action_executor = .worker_pool,
     },
 );
 
