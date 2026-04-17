@@ -1,5 +1,6 @@
 const std = @import("std");
 const posix = std.posix;
+const http = @import("../http/http.zig");
 
 const BufferPool = @import("../utils/buffer_pool.zig").BufferPool;
 const MessageHeadersByteSize = @import("../message_headers/message_headers.zig").HeadersByteSize;
@@ -107,10 +108,25 @@ pub const ConnectionReader = struct {
             return Parser{ .tls = .init() };
         }
 
-        // todo: make better http detection
-        if (std.ascii.isUpper(buf[0]) and std.ascii.isUpper(buf[1]) and std.ascii.isUpper(buf[2]) and std.mem.indexOfScalar(u8, buf, ' ') != null) {
-            // likely http 1.1
-            return Parser{ .http1 = .init() };
+        // http1 detection
+        const first_line_end_idx = std.mem.indexOfScalar(u8, buf, '\n');
+        if (first_line_end_idx) |end_idx| http1: {
+            if (buf[end_idx - 1] != '\r') {
+                // http1 requests must have CRLF line endings
+                break :http1;
+            }
+
+            if (std.mem.indexOf(u8, buf[0 .. end_idx - 1], "HTTP")) |http_idx| {
+                const version_str = buf[http_idx .. end_idx - 1];
+                const version = http.Version.fromString(version_str);
+                if (version == null)
+                    return null;
+
+                switch (version.?) {
+                    .http10, .http11 => return Parser{ .http1 = .init() },
+                    .http2 => return null, // not implemented
+                }
+            }
         }
 
         return null;
