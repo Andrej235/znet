@@ -16,3 +16,11 @@ pub fn fromContentType(comptime T: type, content_type: ?ContentType, allocator: 
         else => return Errors.UnsupportedContentType,
     }
 }
+
+pub fn fromContentTypeChunked(comptime T: type, content_type: ?ContentType, allocator: std.mem.Allocator, reader: *std.Io.Reader) Errors!T {
+    // todo: implement by creating a chunked reader that skips over frame boundaries and then passing it to the same deserializers as fromContentType
+    _ = content_type;
+    _ = allocator;
+    _ = reader;
+    return Errors.UnexpectedEof;
+}

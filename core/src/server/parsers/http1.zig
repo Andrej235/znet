@@ -33,8 +33,12 @@ pub const Http1Parser = struct {
 
     connection: http.Connection = .keep_alive, // http 1.1 assumes keep-alive connections by default
 
+    body_start: ?usize = null,
     body_size: ?usize = null,
+
     transfer_encoding: TransferEncoding = .none,
+    current_chunk_size: ?usize = null,
+
     content_type: ?http.RequestContentType = null,
     accepts: ?[]const u8 = null,
 
@@ -48,6 +52,7 @@ pub const Http1Parser = struct {
         MissingHostHeader,
 
         InvalidHeaders,
+        InvalidChunkedEncoding,
         InvalidRequestLine,
         InvalidHostHeader,
 
@@ -106,6 +111,7 @@ pub const Http1Parser = struct {
                     if (line.len == 2) {
                         // headers end with \r\n\r\n
                         self.state = .body;
+                        self.body_start = self.parse_offset;
                         break;
                     }
 
@@ -138,23 +144,64 @@ pub const Http1Parser = struct {
         }
 
         if (self.transfer_encoding == .chunked) {
-            Logger.err("Chunked transfer encoding is not supported yet", .{});
-            return Errors.UnsupportedTransferEncoding;
-        }
+            // we only break out if we have enough data buffered, otherwise we return null or an error
+            while (true) {
+                if (self.current_chunk_size) |chunk_size| {
+                    if (chunk_size == 0) {
+                        // last chunk, we're done
+                        break;
+                    }
 
-        var body: ?[]const u8 = null;
-        if (self.body_size) |size| {
-            if (conn.buffered_bytes < self.parse_offset + size) {
-                // not enough data buffered yet
-                return null;
+                    if (conn.buffered_bytes < self.parse_offset + chunk_size) {
+                        // not enough data buffered yet
+                        return null;
+                    }
+
+                    // consume chunk data, no need to parse it here
+                    self.parse_offset += chunk_size + 2; // consume chunk data and \r\n
+                    _ = reader.take(chunk_size + 2) catch unreachable;
+
+                    // chunk must end with \r\n
+                    if(buf[self.parse_offset - 2 ] != '\r' or buf[self.parse_offset - 1] != '\n') {
+                        Logger.err("Invalid chunk ending", .{});
+                        return Errors.InvalidChunkedEncoding;
+                    }
+
+                    self.current_chunk_size = null; // reset for next chunk
+                } else {
+                    if (reader.takeDelimiter('\n') catch null) |chunk_size_line| {
+                        if (chunk_size_line.len < 2 or chunk_size_line[chunk_size_line.len - 1] != '\r') {
+                            Logger.err("Invalid chunk size line ending {any}", .{chunk_size_line});
+                            return Errors.InvalidChunkedEncoding;
+                        }
+
+                        const chunk_size_str = chunk_size_line[0 .. chunk_size_line.len - 1]; // exclude \r
+                        self.current_chunk_size = std.fmt.parseInt(usize, chunk_size_str, 16) catch {
+                            Logger.err("Invalid chunk size: {any}", .{chunk_size_str});
+                            return Errors.InvalidChunkedEncoding;
+                        };
+
+                        self.parse_offset += chunk_size_line.len + 1; // consume chunk size line and \n
+                    } else {
+                        // not enough data buffered yet
+                        return null;
+                    }
+                }
             }
+        } else {
+            if (self.body_size) |size| {
+                if (conn.buffered_bytes < self.parse_offset + size) {
+                    // not enough data buffered yet
+                    return null;
+                }
 
-            body = buf[self.parse_offset .. self.parse_offset + size];
-            // consume body data, no need to parse it here
-            self.parse_offset += size;
+                // consume body data, no need to parse it here
+                self.parse_offset += size;
+            }
         }
 
         self.state = .complete;
+        const body = buf[self.body_start.?..self.parse_offset];
 
         if (self.host == null) {
             return Errors.MissingHostHeader;
