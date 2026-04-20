@@ -9,6 +9,7 @@ pub const RequestContext = struct {
     waker: Waker,
 
     body: ?[]const u8,
+    chunked_body: bool,
     body_content_type: ?http.RequestContentType,
 
     output_writer: *std.Io.Writer,

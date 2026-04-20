@@ -352,6 +352,7 @@ pub const Reactor = struct {
                                                     .connection = http_request.connection,
 
                                                     .body = http_request.body,
+                                                    .chunked_body = http_request.chunked,
                                                     .body_content_type = http_request.content_type,
 
                                                     .output_writer = &writer,

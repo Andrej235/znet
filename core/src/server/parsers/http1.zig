@@ -219,6 +219,7 @@ pub const Http1Parser = struct {
                     .connection = self.connection,
 
                     .body = body,
+                    .chunked = self.transfer_encoding == .chunked,
                     .accepts = self.accepts,
                     .content_type = self.content_type,
                 },

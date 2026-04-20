@@ -11,6 +11,7 @@ pub const HttpRequest = struct {
     connection: http.Connection,
 
     body: ?[]const u8,
+    chunked: bool,
     content_type: ?http.RequestContentType,
     accepts: ?[]const u8,
 };

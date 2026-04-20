@@ -18,9 +18,14 @@ pub fn fromContentType(comptime T: type, content_type: ?ContentType, allocator: 
 }
 
 pub fn fromContentTypeChunked(comptime T: type, content_type: ?ContentType, allocator: std.mem.Allocator, reader: *std.Io.Reader) Errors!T {
+    var chunked_reader = @import("./chunked_reader.zig").ChunkedReader.init(reader);
+
+    switch (content_type orelse .octet_stream) {
+        .json => return Json.deserialize(allocator, &chunked_reader.interface, T),
+        .form_url_encoded => return FormUrlEncoded.deserialize(allocator, &chunked_reader.interface, T),
+        else => return Errors.UnsupportedContentType,
+    }
+
     // todo: implement by creating a chunked reader that skips over frame boundaries and then passing it to the same deserializers as fromContentType
-    _ = content_type;
-    _ = allocator;
-    _ = reader;
-    return Errors.UnexpectedEof;
+    @panic("Unimplemented");
 }

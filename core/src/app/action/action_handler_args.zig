@@ -90,7 +90,8 @@ pub fn ActionHandlerArgs(comptime TFn: type, comptime path: []const u8, comptime
             if (params_info.TBody) |TBody| body_blk: {
                 if (context.body) |body| {
                     var reader: std.io.Reader = .fixed(body);
-                    const payload = Deserializer.fromContentType(TBody, context.body_content_type, allocator, &reader) catch {
+                    const deserialization_result = if (context.chunked_body) Deserializer.fromContentTypeChunked(TBody, context.body_content_type, allocator, &reader) else Deserializer.fromContentType(TBody, context.body_content_type, allocator, &reader);
+                    const payload = deserialization_result catch {
                         const success = validation_errors.add(.body, null, "Failed to deserialize request body");
 
                         if (!success) {
