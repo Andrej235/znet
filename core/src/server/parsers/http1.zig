@@ -16,11 +16,6 @@ const HttpState = enum {
     complete,
 };
 
-const TransferEncoding = enum {
-    none,
-    chunked,
-};
-
 pub const Http1Parser = struct {
     parse_offset: usize,
 
@@ -36,7 +31,7 @@ pub const Http1Parser = struct {
     body_start: ?usize = null,
     body_size: ?usize = null,
 
-    transfer_encoding: TransferEncoding = .none,
+    transfer_encoding: http.TransferEncoding = .none,
     current_chunk_size: ?usize = null,
 
     content_type: ?http.RequestContentType = null,
@@ -162,7 +157,7 @@ pub const Http1Parser = struct {
                     _ = reader.take(chunk_size + 2) catch unreachable;
 
                     // chunk must end with \r\n
-                    if(buf[self.parse_offset - 2 ] != '\r' or buf[self.parse_offset - 1] != '\n') {
+                    if (buf[self.parse_offset - 2] != '\r' or buf[self.parse_offset - 1] != '\n') {
                         Logger.err("Invalid chunk ending", .{});
                         return Errors.InvalidChunkedEncoding;
                     }

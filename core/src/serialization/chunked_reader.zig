@@ -5,8 +5,6 @@ pub const ChunkedReader = struct {
     interface: std.io.Reader,
     consumed_bytes: usize = 0,
 
-    current_chunk_size: ?usize = null,
-
     fn stream(r: *Reader, w: *std.io.Writer, limit: std.io.Limit) Reader.StreamError!usize {
         _ = r;
         _ = w;
@@ -25,22 +23,16 @@ pub const ChunkedReader = struct {
 
         const self: *ChunkedReader = @alignCast(@fieldParentPtr("interface", r));
         if (r.seek >= r.end) {
-            self.current_chunk_size = null;
-        }
-
-        if (self.current_chunk_size == null) {
             const size_line_end = getLineEnd(r.buffer, self.consumed_bytes) orelse return Reader.Error.EndOfStream;
 
             const chunk_size_str = r.buffer[self.consumed_bytes .. size_line_end - 2]; // -2 to exclude the \r\n
             const chunk_size = std.fmt.parseInt(usize, chunk_size_str, 16) catch return Reader.Error.ReadFailed;
 
             if (chunk_size == 0) {
-                self.current_chunk_size = 0;
                 return Reader.Error.EndOfStream;
             }
 
             self.consumed_bytes = size_line_end + chunk_size + 2; // +2 to skip the trailing \r\n after the chunk data
-            self.current_chunk_size = chunk_size;
             r.seek = size_line_end;
             r.end = self.consumed_bytes - 2; // don't let the interface touch the trailing \r\n of the chunk
         }
@@ -60,18 +52,15 @@ pub const ChunkedReader = struct {
                 .end = 0,
                 .seek = 0,
                 .buffer = reader.buffer,
-                .vtable = &vtable,
+                .vtable = &.{
+                    .stream = stream,
+                    .discard = discard,
+                    .readVec = readVec,
+                    .rebase = rebase,
+                },
             },
-            .consumed_bytes = 0,
         };
     }
-
-    const vtable = Reader.VTable{
-        .stream = stream,
-        .discard = discard,
-        .readVec = readVec,
-        .rebase = rebase,
-    };
 
     fn getLineEnd(buffer: []const u8, start: usize) ?usize {
         if (start >= buffer.len) return null;
