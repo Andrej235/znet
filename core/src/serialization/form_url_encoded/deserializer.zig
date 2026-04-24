@@ -6,6 +6,8 @@ const Logger = @import("../../logger/logger.zig").Logger.scoped(.form_url_encode
 
 pub const Deserializer = struct {
     // todo: implement url decoding of keys and values, e.g. %20 and + for space, %3D for =, etc.
+    // this could be achieved by wrapping the reader in a UrlDecodedReader that decodes the data on the fly as it's read, similar to how the ChunkedReader works for chunked transfer encoding
+
     // todo: support array of values for repeated keys, e.g. tags=tag1&tags=tag2&tags=tag3
     // todo: support nested structs with dot notation in keys, e.g. user.name=John&user.age=30
     pub fn deserialize(allocator: std.mem.Allocator, reader: *std.Io.Reader, comptime T: type) DeserializationErrors!T {

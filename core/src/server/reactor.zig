@@ -421,7 +421,7 @@ pub const Reactor = struct {
                                                     .message = "Host not found",
                                                 },
                                             ),
-                                        }) catch {
+                                        }, http_request.connection == .keep_alive) catch {
                                             // no output buffers available or the client's response queue is full
                                             self.input_buffer_pool.release(job.buffer_idx);
                                             Logger.info("No output buffers available, dropping message", .{});
@@ -442,6 +442,7 @@ pub const Reactor = struct {
                                                     {},
                                                 ),
                                             },
+                                            http_request.connection == .keep_alive,
                                         ) catch {
                                             // no output buffers available or the client's response queue is full
                                             self.input_buffer_pool.release(job.buffer_idx);
@@ -462,7 +463,7 @@ pub const Reactor = struct {
                                                     .message = "Method not allowed",
                                                 },
                                             ).withAllowedMethods(allowed_methods),
-                                        }) catch {
+                                        }, http_request.connection == .keep_alive) catch {
                                             // no output buffers available or the client's response queue is full
                                             self.input_buffer_pool.release(job.buffer_idx);
                                             Logger.info("No output buffers available, dropping message", .{});
@@ -488,7 +489,7 @@ pub const Reactor = struct {
 
                 if (event.in) {
                     // this socket is ready to be read, fairness is implemented in client.readMessage()
-                    client.readMessage() catch |err| {
+                    const read_result = client.readMessage() catch |err| {
                         switch (err) {
                             error.Closed, error.ConnectionResetByPeer => {
                                 Logger.info("[{f} | {}/{}] disconnected", .{ client.address.in, client_idx, client.id.gen });
@@ -506,42 +507,6 @@ pub const Reactor = struct {
                                 continue; // move on to the next client
                             },
 
-                            Http1Parser.Errors.MissingHostHeader,
-
-                            Http1Parser.Errors.InvalidHeaders,
-                            Http1Parser.Errors.InvalidRequestLine,
-                            Http1Parser.Errors.InvalidHostHeader,
-
-                            Http1Parser.Errors.UnsupportedTransferEncoding,
-                            Http1Parser.Errors.UnsupportedVersion,
-                            => {
-                                self.sendResponseToClient(client, ValidationError, .{
-                                    .http = HttpResponse(ValidationError).init(
-                                        .bad_request,
-                                        .keep_alive,
-                                        null,
-                                        ValidationError{
-                                            .error_code = .bad_request,
-                                            .message = switch (err) {
-                                                Http1Parser.Errors.MissingHostHeader => "Missing host header",
-                                                Http1Parser.Errors.InvalidHeaders => "Invalid headers",
-                                                Http1Parser.Errors.InvalidRequestLine => "Invalid request line",
-                                                Http1Parser.Errors.InvalidHostHeader => "Invalid host header",
-                                                Http1Parser.Errors.UnsupportedTransferEncoding => "Unsupported transfer encoding",
-                                                Http1Parser.Errors.UnsupportedVersion => "Unsupported version",
-                                                else => unreachable,
-                                            },
-                                        },
-                                    ),
-                                }) catch continue;
-                            },
-
-                            Http1Parser.Errors.UnsupportedMethod => {
-                                self.sendResponseToClient(client, void, .{
-                                    .http = HttpResponse(void).init(.not_implemented, .keep_alive, null, {}),
-                                }) catch continue;
-                            },
-
                             else => {
                                 Logger.err("Error reading from client {}: {}", .{ client_idx, err });
 
@@ -551,6 +516,26 @@ pub const Reactor = struct {
                             },
                         }
                     };
+
+                    switch (read_result) {
+                        .success, .not_enough_data => {},
+
+                        .parser_error => |err| {
+                            self.sendResponseToClient(client, ValidationError, err.response, err.keep_alive) catch continue;
+                        },
+
+                        .unrecoverable_parser_error => |err| {
+                            switch (err) {
+                                .with_details => |err_with_details| {
+                                    self.sendResponseToClient(client, ValidationError, err_with_details, false) catch continue;
+                                },
+
+                                .generic => |err_generic| {
+                                    self.sendResponseToClient(client, void, err_generic, false) catch continue;
+                                },
+                            }
+                        },
+                    }
                 }
 
                 if (event.out) {
@@ -664,7 +649,7 @@ pub const Reactor = struct {
         self.connected -= 1;
     }
 
-    fn sendResponseToClient(self: *Self, client: *ClientConnection, TBody: type, response: Response(TBody)) error{ FailedToAcquireBuffer, FailedToWrite, ClientQueueFull }!void {
+    fn sendResponseToClient(self: *Self, client: *ClientConnection, TBody: type, response: Response(TBody), keep_alive: bool) error{ FailedToAcquireBuffer, FailedToWrite, ClientQueueFull }!void {
         // acquire a new output buffer if needed
         if (self.current_output_buffer_idx == null) {
             const buffer_idx = self.output_buffer_pool.acquire() orelse {
@@ -692,12 +677,14 @@ pub const Reactor = struct {
             .offset = 0,
             .data = response_data,
             .buffer_idx = self.current_output_buffer_idx.?,
-            .keep_alive = true,
+            .keep_alive = keep_alive,
         }) catch {
             // client's response queue is full
             // we can't really do anything about it, so just move on to the next job
             // keep the current output buffer to avoid just re-acquiring it in the next iteration
             return error.ClientQueueFull;
+
+            // todo: close the connection if keep_alive is false and the client's response queue is full
         };
 
         // released in io thread after sending, set to null here to indicate that we don't have a current buffer anymore

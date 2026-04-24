@@ -8,8 +8,10 @@ const deserializeMessageHeaders = @import("../message_headers/deserialize_messag
 const ConnectionId = @import("connection_id.zig").ConnectionId;
 const Request = @import("../requests/request.zig").Request;
 const RequestHeaders = @import("../message_headers/request_headers.zig").RequestHeaders;
+const ValidationError = @import("./validation_error.zig").ValidationError;
 
 const Parser = @import("./parsers/parser.zig").Parser;
+const Http1Parser = @import("./parsers/http1.zig").Http1Parser;
 
 pub const ConnectionReader = struct {
     allocator: std.mem.Allocator,
@@ -46,9 +48,16 @@ pub const ConnectionReader = struct {
         }
     }
 
-    const MessageReadResult = struct {
-        buffer_idx: u32,
-        request: Request,
+    const MessageReadResult = union(enum) {
+        success: struct {
+            buffer_idx: u32,
+            request: Request,
+        },
+        parser_error: struct {
+            keep_alive: bool,
+            err: ValidationError,
+        },
+        unrecoverable_parser_error: ?ValidationError,
     };
 
     pub fn readMessage(self: *ConnectionReader, socket: posix.socket_t) !?MessageReadResult {
@@ -82,12 +91,58 @@ pub const ConnectionReader = struct {
 
             // try to parse a message from the buffered data
             // todo:? free input buffer if parser fails to parse the message (e.g. if it's an invalid http request)
-            if (try self.parser.?.parse(self)) |parse_result| {
-                const buffer_idx = try self.passBufferOwnership(parse_result.consumed_bytes);
+            // todo: create errors within parser and just wrap them in responses here
+            const parser_result = self.parser.?.parse(self) catch |err| switch (err) {
+                Http1Parser.Errors.MissingHostHeader,
+
+                Http1Parser.Errors.InvalidHeaders,
+                Http1Parser.Errors.InvalidRequestLine,
+                Http1Parser.Errors.InvalidHostHeader,
+
+                Http1Parser.Errors.UnsupportedTransferEncoding,
+                Http1Parser.Errors.UnsupportedVersion,
+                => {
+                    return MessageReadResult{
+                        .parser_error = .{
+                            .keep_alive = false,
+                            .err = ValidationError{
+                                .error_code = .bad_request,
+                                .message = switch (err) {
+                                    Http1Parser.Errors.MissingHostHeader => "Missing host header",
+                                    Http1Parser.Errors.InvalidHeaders => "Invalid headers",
+                                    Http1Parser.Errors.InvalidRequestLine => "Invalid request line",
+                                    Http1Parser.Errors.InvalidHostHeader => "Invalid host header",
+                                    Http1Parser.Errors.UnsupportedTransferEncoding => "Unsupported transfer encoding",
+                                    Http1Parser.Errors.UnsupportedVersion => "Unsupported version",
+                                    else => unreachable,
+                                },
+                            },
+                        },
+                    };
+                },
+
+                Http1Parser.Errors.UnsupportedMethod => {
+                    return .{
+                        .parser_error = .{
+                            .keep_alive = false,
+                            .err = ValidationError{
+                                .error_code = .not_implemented,
+                                .message = "Unsupported HTTP method",
+                            },
+                        },
+                    };
+                },
+
+                else => return err,
+            };
+            if (parser_result) |res| {
+                const buffer_idx = try self.passBufferOwnership(res.consumed_bytes);
 
                 return MessageReadResult{
-                    .buffer_idx = buffer_idx,
-                    .request = parse_result.request,
+                    .success = .{
+                        .buffer_idx = buffer_idx,
+                        .request = res.request,
+                    },
                 };
             }
         }

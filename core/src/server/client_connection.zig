@@ -6,6 +6,9 @@ const ConnectionReader = @import("./connection_reader.zig").ConnectionReader;
 const BufferPool = @import("../utils/buffer_pool.zig").BufferPool;
 const ConnectionId = @import("connection_id.zig").ConnectionId;
 
+const Response = @import("../responses/response.zig").Response;
+const ValidationError = @import("./validation_error.zig").ValidationError;
+
 const Queue = @import("../queues/spsc_queue.zig").Queue;
 const Job = @import("./job.zig").Job;
 const OutMessage = @import("./out_message.zig").OutMessage;
@@ -70,17 +73,67 @@ pub const ClientConnection = struct {
         self.allocator.destroy(self.out_message_queue);
     }
 
-    pub fn readMessage(self: *ClientConnection) !void {
-        const msg = try self.reader.readMessage(self.socket) orelse return;
+    pub const ReadResult = union(enum) {
+        success,
+        not_enough_data,
+        parser_error: struct {
+            keep_alive: bool,
+            response: Response(ValidationError),
+        },
+        unrecoverable_parser_error: union(enum) {
+            with_details: Response(ValidationError),
+            generic: Response(void),
+        },
+    };
 
-        try self.job_queue.tryPush(.{
-            .buffer_idx = msg.buffer_idx,
-            .client_id = self.id,
-            .request = msg.request,
-        });
+    pub fn readMessage(self: *ClientConnection) !ReadResult {
+        const msg = try self.reader.readMessage(self.socket) orelse return .not_enough_data;
 
-        // wake up the reactor thread to process this new job
-        try self.waker.wake();
+        switch (msg) {
+            .success => |result| {
+                try self.job_queue.tryPush(.{
+                    .buffer_idx = result.buffer_idx,
+                    .client_id = self.id,
+                    .request = result.request,
+                });
+
+                // wake up the reactor thread to process this new job
+                try self.waker.wake();
+
+                return .success;
+            },
+
+            .parser_error => |err| {
+                return .{
+                    .parser_error = .{
+                        .keep_alive = err.keep_alive,
+                        .response = .{
+                            .http = .init(err.err.error_code, if (err.keep_alive) .keep_alive else .close, null, err.err),
+                        },
+                    },
+                };
+            },
+
+            .unrecoverable_parser_error => |err| {
+                if (err) |e| {
+                    return .{
+                        .unrecoverable_parser_error = .{
+                            .with_details = Response(ValidationError){
+                                .http = .init(e.error_code, .close, null, e),
+                            },
+                        },
+                    };
+                } else {
+                    return .{
+                        .unrecoverable_parser_error = .{
+                            .generic = Response(void){
+                                .http = .init(.internal_server_error, .close, null, {}),
+                            },
+                        },
+                    };
+                }
+            },
+        }
     }
 
     pub fn enqueueMessage(self: *ClientConnection, msg: OutMessage) !void {
