@@ -4,6 +4,7 @@ const posix = std.posix;
 const builtin = @import("builtin");
 
 const Http1Parser = @import("./parsers/http1.zig").Http1Parser;
+const ValidationError = @import("./validation_error.zig").ValidationError;
 
 const HostRouter = @import("../router/host_router.zig").HostRouter;
 const Listener = @import("../listener/listener.zig");
@@ -410,20 +411,14 @@ pub const Reactor = struct {
                                     },
 
                                     .host_not_found => {
-                                        self.sendResponseToClient(client, ClientError, .{
-                                            .http = HttpResponse(ClientError).init(
+                                        self.sendResponseToClient(client, ValidationError, .{
+                                            .http = HttpResponse(ValidationError).init(
                                                 .bad_request,
                                                 http_request.connection,
                                                 http_request.accepts,
-                                                ClientError{
+                                                ValidationError{
+                                                    .error_code = .bad_request,
                                                     .message = "Host not found",
-                                                    .details = &[_]ClientErrorDetails{
-                                                        .{
-                                                            .source = "router",
-                                                            .message = "No matching host found for the given host header",
-                                                        },
-                                                    },
-                                                    .truncated = false,
                                                 },
                                             ),
                                         }) catch {
@@ -457,20 +452,14 @@ pub const Reactor = struct {
                                     },
 
                                     .method_not_allowed => |allowed_methods| {
-                                        self.sendResponseToClient(client, ClientError, .{
-                                            .http = HttpResponse(ClientError).init(
+                                        self.sendResponseToClient(client, ValidationError, .{
+                                            .http = HttpResponse(ValidationError).init(
                                                 .method_not_allowed,
                                                 http_request.connection,
                                                 http_request.accepts,
-                                                ClientError{
+                                                ValidationError{
+                                                    .error_code = .method_not_allowed,
                                                     .message = "Method not allowed",
-                                                    .details = &[_]ClientErrorDetails{
-                                                        .{
-                                                            .source = "router",
-                                                            .message = "The requested path exists but does not support the requested HTTP method",
-                                                        },
-                                                    },
-                                                    .truncated = false,
                                                 },
                                             ).withAllowedMethods(allowed_methods),
                                         }) catch {
@@ -526,28 +515,22 @@ pub const Reactor = struct {
                             Http1Parser.Errors.UnsupportedTransferEncoding,
                             Http1Parser.Errors.UnsupportedVersion,
                             => {
-                                self.sendResponseToClient(client, ClientError, .{
-                                    .http = HttpResponse(ClientError).init(
+                                self.sendResponseToClient(client, ValidationError, .{
+                                    .http = HttpResponse(ValidationError).init(
                                         .bad_request,
                                         .keep_alive,
                                         null,
-                                        ClientError{
-                                            .message = "Failed to parse HTTP request",
-                                            .details = &[_]ClientErrorDetails{
-                                                .{
-                                                    .source = "http_parser",
-                                                    .message = switch (err) {
-                                                        Http1Parser.Errors.MissingHostHeader => "Missing host header",
-                                                        Http1Parser.Errors.InvalidHeaders => "Invalid headers",
-                                                        Http1Parser.Errors.InvalidRequestLine => "Invalid request line",
-                                                        Http1Parser.Errors.InvalidHostHeader => "Invalid host header",
-                                                        Http1Parser.Errors.UnsupportedTransferEncoding => "Unsupported transfer encoding",
-                                                        Http1Parser.Errors.UnsupportedVersion => "Unsupported version",
-                                                        else => unreachable,
-                                                    },
-                                                },
+                                        ValidationError{
+                                            .error_code = .bad_request,
+                                            .message = switch (err) {
+                                                Http1Parser.Errors.MissingHostHeader => "Missing host header",
+                                                Http1Parser.Errors.InvalidHeaders => "Invalid headers",
+                                                Http1Parser.Errors.InvalidRequestLine => "Invalid request line",
+                                                Http1Parser.Errors.InvalidHostHeader => "Invalid host header",
+                                                Http1Parser.Errors.UnsupportedTransferEncoding => "Unsupported transfer encoding",
+                                                Http1Parser.Errors.UnsupportedVersion => "Unsupported version",
+                                                else => unreachable,
                                             },
-                                            .truncated = false,
                                         },
                                     ),
                                 }) catch continue;
@@ -680,17 +663,6 @@ pub const Reactor = struct {
 
         self.connected -= 1;
     }
-
-    const ClientErrorDetails = struct {
-        source: []const u8,
-        message: []const u8,
-    };
-
-    const ClientError = struct {
-        message: []const u8,
-        details: []const ClientErrorDetails,
-        truncated: bool,
-    };
 
     fn sendResponseToClient(self: *Self, client: *ClientConnection, TBody: type, response: Response(TBody)) error{ FailedToAcquireBuffer, FailedToWrite, ClientQueueFull }!void {
         // acquire a new output buffer if needed
