@@ -2,6 +2,7 @@ const std = @import("std");
 const http = @import("../../http/http.zig");
 
 const ConnectionReader = @import("../connection_reader.zig").ConnectionReader;
+const ValidationError = @import("../validation_error.zig").ValidationError;
 
 const Parser = @import("./parser.zig").Parser;
 const Request = @import("../../requests/request.zig").Request;
@@ -58,7 +59,59 @@ pub const Http1Parser = struct {
 
     // todo: implement better error handling, make sure to consume the entire request even if invalid
     // only reject a request if it's structurally invalid, in which case do not persist the connection
-    pub fn parse(self: *Http1Parser, conn: *ConnectionReader) Errors!?Parser.ParseResult {
+    pub fn parse(self: *Http1Parser, conn: *ConnectionReader) Parser.ParseResult {
+        const result = (self.innerParse(conn) catch |err| switch (err) {
+            Errors.MissingHostHeader,
+
+            Errors.InvalidHeaders,
+            Errors.InvalidChunkedEncoding,
+            Errors.InvalidRequestLine,
+            Errors.InvalidHostHeader,
+
+            Errors.UnsupportedVersion,
+            Errors.UnsupportedTransferEncoding,
+            => {
+                return .{
+                    .err = .{
+                        .keep_alive = false,
+                        .validation_error = .{
+                            .error_code = .bad_request,
+                            .message = switch (err) {
+                                Errors.MissingHostHeader => "Missing host header",
+                                Errors.InvalidHeaders => "Invalid headers",
+                                Errors.InvalidRequestLine => "Invalid request line",
+                                Errors.InvalidHostHeader => "Invalid host header",
+                                Errors.UnsupportedTransferEncoding => "Unsupported transfer encoding",
+                                Errors.UnsupportedVersion => "Unsupported version",
+                                else => unreachable,
+                            },
+                        },
+                    },
+                };
+            },
+
+            Errors.UnsupportedMethod => {
+                return .{
+                    .err = .{
+                        .keep_alive = false,
+                        .validation_error = ValidationError{
+                            .error_code = .not_implemented,
+                            .message = "Unsupported HTTP method",
+                        },
+                    },
+                };
+            },
+        }) orelse return .needs_more_data;
+
+        return .{
+            .success = .{ .consumed_bytes = result.consumed_bytes, .request = result.request },
+        };
+    }
+
+    pub fn innerParse(self: *Http1Parser, conn: *ConnectionReader) Errors!?struct {
+        request: Request,
+        consumed_bytes: usize,
+    } {
         if (self.state == .complete) {
             self.resetState();
         }
@@ -202,7 +255,7 @@ pub const Http1Parser = struct {
             return Errors.MissingHostHeader;
         }
 
-        return Parser.ParseResult{
+        return .{
             .request = Request{
                 .http = .{
                     .host = self.host.?,

@@ -108,7 +108,7 @@ pub const ClientConnection = struct {
                     .parser_error = .{
                         .keep_alive = err.keep_alive,
                         .response = .{
-                            .http = .init(err.err.error_code, if (err.keep_alive) .keep_alive else .close, null, err.err),
+                            .http = .init(err.validation_error.error_code, if (err.keep_alive) .keep_alive else .close, null, err.validation_error),
                         },
                     },
                 };

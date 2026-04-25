@@ -55,7 +55,7 @@ pub const ConnectionReader = struct {
         },
         parser_error: struct {
             keep_alive: bool,
-            err: ValidationError,
+            validation_error: ValidationError,
         },
         unrecoverable_parser_error: ?ValidationError,
     };
@@ -92,58 +92,35 @@ pub const ConnectionReader = struct {
             // try to parse a message from the buffered data
             // todo:? free input buffer if parser fails to parse the message (e.g. if it's an invalid http request)
             // todo: create errors within parser and just wrap them in responses here
-            const parser_result = self.parser.?.parse(self) catch |err| switch (err) {
-                Http1Parser.Errors.MissingHostHeader,
+            const parser_result = self.parser.?.parse(self);
+            switch (parser_result) {
+                .needs_more_data => continue, // need to read more data before we can parse a full message, continue reading from the socket
 
-                Http1Parser.Errors.InvalidHeaders,
-                Http1Parser.Errors.InvalidRequestLine,
-                Http1Parser.Errors.InvalidHostHeader,
+                .success => |res| {
+                    const buffer_idx = try self.passBufferOwnership(res.consumed_bytes);
 
-                Http1Parser.Errors.UnsupportedTransferEncoding,
-                Http1Parser.Errors.UnsupportedVersion,
-                => {
+                    return MessageReadResult{
+                        .success = .{
+                            .buffer_idx = buffer_idx,
+                            .request = res.request,
+                        },
+                    };
+                },
+
+                .err => |err| {
                     return MessageReadResult{
                         .parser_error = .{
-                            .keep_alive = false,
-                            .err = ValidationError{
-                                .error_code = .bad_request,
-                                .message = switch (err) {
-                                    Http1Parser.Errors.MissingHostHeader => "Missing host header",
-                                    Http1Parser.Errors.InvalidHeaders => "Invalid headers",
-                                    Http1Parser.Errors.InvalidRequestLine => "Invalid request line",
-                                    Http1Parser.Errors.InvalidHostHeader => "Invalid host header",
-                                    Http1Parser.Errors.UnsupportedTransferEncoding => "Unsupported transfer encoding",
-                                    Http1Parser.Errors.UnsupportedVersion => "Unsupported version",
-                                    else => unreachable,
-                                },
-                            },
+                            .keep_alive = err.keep_alive,
+                            .validation_error = err.validation_error,
                         },
                     };
                 },
 
-                Http1Parser.Errors.UnsupportedMethod => {
-                    return .{
-                        .parser_error = .{
-                            .keep_alive = false,
-                            .err = ValidationError{
-                                .error_code = .not_implemented,
-                                .message = "Unsupported HTTP method",
-                            },
-                        },
+                .unrecoverable_err => |err| {
+                    return MessageReadResult{
+                        .unrecoverable_parser_error = err,
                     };
                 },
-
-                else => return err,
-            };
-            if (parser_result) |res| {
-                const buffer_idx = try self.passBufferOwnership(res.consumed_bytes);
-
-                return MessageReadResult{
-                    .success = .{
-                        .buffer_idx = buffer_idx,
-                        .request = res.request,
-                    },
-                };
             }
         }
 

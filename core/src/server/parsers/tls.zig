@@ -9,10 +9,12 @@ pub const TlsParser = struct {
         return .{};
     }
 
-    pub fn parse(self: *TlsParser, conn: *ConnectionReader) !?Parser.ParseResult {
+    pub fn parse(self: *TlsParser, conn: *ConnectionReader) Parser.ParseResult {
         _ = self;
         _ = conn;
         Logger.err("TLS not implemented", .{});
-        return error.Unimplemented;
+        return Parser.ParseResult{
+            .unrecoverable_err = null,
+        };
     }
 };
