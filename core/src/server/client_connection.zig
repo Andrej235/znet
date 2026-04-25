@@ -127,7 +127,8 @@ pub const ClientConnection = struct {
                     return .{
                         .unrecoverable_parser_error = .{
                             .generic = Response(void){
-                                .http = .init(.internal_server_error, .close, null, {}),
+                                // bad request because we assume validation couldn't recover from a structurally invalid request
+                                .http = .init(.bad_request, .close, null, {}),
                             },
                         },
                     };

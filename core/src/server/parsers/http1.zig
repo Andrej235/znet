@@ -44,74 +44,7 @@ pub const Http1Parser = struct {
         };
     }
 
-    pub const Errors = error{
-        MissingHostHeader,
-
-        InvalidHeaders,
-        InvalidChunkedEncoding,
-        InvalidRequestLine,
-        InvalidHostHeader,
-
-        UnsupportedMethod,
-        UnsupportedVersion,
-        UnsupportedTransferEncoding,
-    };
-
-    // todo: implement better error handling, make sure to consume the entire request even if invalid
-    // only reject a request if it's structurally invalid, in which case do not persist the connection
     pub fn parse(self: *Http1Parser, conn: *ConnectionReader) Parser.ParseResult {
-        const result = (self.innerParse(conn) catch |err| switch (err) {
-            Errors.MissingHostHeader,
-
-            Errors.InvalidHeaders,
-            Errors.InvalidChunkedEncoding,
-            Errors.InvalidRequestLine,
-            Errors.InvalidHostHeader,
-
-            Errors.UnsupportedVersion,
-            Errors.UnsupportedTransferEncoding,
-            => {
-                return .{
-                    .err = .{
-                        .keep_alive = false,
-                        .validation_error = .{
-                            .error_code = .bad_request,
-                            .message = switch (err) {
-                                Errors.MissingHostHeader => "Missing host header",
-                                Errors.InvalidHeaders => "Invalid headers",
-                                Errors.InvalidRequestLine => "Invalid request line",
-                                Errors.InvalidHostHeader => "Invalid host header",
-                                Errors.UnsupportedTransferEncoding => "Unsupported transfer encoding",
-                                Errors.UnsupportedVersion => "Unsupported version",
-                                else => unreachable,
-                            },
-                        },
-                    },
-                };
-            },
-
-            Errors.UnsupportedMethod => {
-                return .{
-                    .err = .{
-                        .keep_alive = false,
-                        .validation_error = ValidationError{
-                            .error_code = .not_implemented,
-                            .message = "Unsupported HTTP method",
-                        },
-                    },
-                };
-            },
-        }) orelse return .needs_more_data;
-
-        return .{
-            .success = .{ .consumed_bytes = result.consumed_bytes, .request = result.request },
-        };
-    }
-
-    pub fn innerParse(self: *Http1Parser, conn: *ConnectionReader) Errors!?struct {
-        request: Request,
-        consumed_bytes: usize,
-    } {
         if (self.state == .complete) {
             self.resetState();
         }
@@ -123,7 +56,10 @@ pub const Http1Parser = struct {
             if (line[line.len - 2] != '\r') {
                 // invalid line ending, http1 requires \r\n
                 Logger.err("Invalid HTTP1 line ending", .{});
-                return error.InvalidHeaders;
+
+                return .{
+                    .unrecoverable_err = null,
+                };
             }
 
             self.parse_offset += line.len;
@@ -132,24 +68,34 @@ pub const Http1Parser = struct {
                 .request_line => {
                     if (line.len == 2) {
                         // empty request line
-                        return error.InvalidHeaders;
+                        return .{
+                            .unrecoverable_err = null,
+                        };
                     }
 
                     var line_reader = std.io.Reader.fixed(line[0 .. line.len - 2]); // exclude \r\n
-                    if (line_reader.takeDelimiter(' ') catch return Errors.InvalidRequestLine) |method| {
-                        if (line_reader.takeDelimiter(' ') catch return Errors.InvalidRequestLine) |path| {
+                    if (line_reader.takeDelimiter(' ') catch return .{ .unrecoverable_err = null }) |method| {
+                        if (line_reader.takeDelimiter(' ') catch return .{ .unrecoverable_err = null }) |path| {
                             const version = line_reader.buffer[line_reader.seek..];
 
                             self.state = .headers;
                             self.method = http.Method.fromString(method) orelse {
                                 Logger.err("Unsupported HTTP method: {s}", .{method});
                                 // todo:? implement arbitrary methods because spec supports them
-                                return Errors.UnsupportedMethod;
+                                return self.tryConsumeRequestOnError(.{
+                                    .error_code = .not_implemented,
+                                    .message = "Unsupported HTTP method",
+                                });
                             };
                             self.path = path;
                             self.version = http.Version.fromString(version) orelse {
                                 Logger.err("Unsupported HTTP version: {s}", .{version});
-                                return Errors.UnsupportedVersion;
+                                return .{
+                                    .unrecoverable_err = .{
+                                        .error_code = .http_version_not_supported,
+                                        .message = "Unsupported HTTP version",
+                                    },
+                                };
                             };
                         }
                     }
@@ -165,13 +111,26 @@ pub const Http1Parser = struct {
 
                     const colon_index = std.mem.indexOfScalar(u8, line, ':') orelse {
                         Logger.err("Invalid HTTP header line (no colon found): {any}", .{line});
-                        return Errors.InvalidHeaders;
+                        return .{
+                            .unrecoverable_err = null,
+                        };
                     };
 
                     const header_name = line[0..colon_index];
                     const header_value = std.mem.trim(u8, line[colon_index + 1 .. line.len - 2], &std.ascii.whitespace);
 
-                    try self.parseHeader(header_name, header_value);
+                    const header_res = self.parseHeader(header_name, header_value);
+                    switch (header_res) {
+                        .success => {},
+                        .err => |err| {
+                            return self.tryConsumeRequestOnError(err);
+                        },
+                        .unrecoverable_err => |err| {
+                            return .{
+                                .unrecoverable_err = err,
+                            };
+                        },
+                    }
                 },
 
                 .body => {
@@ -188,7 +147,7 @@ pub const Http1Parser = struct {
 
         if (self.state != .body) {
             // we haven't finished parsing headers yet, wait for more data
-            return null;
+            return .needs_more_data;
         }
 
         if (self.transfer_encoding == .chunked) {
@@ -202,7 +161,7 @@ pub const Http1Parser = struct {
 
                     if (conn.buffered_bytes < self.parse_offset + chunk_size) {
                         // not enough data buffered yet
-                        return null;
+                        return .needs_more_data;
                     }
 
                     // consume chunk data, no need to parse it here
@@ -212,7 +171,12 @@ pub const Http1Parser = struct {
                     // chunk must end with \r\n
                     if (buf[self.parse_offset - 2] != '\r' or buf[self.parse_offset - 1] != '\n') {
                         Logger.err("Invalid chunk ending", .{});
-                        return Errors.InvalidChunkedEncoding;
+                        return .{
+                            .unrecoverable_err = .{
+                                .error_code = .bad_request,
+                                .message = "Invalid chunk",
+                            },
+                        };
                     }
 
                     self.current_chunk_size = null; // reset for next chunk
@@ -220,19 +184,29 @@ pub const Http1Parser = struct {
                     if (reader.takeDelimiter('\n') catch null) |chunk_size_line| {
                         if (chunk_size_line.len < 2 or chunk_size_line[chunk_size_line.len - 1] != '\r') {
                             Logger.err("Invalid chunk size line ending {any}", .{chunk_size_line});
-                            return Errors.InvalidChunkedEncoding;
+                            return .{
+                                .unrecoverable_err = .{
+                                    .error_code = .bad_request,
+                                    .message = "Invalid chunk",
+                                },
+                            };
                         }
 
                         const chunk_size_str = chunk_size_line[0 .. chunk_size_line.len - 1]; // exclude \r
                         self.current_chunk_size = std.fmt.parseInt(usize, chunk_size_str, 16) catch {
                             Logger.err("Invalid chunk size: {any}", .{chunk_size_str});
-                            return Errors.InvalidChunkedEncoding;
+                            return .{
+                                .unrecoverable_err = .{
+                                    .error_code = .bad_request,
+                                    .message = "Invalid chunk",
+                                },
+                            };
                         };
 
                         self.parse_offset += chunk_size_line.len + 1; // consume chunk size line and \n
                     } else {
                         // not enough data buffered yet
-                        return null;
+                        return .needs_more_data;
                     }
                 }
             }
@@ -240,7 +214,7 @@ pub const Http1Parser = struct {
             if (self.body_size) |size| {
                 if (conn.buffered_bytes < self.parse_offset + size) {
                     // not enough data buffered yet
-                    return null;
+                    return .needs_more_data;
                 }
 
                 // consume body data, no need to parse it here
@@ -252,27 +226,37 @@ pub const Http1Parser = struct {
         const body = buf[self.body_start.?..self.parse_offset];
 
         if (self.host == null) {
-            return Errors.MissingHostHeader;
+            return .{
+                .err = .{
+                    .keep_alive = false,
+                    .validation_error = .{
+                        .error_code = .bad_request,
+                        .message = "Missing Host header",
+                    },
+                },
+            };
         }
 
         return .{
-            .request = Request{
-                .http = .{
-                    .host = self.host.?,
+            .success = .{
+                .request = Request{
+                    .http = .{
+                        .host = self.host.?,
 
-                    .method = self.method.?,
-                    .version = self.version.?,
-                    .path = self.path.?,
+                        .method = self.method.?,
+                        .version = self.version.?,
+                        .path = self.path.?,
 
-                    .connection = self.connection,
+                        .connection = self.connection,
 
-                    .body = body,
-                    .chunked = self.transfer_encoding == .chunked,
-                    .accepts = self.accepts,
-                    .content_type = self.content_type,
+                        .body = body,
+                        .chunked = self.transfer_encoding == .chunked,
+                        .accepts = self.accepts,
+                        .content_type = self.content_type,
+                    },
                 },
+                .consumed_bytes = self.parse_offset,
             },
-            .consumed_bytes = self.parse_offset,
         };
     }
 
@@ -289,47 +273,80 @@ pub const Http1Parser = struct {
         self.transfer_encoding = .none;
     }
 
-    inline fn parseHeader(self: *Http1Parser, name: []const u8, value: []const u8) Errors!void {
+    const ParseHeaderResult = union(enum) {
+        success,
+        err: ValidationError,
+        unrecoverable_err: ?ValidationError,
+    };
+
+    inline fn parseHeader(self: *Http1Parser, name: []const u8, value: []const u8) ParseHeaderResult {
         const trimmed_name = std.mem.trim(u8, name, &std.ascii.whitespace);
         const trimmed_value = std.mem.trim(u8, value, &std.ascii.whitespace);
 
         if (std.ascii.eqlIgnoreCase(trimmed_name, "Host")) {
             if (self.host) |_| {
-                return Errors.InvalidHostHeader; // multiple Host headers are not allowed
+                return .{
+                    .err = .{
+                        .error_code = .bad_request,
+                        .message = "Multiple Host headers are not allowed",
+                    },
+                };
             }
 
-            self.host = RequestHost.fromHostStr(trimmed_value) catch return Errors.InvalidHostHeader;
-            return;
+            self.host = RequestHost.fromHostStr(trimmed_value) catch return .{
+                .err = .{
+                    .error_code = .bad_request,
+                    .message = "Invalid Host",
+                },
+            };
+            return .success;
         }
 
         if (std.ascii.eqlIgnoreCase(trimmed_name, "Content-Length")) {
             const length = std.fmt.parseInt(usize, trimmed_value, 10) catch {
                 Logger.err("Invalid Content-Length header value: {s}", .{trimmed_value});
-                return;
+                return .{
+                    .unrecoverable_err = .{
+                        .error_code = .bad_request,
+                        .message = "Invalid Content-Length",
+                    },
+                };
             };
             self.body_size = length;
 
-            return;
+            return .success;
         }
 
         if (std.ascii.eqlIgnoreCase(trimmed_name, "Transfer-Encoding")) {
-            if (std.ascii.eqlIgnoreCase(trimmed_value, "chunked")) {
-                self.transfer_encoding = .chunked;
+            if (http.TransferEncoding.fromString(trimmed_value)) |te| {
+                self.transfer_encoding = te;
+                return .success;
             }
 
-            return;
+            Logger.err("Unsupported Transfer-Encoding header value: {s}", .{trimmed_value});
+            return .{
+                .unrecoverable_err = .{
+                    .error_code = http.StatusCode.not_implemented,
+                    .message = "Unsupported Transfer-Encoding",
+                },
+            };
         }
 
         if (std.ascii.eqlIgnoreCase(trimmed_name, "Content-Type")) {
             self.content_type = http.RequestContentType.fromString(trimmed_value) orelse {
                 Logger.err("Unsupported Content-Type header value: {s}", .{trimmed_value});
-                return;
+                return .{
+                    .err = .{
+                        .error_code = http.StatusCode.unsupported_media_type,
+                        .message = "Unsupported Content-Type",
+                    },
+                };
             };
         }
 
         if (std.ascii.eqlIgnoreCase(trimmed_name, "Accept")) {
             self.accepts = trimmed_value;
-            return;
+            return .success;
         }
 
         if (std.ascii.eqlIgnoreCase(trimmed_name, "Connection")) {
@@ -337,7 +354,21 @@ pub const Http1Parser = struct {
                 self.connection = .close;
             }
 
-            return;
+            return .success;
         }
+
+        return .success;
+    }
+
+    fn tryConsumeRequestOnError(self: *Http1Parser, err: ValidationError) Parser.ParseResult {
+        // todo: consume the entire request and only reject a request (.unrecoverable_err) if it's structurally invalid
+        // if we can consume the entire request respect connection header if present
+
+        return .{
+            .err = .{
+                .keep_alive = self.connection == .keep_alive,
+                .validation_error = err,
+            },
+        };
     }
 };
