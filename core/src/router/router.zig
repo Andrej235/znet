@@ -137,13 +137,17 @@ pub const Router = struct {
                     };
                 }
 
+                if (!node.has_actions) {
+                    return .not_found;
+                }
+
                 return .{
                     .method_not_allowed = node.methods_bitmap,
                 };
             }
         }
 
-        return .{ .not_found = {} };
+        return .not_found;
     }
 };
 
