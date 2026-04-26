@@ -13,6 +13,7 @@ const App = z.App(
                         z.Action(null, hello, .{}),
                         z.Action(.@"deeply-nested/{id}/{language}/post/{action}/edit", deeplyNestedPath, .{}),
                         z.Action(.@"hello/{id}", helloWithQuery, .{}),
+                        z.Action(.@"biig/{a}/{b}/{c}/{d}/{e}/{f}/{g}/{h}/{i}/{j}/{k}/{l}/{m}/{n}/{o}/{p}/{q}/{r}/{s}/{t}/{u}/{v}/{w}/{x}/{y}/{z}", bigFn, .{}),
                     },
                     .{},
                 ),
@@ -96,4 +97,8 @@ fn post(body: z.Body(struct { message: []const u8 }), allocator: std.mem.Allocat
 
     z.Logger.info("Hi there, {s}", .{msg});
     return .{ .success = true, .msg = msg };
+}
+
+fn bigFn(_: z.Path(struct { a: u8, b: u8, c: u8, d: u8, e: u8, f: u8, g: u8, h: u8, i: u8, j: u8, k: u8, l: u8, m: u8, n: u8, o: u8, p: u8, q: u8, r: u8, s: u8, t: u8, u: u8, v: u8, w: u8, x: u8, y: u8, z: u8 })) bool {
+    return true;
 }
