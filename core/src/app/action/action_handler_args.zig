@@ -9,7 +9,7 @@ const ParamKind = @import("../params/param_kind.zig").ParamKind;
 const Deserializer = @import("../../serialization/deserializer.zig");
 const Serializer = @import("../../serialization/serializer.zig");
 
-const DataValidationError = @import("../../server/validation_errors/data_validation_error.zig").DataValidationError;
+const DataValidationError = @import("../../server/validation_errors/data_validation_error.zig").DataValidationError(16);
 const DataValidationErrorResponse = @import("../../server/validation_errors/data_validation_error.zig").DataValidationErrorResponse;
 
 pub fn ActionHandlerArgs(comptime TFn: type, comptime path: []const u8, comptime di: ?DIContainer) type {
@@ -195,7 +195,7 @@ pub fn ActionHandlerArgs(comptime TFn: type, comptime path: []const u8, comptime
         }
 
         pub fn initErrors() DataValidationError {
-            return DataValidationError.init("Failed to parse request parameters") catch unreachable;
+            return DataValidationError.init("Failed to parse request parameters");
         }
     };
 }
@@ -325,8 +325,11 @@ inline fn parsePathParam(comptime T: type, value: []const u8) ParsePathParamErro
 
     switch (info) {
         .int => {
-            return std.fmt.parseInt(T, value, 10) catch
-                return error.FailedToParseInteger;
+            return std.fmt.parseInt(T, value, 10) catch |err|
+                {
+                    std.debug.print("------- {}: {s}\n", .{err, value});
+                    return error.FailedToParseInteger;
+                };
         },
         .float => {
             return std.fmt.parseFloat(T, value) catch
