@@ -8,7 +8,7 @@ const deserializeMessageHeaders = @import("../message_headers/deserialize_messag
 const ConnectionId = @import("connection_id.zig").ConnectionId;
 const Request = @import("../requests/request.zig").Request;
 const RequestHeaders = @import("../message_headers/request_headers.zig").RequestHeaders;
-const ValidationError = @import("./validation_error.zig").ValidationError;
+const RequestValidationError = @import("./validation_errors/request_validation_error.zig").RequestValidationError;
 
 const Parser = @import("./parsers/parser.zig").Parser;
 const Http1Parser = @import("./parsers/http1.zig").Http1Parser;
@@ -55,9 +55,9 @@ pub const ConnectionReader = struct {
         },
         parser_error: struct {
             keep_alive: bool,
-            validation_error: ValidationError,
+            validation_error: RequestValidationError,
         },
-        unrecoverable_parser_error: ?ValidationError,
+        unrecoverable_parser_error: ?RequestValidationError,
     };
 
     pub fn readMessage(self: *ConnectionReader, socket: posix.socket_t) !?MessageReadResult {

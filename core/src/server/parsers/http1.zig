@@ -2,7 +2,7 @@ const std = @import("std");
 const http = @import("../../http/http.zig");
 
 const ConnectionReader = @import("../connection_reader.zig").ConnectionReader;
-const ValidationError = @import("../validation_error.zig").ValidationError;
+const RequestValidationError = @import("../validation_errors/request_validation_error.zig").RequestValidationError;
 
 const Parser = @import("./parser.zig").Parser;
 const Request = @import("../../requests/request.zig").Request;
@@ -27,7 +27,7 @@ pub const Http1Parser = struct {
 
     state: HttpState = .request_line,
     waiting_to_consume: bool = false, // whether we've encountered an error and are waiting to consume the rest of the request before parsing the next one
-    validation_error: ?ValidationError = null, // must not be null if waiting_to_consume is true
+    validation_error: ?RequestValidationError = null, // must not be null if waiting_to_consume is true
 
     connection: http.Connection = .keep_alive, // http 1.1 assumes keep-alive connections by default
 
@@ -222,8 +222,8 @@ pub const Http1Parser = struct {
 
     const ParseHeaderResult = union(enum) {
         success,
-        err: ValidationError,
-        unrecoverable_err: ?ValidationError,
+        err: RequestValidationError,
+        unrecoverable_err: ?RequestValidationError,
     };
 
     /// Value must be trimmed before being passed in
@@ -308,7 +308,7 @@ pub const Http1Parser = struct {
     const ParseBodyResult = union(enum) {
         success: ?[]const u8,
         needs_more_data,
-        unrecoverable_err: ?ValidationError,
+        unrecoverable_err: ?RequestValidationError,
     };
 
     fn parseBody(self: *Http1Parser, conn: *ConnectionReader) ParseBodyResult {
@@ -401,7 +401,7 @@ pub const Http1Parser = struct {
     // we do not care about non critical errors while just attempting to consume the request
     const ConsumeHeaderResult = union(enum) {
         success,
-        unrecoverable_err: ?ValidationError,
+        unrecoverable_err: ?RequestValidationError,
     };
 
     inline fn consumeHeader(self: *Http1Parser, name: []const u8, value: []const u8) ConsumeHeaderResult {
@@ -450,7 +450,7 @@ pub const Http1Parser = struct {
         return .success;
     }
 
-    fn tryConsumeRequestOnError(self: *Http1Parser, conn: *ConnectionReader, err: ValidationError) Parser.ParseResult {
+    fn tryConsumeRequestOnError(self: *Http1Parser, conn: *ConnectionReader, err: RequestValidationError) Parser.ParseResult {
         const buf = conn.current_buffer[self.parse_offset..conn.buffered_bytes];
         var reader = std.io.Reader.fixed(buf);
 

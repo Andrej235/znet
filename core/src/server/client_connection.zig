@@ -7,7 +7,7 @@ const BufferPool = @import("../utils/buffer_pool.zig").BufferPool;
 const ConnectionId = @import("connection_id.zig").ConnectionId;
 
 const Response = @import("../responses/response.zig").Response;
-const ValidationError = @import("./validation_error.zig").ValidationError;
+const RequestValidationError = @import("./validation_errors/request_validation_error.zig").RequestValidationError;
 
 const Queue = @import("../queues/spsc_queue.zig").Queue;
 const Job = @import("./job.zig").Job;
@@ -78,10 +78,10 @@ pub const ClientConnection = struct {
         not_enough_data,
         parser_error: struct {
             keep_alive: bool,
-            response: Response(ValidationError),
+            response: Response(RequestValidationError),
         },
         unrecoverable_parser_error: union(enum) {
-            with_details: Response(ValidationError),
+            with_details: Response(RequestValidationError),
             generic: Response(void),
         },
     };
@@ -118,7 +118,7 @@ pub const ClientConnection = struct {
                 if (err) |e| {
                     return .{
                         .unrecoverable_parser_error = .{
-                            .with_details = Response(ValidationError){
+                            .with_details = Response(RequestValidationError){
                                 .http = .init(e.error_code, .close, null, e),
                             },
                         },

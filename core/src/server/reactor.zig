@@ -4,7 +4,7 @@ const posix = std.posix;
 const builtin = @import("builtin");
 
 const Http1Parser = @import("./parsers/http1.zig").Http1Parser;
-const ValidationError = @import("./validation_error.zig").ValidationError;
+const RequestValidationError = @import("./validation_errors/request_validation_error.zig").RequestValidationError;
 
 const HostRouter = @import("../router/host_router.zig").HostRouter;
 const Listener = @import("../listener/listener.zig");
@@ -411,12 +411,12 @@ pub const Reactor = struct {
                                     },
 
                                     .host_not_found => {
-                                        self.sendResponseToClient(client, ValidationError, .{
-                                            .http = HttpResponse(ValidationError).init(
+                                        self.sendResponseToClient(client, RequestValidationError, .{
+                                            .http = HttpResponse(RequestValidationError).init(
                                                 .bad_request,
                                                 http_request.connection,
                                                 http_request.accepts,
-                                                ValidationError{
+                                                RequestValidationError{
                                                     .error_code = .bad_request,
                                                     .message = "Host not found",
                                                 },
@@ -453,12 +453,12 @@ pub const Reactor = struct {
                                     },
 
                                     .method_not_allowed => |allowed_methods| {
-                                        self.sendResponseToClient(client, ValidationError, .{
-                                            .http = HttpResponse(ValidationError).init(
+                                        self.sendResponseToClient(client, RequestValidationError, .{
+                                            .http = HttpResponse(RequestValidationError).init(
                                                 .method_not_allowed,
                                                 http_request.connection,
                                                 http_request.accepts,
-                                                ValidationError{
+                                                RequestValidationError{
                                                     .error_code = .method_not_allowed,
                                                     .message = "Method not allowed",
                                                 },
@@ -521,13 +521,13 @@ pub const Reactor = struct {
                         .success, .not_enough_data => {},
 
                         .parser_error => |err| {
-                            self.sendResponseToClient(client, ValidationError, err.response, err.keep_alive) catch continue;
+                            self.sendResponseToClient(client, RequestValidationError, err.response, err.keep_alive) catch continue;
                         },
 
                         .unrecoverable_parser_error => |err| {
                             switch (err) {
                                 .with_details => |err_with_details| {
-                                    self.sendResponseToClient(client, ValidationError, err_with_details, false) catch continue;
+                                    self.sendResponseToClient(client, RequestValidationError, err_with_details, false) catch continue;
                                 },
 
                                 .generic => |err_generic| {

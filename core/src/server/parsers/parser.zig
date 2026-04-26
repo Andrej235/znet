@@ -2,7 +2,7 @@ const std = @import("std");
 const ConnectionReader = @import("../connection_reader.zig").ConnectionReader;
 const Request = @import("../../requests/request.zig").Request;
 
-const ValidationError = @import("../validation_error.zig").ValidationError;
+const RequestValidationError = @import("../validation_errors/request_validation_error.zig").RequestValidationError;
 
 const Http1Parser = @import("http1.zig").Http1Parser;
 const TlsParser = @import("tls.zig").TlsParser;
@@ -15,10 +15,10 @@ pub const Parser = union(enum) {
         },
         needs_more_data,
         err: struct {
-            validation_error: ValidationError,
+            validation_error: RequestValidationError,
             keep_alive: bool,
         },
-        unrecoverable_err: ?ValidationError,
+        unrecoverable_err: ?RequestValidationError,
     };
 
     http1: Http1Parser,

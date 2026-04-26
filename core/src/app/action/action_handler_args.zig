@@ -9,8 +9,8 @@ const ParamKind = @import("../params/param_kind.zig").ParamKind;
 const Deserializer = @import("../../serialization/deserializer.zig");
 const Serializer = @import("../../serialization/serializer.zig");
 
-const ValidationErrors = @import("./validation_errors.zig").ValidationErrors;
-const ValidationErrorsResponse = @import("./validation_errors.zig").ValidationErrorsResponse;
+const DataValidationError = @import("../../server/validation_errors/data_validation_error.zig").DataValidationError;
+const DataValidationErrorResponse = @import("../../server/validation_errors/data_validation_error.zig").DataValidationErrorResponse;
 
 pub fn ActionHandlerArgs(comptime TFn: type, comptime path: []const u8, comptime di: ?DIContainer) type {
     const fn_info = @typeInfo(TFn);
@@ -18,13 +18,13 @@ pub fn ActionHandlerArgs(comptime TFn: type, comptime path: []const u8, comptime
 
     const TReturnType = union(enum) {
         success: ParamsType(TFn),
-        failure: ValidationErrorsResponse,
+        failure: DataValidationErrorResponse,
     };
 
     return struct {
-        pub const ErrorsResult = ValidationErrorsResponse;
+        pub const ErrorsResult = DataValidationErrorResponse;
 
-        pub fn getArgs(allocator: std.mem.Allocator, context: *const RequestContext, validation_errors: *ValidationErrors) TReturnType {
+        pub fn getArgs(allocator: std.mem.Allocator, context: *const RequestContext, validation_errors: *DataValidationError) TReturnType {
             const params_info = comptime getParamsInfo(TFn);
             const param_fields = params_info.fields;
 
@@ -194,8 +194,8 @@ pub fn ActionHandlerArgs(comptime TFn: type, comptime path: []const u8, comptime
             return .{ .success = params };
         }
 
-        pub fn initErrors() ValidationErrors {
-            return ValidationErrors.init("Failed to parse request parameters") catch unreachable;
+        pub fn initErrors() DataValidationError {
+            return DataValidationError.init("Failed to parse request parameters") catch unreachable;
         }
     };
 }
@@ -354,7 +354,7 @@ inline fn parsePathParam(comptime T: type, value: []const u8) ParsePathParamErro
     }
 }
 
-fn deserialize(allocator: std.mem.Allocator, reader: *std.Io.Reader, errors: *ValidationErrors, comptime T: type) !T {
+fn deserialize(allocator: std.mem.Allocator, reader: *std.Io.Reader, errors: *DataValidationError, comptime T: type) !T {
     const info = @typeInfo(T);
     if (info != .@"struct") {
         @compileError("FormUrlEncodedDeserializer can only deserialize into structs");
