@@ -15,9 +15,6 @@ const Response = @import("../../responses/response.zig").Response;
 /// returns the length of the serialized output
 pub const ActionHandler = *const fn (context: RequestContext) anyerror!usize;
 
-// todo:? seeing as the errors struct would be created here we could make it have N error slots up to M
-// where N is the number of possible errors (path params count + query params count) and M is some max we set (maybe 8/16? or defined in config)
-
 pub fn createActionHandler(comptime callback: anytype, comptime path: []const u8, comptime di: ?DIContainer) ActionHandler {
     const TFn = @TypeOf(callback);
     const fn_info = @typeInfo(TFn);

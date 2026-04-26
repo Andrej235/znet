@@ -9,7 +9,7 @@ const ParamKind = @import("../params/param_kind.zig").ParamKind;
 const Deserializer = @import("../../serialization/deserializer.zig");
 const Serializer = @import("../../serialization/serializer.zig");
 
-const DataValidationError = @import("../../server/validation_errors/data_validation_error.zig").DataValidationError(16);
+const DataValidationError = @import("../../server/validation_errors/data_validation_error.zig").DataValidationError;
 const DataValidationErrorResponse = @import("../../server/validation_errors/data_validation_error.zig").DataValidationErrorResponse;
 
 pub fn ActionHandlerArgs(comptime TFn: type, comptime path: []const u8, comptime di: ?DIContainer) type {
@@ -21,10 +21,13 @@ pub fn ActionHandlerArgs(comptime TFn: type, comptime path: []const u8, comptime
         failure: DataValidationErrorResponse,
     };
 
+    const max_errors = comptime @min(16, countMaxErrors(TFn));
+
     return struct {
+        pub const Errors = if (max_errors > 0) DataValidationError(max_errors) else void;
         pub const ErrorsResult = DataValidationErrorResponse;
 
-        pub fn getArgs(allocator: std.mem.Allocator, context: *const RequestContext, validation_errors: *DataValidationError) TReturnType {
+        pub fn getArgs(allocator: std.mem.Allocator, context: *const RequestContext, validation_errors: *Errors) TReturnType {
             const params_info = comptime getParamsInfo(TFn);
             const param_fields = params_info.fields;
 
@@ -187,15 +190,90 @@ pub fn ActionHandlerArgs(comptime TFn: type, comptime path: []const u8, comptime
                 }
             }
 
-            if (validation_errors.errors_count > 0) {
-                return .{ .failure = validation_errors.toResponseBody() };
+            if (comptime Errors != void) {
+                if (validation_errors.errors_count > 0) {
+                    return .{ .failure = validation_errors.toResponseBody() };
+                }
             }
 
             return .{ .success = params };
         }
 
-        pub fn initErrors() DataValidationError {
-            return DataValidationError.init("Failed to parse request parameters");
+        pub fn initErrors() Errors {
+            if (comptime Errors == void)
+                return {};
+
+            return Errors.init("Failed to parse request parameters");
+        }
+
+        fn deserializeQueryParams(allocator: std.mem.Allocator, reader: *std.Io.Reader, errors: *Errors, comptime T: type) !T {
+            const info = @typeInfo(T);
+            if (info != .@"struct") {
+                @compileError("FormUrlEncodedDeserializer can only deserialize into structs");
+            }
+
+            var valid = true;
+            var result: T = undefined;
+            const fields = info.@"struct".fields;
+
+            inline for (fields) |field| {
+                comptime if (@typeInfo(field.type) != .optional) continue;
+
+                // initialize all optionals to null in case they are not present in the input
+                // this prevents undefined behavior from uninitialized memory
+                @field(result, field.name) = null;
+            }
+            var seen = [_]bool{false} ** fields.len;
+
+            while (reader.takeDelimiter('&') catch |err| blk: {
+                Logger.err("Failed to read key-value pair: {}", .{err});
+                break :blk null;
+            }) |kv| {
+                const eq_index = std.mem.indexOfScalar(u8, kv, '=');
+                const key = if (eq_index) |i| kv[0..i] else kv;
+                const value = if (eq_index) |i| kv[i + 1 ..] else &[_]u8{};
+
+                inline for (fields, 0..) |field, i| {
+                    if (std.mem.eql(u8, field.name, key)) {
+                        const deserialized_value = Deserializer.FormUrlEncoded.deserializeValue(allocator, value, field.type) catch |err| blk: {
+                            const success = switch (err) {
+                                Deserializer.DeserializerErrors.IntegerDeserializationFailed, Deserializer.DeserializerErrors.FloatDeserializationFailed => errors.add(.query, field.name, "Expected a valid number"),
+                                else => errors.add(.query, field.name, "Invalid value for query parameter"),
+                            };
+
+                            if (!success) {
+                                return error.InvalidQueryParameters;
+                            }
+
+                            valid = false;
+                            break :blk null;
+                        };
+
+                        if (deserialized_value) |v|
+                            @field(result, field.name) = v;
+
+                        seen[i] = true;
+                        break;
+                    }
+                }
+            }
+
+            inline for (seen, 0..) |s, i| {
+                comptime if (@typeInfo(fields[i].type) == .optional) continue;
+
+                if (!s) {
+                    const success = errors.add(.query, fields[i].name, "Missing required query parameter");
+                    if (!success) {
+                        valid = false;
+                        return Deserializer.Errors.MissingRequiredField;
+                    }
+                }
+            }
+
+            if (!valid)
+                return error.InvalidQueryParameters;
+
+            return result;
         }
     };
 }
@@ -281,6 +359,30 @@ fn getParamsInfo(comptime TFn: type) struct {
     }
 }
 
+fn countMaxErrors(comptime TFn: type) usize {
+    comptime {
+        var count: usize = 0;
+        const fn_info = @typeInfo(TFn).@"fn";
+
+        for (fn_info.params) |param| {
+            if (param.type) |TParam| {
+                if (@typeInfo(TParam) == .@"struct" and @hasDecl(TParam, "param_kind") and @hasDecl(TParam, "Type")) {
+                    const param_kind: ParamKind = @field(TParam, "param_kind");
+                    const TInner: type = @field(TParam, "Type");
+
+                    count += switch (param_kind) {
+                        .body => 1,
+                        .path => @typeInfo(TInner).@"struct".fields.len,
+                        .query => @typeInfo(TInner).@"struct".fields.len,
+                    };
+                }
+            }
+        }
+
+        return count;
+    }
+}
+
 fn ParamsType(comptime TFn: type) type {
     const fn_info = @typeInfo(TFn).@"fn";
     var param_fields: [fn_info.params.len]std.builtin.Type.StructField = undefined;
@@ -351,74 +453,4 @@ inline fn parsePathParam(comptime T: type, value: []const u8) ParsePathParamErro
         },
         else => @compileError(std.fmt.comptimePrint("Unsupported path parameter type: {s}", .{@typeName(T)})),
     }
-}
-
-fn deserializeQueryParams(allocator: std.mem.Allocator, reader: *std.Io.Reader, errors: *DataValidationError, comptime T: type) !T {
-    const info = @typeInfo(T);
-    if (info != .@"struct") {
-        @compileError("FormUrlEncodedDeserializer can only deserialize into structs");
-    }
-
-    var valid = true;
-    var result: T = undefined;
-    const fields = info.@"struct".fields;
-
-    inline for (fields) |field| {
-        comptime if (@typeInfo(field.type) != .optional) continue;
-
-        // initialize all optionals to null in case they are not present in the input
-        // this prevents undefined behavior from uninitialized memory
-        @field(result, field.name) = null;
-    }
-    var seen = [_]bool{false} ** fields.len;
-
-    while (reader.takeDelimiter('&') catch |err| blk: {
-        Logger.err("Failed to read key-value pair: {}", .{err});
-        break :blk null;
-    }) |kv| {
-        const eq_index = std.mem.indexOfScalar(u8, kv, '=');
-        const key = if (eq_index) |i| kv[0..i] else kv;
-        const value = if (eq_index) |i| kv[i + 1 ..] else &[_]u8{};
-
-        inline for (fields, 0..) |field, i| {
-            if (std.mem.eql(u8, field.name, key)) {
-                const deserialized_value = Deserializer.FormUrlEncoded.deserializeValue(allocator, value, field.type) catch |err| blk: {
-                    const success = switch (err) {
-                        Deserializer.DeserializerErrors.IntegerDeserializationFailed, Deserializer.DeserializerErrors.FloatDeserializationFailed => errors.add(.query, field.name, "Expected a valid number"),
-                        else => errors.add(.query, field.name, "Invalid value for query parameter"),
-                    };
-
-                    if (!success) {
-                        return error.InvalidQueryParameters;
-                    }
-
-                    valid = false;
-                    break :blk null;
-                };
-
-                if (deserialized_value) |v|
-                    @field(result, field.name) = v;
-
-                seen[i] = true;
-                break;
-            }
-        }
-    }
-
-    inline for (seen, 0..) |s, i| {
-        comptime if (@typeInfo(fields[i].type) == .optional) continue;
-
-        if (!s) {
-            const success = errors.add(.query, fields[i].name, "Missing required query parameter");
-            if (!success) {
-                valid = false;
-                return Deserializer.Errors.MissingRequiredField;
-            }
-        }
-    }
-
-    if (!valid)
-        return error.InvalidQueryParameters;
-
-    return result;
 }
