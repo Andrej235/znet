@@ -91,7 +91,6 @@ pub const ConnectionReader = struct {
 
             // try to parse a message from the buffered data
             // todo:? free input buffer if parser fails to parse the message (e.g. if it's an invalid http request)
-            // todo: create errors within parser and just wrap them in responses here
             const parser_result = self.parser.?.parse(self);
             switch (parser_result) {
                 .needs_more_data => continue, // need to read more data before we can parse a full message, continue reading from the socket
@@ -162,60 +161,6 @@ pub const ConnectionReader = struct {
         }
 
         return null;
-    }
-
-    // not used, todo: implement custom protocol for znet messages
-    fn tryParseZnetMessage(self: *ConnectionReader) !?MessageReadResult {
-        if (self.current_headers == null) {
-            var reader = std.io.Reader.fixed(self.current_buffer);
-
-            if (self.buffered_bytes < MessageHeadersByteSize.Request) {
-                // not enough data to read the header
-                return null;
-            }
-
-            const headers = try deserializeMessageHeaders(&reader);
-            self.current_headers = headers.Request;
-        }
-
-        const payload_len = self.current_headers.?.payload_len;
-        const message_len = payload_len + MessageHeadersByteSize.Request;
-
-        if (self.buffered_bytes < message_len) {
-            // not enough data to read the full message
-            return null;
-        }
-
-        const msg = self.current_buffer[0..message_len];
-        const current_buffer_idx = self.current_buffer_idx.?;
-
-        if (self.buffered_bytes == message_len) {
-            self.current_buffer_idx = null;
-            return .{
-                .buffer_idx = current_buffer_idx,
-                .request = msg,
-            };
-        }
-
-        const remaining_bytes = self.current_buffer[message_len..self.buffered_bytes];
-        // if there isn't a free buffer, we can't process this message yet
-        // we also can't return the fully read one because then we wouldn't be able to preserve the remaining data for the next read
-        const new_buffer_idx = self.input_buffer_pool.acquire() orelse return null;
-        const new_buffer = self.input_buffer_pool.buffer(new_buffer_idx);
-
-        // move the remaining bytes to the new buffer so that we can continue reading that message in this new buffer we just acquired from the pool
-        @memcpy(new_buffer[0..remaining_bytes.len], remaining_bytes);
-
-        self.current_buffer_idx = new_buffer_idx;
-        self.current_buffer = new_buffer;
-
-        self.buffered_bytes -= message_len;
-        self.current_headers = null;
-
-        return .{
-            .buffer_idx = current_buffer_idx,
-            .request = msg,
-        };
     }
 
     fn passBufferOwnership(self: *ConnectionReader, bytes: usize) !u32 {

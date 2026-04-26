@@ -1,5 +1,3 @@
-// todo:? serializers should return the number of bytes written
-
 const std = @import("std");
 const ContentType = @import("../http/http.zig").ResponseContentType;
 
