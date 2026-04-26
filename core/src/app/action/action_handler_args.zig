@@ -154,7 +154,7 @@ pub fn ActionHandlerArgs(comptime TFn: type, comptime path: []const u8, comptime
                     if (current) |param| {
                         const value = parsePathParam(field.type, param.value) catch |err| blk: {
                             const success = switch (err) {
-                                error.FailedToParseInteger, error.FailedToParseFloat => validation_errors.add(.path, field.name, "Expected a valid number"),
+                                error.FailedToParseNumber => validation_errors.add(.path, field.name, "Expected a valid number"),
                                 error.InvalidBooleanValue => validation_errors.add(.path, field.name, "Expected 'true' or 'false' for boolean path parameter"),
                                 error.InvalidEnumValue => validation_errors.add(.path, field.name, "Invalid value for enum path parameter"),
                             };
@@ -178,7 +178,7 @@ pub fn ActionHandlerArgs(comptime TFn: type, comptime path: []const u8, comptime
             // Inject and deserialize query parameters if needed
             if (params_info.query_field_name) |query_field_name| {
                 var query_reader = std.io.Reader.fixed(if (context.query) |q| q else "");
-                const query_params = deserialize(allocator, &query_reader, validation_errors, params_info.TQuery.?) catch null;
+                const query_params = deserializeQueryParams(allocator, &query_reader, validation_errors, params_info.TQuery.?) catch null;
 
                 // no need for early return in case the errors were truncated because this is the last step of validation
 
@@ -310,8 +310,7 @@ fn ParamsType(comptime TFn: type) type {
 }
 
 const ParsePathParamError = error{
-    FailedToParseInteger,
-    FailedToParseFloat,
+    FailedToParseNumber,
     InvalidBooleanValue,
     InvalidEnumValue,
 };
@@ -325,15 +324,12 @@ inline fn parsePathParam(comptime T: type, value: []const u8) ParsePathParamErro
 
     switch (info) {
         .int => {
-            return std.fmt.parseInt(T, value, 10) catch |err|
-                {
-                    std.debug.print("------- {}: {s}\n", .{err, value});
-                    return error.FailedToParseInteger;
-                };
+            return std.fmt.parseInt(T, value, 10) catch
+                return error.FailedToParseNumber;
         },
         .float => {
             return std.fmt.parseFloat(T, value) catch
-                return error.FailedToParseFloat;
+                return error.FailedToParseNumber;
         },
         .bool => {
             if (std.mem.eql(u8, value, "true")) {
@@ -357,7 +353,7 @@ inline fn parsePathParam(comptime T: type, value: []const u8) ParsePathParamErro
     }
 }
 
-fn deserialize(allocator: std.mem.Allocator, reader: *std.Io.Reader, errors: *DataValidationError, comptime T: type) !T {
+fn deserializeQueryParams(allocator: std.mem.Allocator, reader: *std.Io.Reader, errors: *DataValidationError, comptime T: type) !T {
     const info = @typeInfo(T);
     if (info != .@"struct") {
         @compileError("FormUrlEncodedDeserializer can only deserialize into structs");

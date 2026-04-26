@@ -2,7 +2,7 @@ const std = @import("std");
 const http = @import("../http/http.zig");
 
 const Waker = @import("../waker/waker.zig");
-const ParamIterator = @import("../router/param_router.zig").ParamIterator;
+const ParamIterator = @import("../router/param_iterator.zig").ParamIterator;
 
 pub const RequestContext = struct {
     allocator: std.mem.Allocator,

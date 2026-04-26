@@ -1,7 +1,7 @@
 const std = @import("std");
 const RuntimeScope = @import("../app/scope/runtime_scope.zig").RuntimeScope;
 const RuntimeAction = @import("../app/action/runtime_action.zig").RuntimeAction;
-const ParamIterator = @import("param_router.zig").ParamIterator;
+const ParamIterator = @import("param_iterator.zig").ParamIterator;
 
 const HttpMethod = @import("../http/http.zig").Method;
 const MethodsBitmap = @import("route_method_bitmap.zig").RouteMethodBitmap;
@@ -131,12 +131,7 @@ pub const Router = struct {
                     return .{
                         .match = Match{
                             .action = action,
-                            .params = .{
-                                .request_path = path,
-                                .request_template_path = normalizePath(action.path),
-                                .request_path_index = 0,
-                                .request_template_path_index = 0,
-                            },
+                            .params = .init(normalizePath(path), normalizePath(action.path)),
                             .query = query,
                         },
                     };
