@@ -23,5 +23,3 @@ pub fn build(b: *std.Build) !void {
     });
     test_step.dependOn(&b.addRunArtifact(test_exe).step);
 }
-
-pub const setup = @import("build_system/setup.zig").setupZnet;
