@@ -38,9 +38,20 @@ const App = z.App(
 
 pub fn main() !void {
     const server = try z.Server(App).init(std.heap.page_allocator, .{});
+    const addr = try std.net.Address.parseIp("127.0.0.1", 5000);
 
-    try server.run(try std.net.Address.parseIp("127.0.0.1", 5000));
-    server.join();
+    var i: usize = 0;
+    while (i < 5000) : (i += 1) {
+        try server.run(addr);
+        try server.shutdown(.immediate);
+        server.join();
+
+        std.log.info("Server has been shut down and deinitialized ({})", .{i + 1});
+    }
+
+    while (true) {
+        std.atomic.spinLoopHint();
+    }
 }
 
 fn helloFromExample() struct { message: []const u8 } {

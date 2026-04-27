@@ -47,6 +47,9 @@ const ServerInterface = struct {
     }
 
     pub fn run(self: *ServerInterface, address: net.Address) !void {
+        self.shutdown_state.store(.running, .release);
+        self.reactors_ready_count.store(0, .release);
+
         for (self.reactors, 0..) |*reactor, idx| {
             const handle = try Reactor.init(
                 self.allocator,
