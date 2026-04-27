@@ -3,11 +3,8 @@ const posix = std.posix;
 const http = @import("../http/http.zig");
 
 const BufferPool = @import("../utils/buffer_pool.zig").BufferPool;
-const MessageHeadersByteSize = @import("../message_headers/message_headers.zig").HeadersByteSize;
-const deserializeMessageHeaders = @import("../message_headers/deserialize_message_headers.zig").deserializeMessageHeaders;
 const ConnectionId = @import("connection_id.zig").ConnectionId;
 const Request = @import("../requests/request.zig").Request;
-const RequestHeaders = @import("../message_headers/request_headers.zig").RequestHeaders;
 const RequestValidationError = @import("./validation_errors/request_validation_error.zig").RequestValidationError;
 
 const Parser = @import("./parsers/parser.zig").Parser;
@@ -22,8 +19,6 @@ pub const ConnectionReader = struct {
     current_buffer_idx: ?u32,
     buffered_bytes: usize,
 
-    current_headers: ?RequestHeaders,
-
     input_buffer_pool: *BufferPool,
 
     parser: ?Parser,
@@ -36,7 +31,6 @@ pub const ConnectionReader = struct {
             .current_buffer = undefined,
             .current_buffer_idx = null,
             .buffered_bytes = 0,
-            .current_headers = null,
             .input_buffer_pool = input_buffer_pool,
             .parser = null,
         };
@@ -67,7 +61,6 @@ pub const ConnectionReader = struct {
             self.current_buffer = self.input_buffer_pool.buffer(idx);
 
             self.buffered_bytes = 0;
-            self.current_headers = null;
         }
 
         var reads: usize = 0;
