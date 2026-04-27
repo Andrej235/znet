@@ -83,12 +83,12 @@ pub const ConnectionReader = struct {
             }
 
             // try to parse a message from the buffered data
-            // todo:? free input buffer if parser fails to parse the message (e.g. if it's an invalid http request)
             const parser_result = self.parser.?.parse(self);
             switch (parser_result) {
                 .needs_more_data => continue, // need to read more data before we can parse a full message, continue reading from the socket
 
                 .success => |res| {
+                    // input buffer will be released after the message is processed on the thread that processed it (either io or worker thread)
                     const buffer_idx = try self.passBufferOwnership(res.consumed_bytes);
 
                     return MessageReadResult{
@@ -100,6 +100,20 @@ pub const ConnectionReader = struct {
                 },
 
                 .err => |err| {
+                    // in case of an error that can be safely recovered from (e.g. an unsupported http method or content type)
+                    // we must preserve any additional data that may be in the buffer after the parsed message so that we can continue parsing subsequent messages
+
+                    if (err.consumed_bytes == self.buffered_bytes) {
+                        self.buffered_bytes = 0;
+                    } else {
+                        const remaining_bytes = self.current_buffer[err.consumed_bytes..self.buffered_bytes];
+
+                        // move the remaining bytes to the start of current buffer so that we can continue reading that message
+                        // there is no need to preserve data from the request that caused the error because the parser should not have created any new slices from said request
+                        @memmove(self.current_buffer[0..remaining_bytes.len], remaining_bytes);
+                        self.buffered_bytes -= err.consumed_bytes;
+                    }
+
                     return MessageReadResult{
                         .parser_error = .{
                             .keep_alive = err.keep_alive,
@@ -109,6 +123,13 @@ pub const ConnectionReader = struct {
                 },
 
                 .unrecoverable_err => |err| {
+                    // in case the parser encounters a malformed request and can't safely continue parsing we have to drop the whole buffer
+                    // the io thread will drop the connection so this is just cleanup
+
+                    self.input_buffer_pool.release(self.current_buffer_idx.?);
+                    self.current_buffer_idx = null;
+                    self.parser = null;
+
                     return MessageReadResult{
                         .unrecoverable_parser_error = err,
                     };

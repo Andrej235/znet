@@ -162,7 +162,7 @@ pub const Http1Parser = struct {
         switch (body_result) {
             .success => |body| {
                 if (self.host == null) {
-                    // this is only called after conusing the entire request so there's no need to call tryConsumeRequestOnError
+                    // this is only called after consuming the entire request so there's no need to call tryConsumeRequestOnError
                     return .{
                         .err = .{
                             .keep_alive = false,
@@ -170,6 +170,7 @@ pub const Http1Parser = struct {
                                 .error_code = .bad_request,
                                 .message = "Missing Host header",
                             },
+                            .consumed_bytes = self.parse_offset,
                         },
                     };
                 }
@@ -532,6 +533,7 @@ pub const Http1Parser = struct {
                 .err = .{
                     .keep_alive = self.connection == .keep_alive,
                     .validation_error = err,
+                    .consumed_bytes = self.parse_offset,
                 },
             },
             .needs_more_data => return .needs_more_data,

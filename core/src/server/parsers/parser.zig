@@ -17,6 +17,7 @@ pub const Parser = union(enum) {
         err: struct {
             validation_error: RequestValidationError,
             keep_alive: bool,
+            consumed_bytes: usize,
         },
         unrecoverable_err: ?RequestValidationError,
     };
