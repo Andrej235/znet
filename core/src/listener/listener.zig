@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Poller = @import("../poller/poller.zig");
-const Reactor = @import("../server/reactor.zig").Reactor;
+const IoThread = @import("../server/io-thread.zig").IoThread;
 
 const LinuxListener = @import("linux_listener.zig").LinuxListener;
 const WindowsListener = @import("windows_listener.zig").WindowsListener;
@@ -30,14 +30,14 @@ pub fn register(self: *Self, poller: *Poller, index: u32) !void {
 }
 
 /// Called for all pending connections.
-/// Provided `reactor` is used to register new client connections
+/// Provided `client_registry` is used to register new client connections
 /// and MUST have a method `attachClientSocket(self: *Self, socket: std.posix.socket_t, address: std.net.Address)` for that purpose.
 pub fn drainAccepts(
     self: *Self,
-    reactor: anytype,
+    client_registry: anytype,
 ) !void {
     comptime {
-        var T = @TypeOf(reactor);
+        var T = @TypeOf(client_registry);
         var info = @typeInfo(T);
 
         if (info == .pointer and info.pointer.size == .one) {
@@ -45,10 +45,10 @@ pub fn drainAccepts(
             info = @typeInfo(T);
         }
 
-        if (info != .@"struct") @compileError("Reactor must be a struct");
+        if (info != .@"struct") @compileError("client_registry must be a struct");
 
         if (!@hasDecl(T, "attachClientSocket"))
-            @compileError("Reactor must implement method attachClientSocket(self: *Self, socket: posix.socket_t, address: std.net.Address)");
+            @compileError("client_registry must implement method attachClientSocket(self: *Self, socket: posix.socket_t, address: std.net.Address)");
 
         const attach_fn = @field(T, "attachClientSocket");
         const TAttachFn = @TypeOf(attach_fn);
@@ -68,5 +68,5 @@ pub fn drainAccepts(
             @compileError("Third parameter of attachClientSocket must be of type std.net.Address");
     }
 
-    try self.impl.drainAccepts(reactor);
+    try self.impl.drainAccepts(client_registry);
 }

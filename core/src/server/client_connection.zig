@@ -97,7 +97,7 @@ pub const ClientConnection = struct {
                     .request = result.request,
                 });
 
-                // wake up the reactor thread to process this new job
+                // wake up the io thread to process this new job
                 try self.waker.wake();
 
                 return .success;

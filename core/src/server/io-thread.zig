@@ -21,26 +21,26 @@ const WorkerJob = @import("worker_job.zig").WorkerJob;
 const OutMessage = @import("out_message.zig").OutMessage;
 const ServerOptions = @import("server_options.zig").ServerOptions;
 const ShutdownState = @import("server.zig").ShutdownState;
-const Worker = @import("worker.zig").Worker;
+const Worker = @import("worker_thread.zig").Worker;
 
 const Response = @import("../responses/response.zig").Response;
 const HttpResponse = @import("../responses/http.zig").HttpResponse;
 const ResponseWriter = @import("../responses/response_writer.zig").ResponseWriter;
 
-const Logger = @import("../logger/logger.zig").Logger.scoped(.reactor);
+const Logger = @import("../logger/logger.zig").Logger.scoped(.io_thread);
 
-pub const ReactorHandle = struct {
+pub const IoThreadHandle = struct {
     waker: Waker,
     thread: std.Thread,
 };
 
-pub const ReactorContext = struct {
+pub const IoThreadContext = struct {
     allocator: std.mem.Allocator,
     input_buffer_pool: *BufferPool,
     waker: Waker,
 };
 
-pub const Reactor = struct {
+pub const IoThread = struct {
     const Self = @This();
 
     options: ServerOptions,
@@ -86,7 +86,7 @@ pub const Reactor = struct {
         options: ServerOptions,
         ready_count: *std.atomic.Value(u32),
         router: *const HostRouter,
-    ) !ReactorHandle {
+    ) !IoThreadHandle {
         const waker = try Waker.init();
 
         const thread = try std.Thread.spawn(.{}, startThread, .{
@@ -121,7 +121,7 @@ pub const Reactor = struct {
 
         self.worker_pool_semaphore.batchRelease(@intCast(self.workers.len));
         for (self.workers) |*w| {
-            // workers use the same shutdown signal as the reactor thread
+            // workers use the same shutdown signal as the io thread
             w.thread.join();
         }
         self.allocator.free(self.workers);
@@ -268,7 +268,7 @@ pub const Reactor = struct {
         try self.run(address, ready_count);
     }
 
-    fn run(self: *Self, address: std.net.Address, ready_reactors_count: *std.atomic.Value(u32)) !void {
+    fn run(self: *Self, address: std.net.Address, ready_io_threads_count: *std.atomic.Value(u32)) !void {
         var listener = try Listener.init(address);
         defer listener.deinit();
         errdefer self.stop() catch |err| {
@@ -281,9 +281,9 @@ pub const Reactor = struct {
         // polling slot with index self.options.max_clients + 1 is reserved for the wakeup fd
         try self.waker.register(&self.poller, self.options.max_clients + 1);
 
-        // signal to the server that this reactor thread is ready to accept connections and process jobs
-        // this is used to coordinate the startup of multiple reactor threads
-        _ = ready_reactors_count.fetchAdd(1, .release);
+        // signal to the server that this io thread is ready to accept connections
+        // this is used to coordinate the startup of multiple io threads by the main thread that started the server
+        _ = ready_io_threads_count.fetchAdd(1, .release);
 
         while (true) {
             // no timeout
@@ -329,7 +329,7 @@ pub const Reactor = struct {
 
                                 switch (match_result) {
                                     .match => |match| switch (match.action.executor) {
-                                        .io => { // execute the action on the reactor thread
+                                        .io => { // execute the action on the io thread (execute here, don't offload)
                                             // acquire a new output buffer if needed
                                             if (self.current_output_buffer_idx == null) {
                                                 const buffer_idx = self.output_buffer_pool.acquire() orelse {
@@ -389,7 +389,7 @@ pub const Reactor = struct {
                                                 continue;
                                             };
 
-                                            // released in reactor thread, set to null here to indicate that we don't have a current buffer anymore
+                                            // released after sending the response, set to null here to indicate that we don't have a current buffer anymore
                                             self.current_output_buffer_idx = null;
                                         },
                                         .worker_pool => { // pass the job over to the worker pool, guaranteed to be a valid request
@@ -581,7 +581,7 @@ pub const Reactor = struct {
             }
         }
 
-        Logger.err("Exited main reactor loop without going through proper shutdown path", .{});
+        Logger.err("Exited main io thread loop without going through proper shutdown path", .{});
         try self.stop();
     }
 
@@ -591,7 +591,7 @@ pub const Reactor = struct {
             // todo: add better backpressure handling
             // todo: send a 503 to the client as the last line of defense against overload, if we can't parse the request line just force close the connection immediately
             Logger.warn("Max clients reached, rejecting connection from {f}", .{address.in});
-            return error.ReactorFull; // socket will be closed in the caller
+            return error.ClientRegistryFull; // socket will be closed in the caller
         }
         const client_id = idx.?;
         Logger.info("[{f}] connected as {} (gen {})", .{ address.in, client_id.index, client_id.gen });

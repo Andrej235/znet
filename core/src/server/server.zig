@@ -5,8 +5,8 @@ const net = std.net;
 const ServerOptions = @import("server_options.zig").ServerOptions;
 
 const HostRouter = @import("../router/host_router.zig").HostRouter;
-const Reactor = @import("reactor.zig").Reactor;
-const ReactorHandle = @import("reactor.zig").ReactorHandle;
+const IoThread = @import("io-thread.zig").IoThread;
+const IoThreadHandle = @import("io-thread.zig").IoThreadHandle;
 
 pub const ShutdownState = enum(u8) {
     running,
@@ -23,21 +23,21 @@ const ServerInterface = struct {
     options: ServerOptions,
     allocator: std.mem.Allocator,
 
-    reactors: []ReactorHandle,
+    io_threads: []IoThreadHandle,
     shutdown_state: std.atomic.Value(ShutdownState),
     router: *const HostRouter,
 
-    reactors_ready_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    io_threads_ready_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
     pub fn init(allocator: std.mem.Allocator, router: *const HostRouter, comptime options: ServerOptions) !*ServerInterface {
-        const reactors = try allocator.alloc(ReactorHandle, options.reactor_thread_count);
+        const io_threads = try allocator.alloc(IoThreadHandle, options.io_thread_count);
 
         const self = try allocator.create(ServerInterface);
         self.* = .{
             .options = options,
             .allocator = allocator,
 
-            .reactors = reactors,
+            .io_threads = io_threads,
 
             .shutdown_state = std.atomic.Value(ShutdownState).init(.running),
             .router = router,
@@ -48,30 +48,30 @@ const ServerInterface = struct {
 
     pub fn run(self: *ServerInterface, address: net.Address) !void {
         self.shutdown_state.store(.running, .release);
-        self.reactors_ready_count.store(0, .release);
+        self.io_threads_ready_count.store(0, .release);
 
-        for (self.reactors, 0..) |*reactor, idx| {
-            const handle = try Reactor.init(
+        for (self.io_threads, 0..) |*io, idx| {
+            const handle = try IoThread.init(
                 self.allocator,
                 address,
                 &self.shutdown_state,
                 idx,
                 self.options,
-                &self.reactors_ready_count,
+                &self.io_threads_ready_count,
                 self.router,
             );
 
-            reactor.* = handle;
+            io.* = handle;
         }
 
-        while (self.reactors_ready_count.load(.acquire) < self.options.reactor_thread_count) {
+        while (self.io_threads_ready_count.load(.acquire) < self.options.io_thread_count) {
             std.atomic.spinLoopHint();
         }
     }
 
     pub fn join(self: *ServerInterface) void {
-        for (self.reactors) |*reactor| {
-            reactor.thread.join(); // this will only end once all threads have shut down
+        for (self.io_threads) |*io| {
+            io.thread.join(); // this will only end once all threads have shut down
         }
     }
 
@@ -80,7 +80,7 @@ const ServerInterface = struct {
             return DeinitError.ServerStillRunning;
         }
 
-        self.allocator.free(self.reactors);
+        self.allocator.free(self.io_threads);
         self.allocator.destroy(self);
     }
 
@@ -91,8 +91,8 @@ const ServerInterface = struct {
 
         self.shutdown_state.store(if (mode == ShutdownMode.immediate) ShutdownState.immediate else ShutdownState.graceful, .release);
 
-        for (self.reactors) |*reactor| {
-            reactor.waker.wake() catch return ShutdownError.FailedToWakeReactor;
+        for (self.io_threads) |*io| {
+            io.waker.wake() catch return ShutdownError.FailedToWakeIoThread;
         }
     }
 };
@@ -134,7 +134,7 @@ pub fn Server(comptime TApp: type) type {
 
 const ShutdownError = error{
     ServerNotRunning,
-    FailedToWakeReactor,
+    FailedToWakeIoThread,
 };
 
 const DeinitError = error{
