@@ -8,7 +8,6 @@ pub const Logger = @import("logger/logger.zig").Logger;
 pub const Serializer = @import("serialization/binary/serializer.zig").Serializer;
 pub const Deserializer = @import("serialization/binary/deserializer.zig").Deserializer;
 
-pub const Client = @import("client/client.zig").Client;
 pub const Server = @import("server/server.zig").Server;
 
 pub const App = @import("app/app.zig").App;
