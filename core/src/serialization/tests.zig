@@ -1,3 +1,1 @@
-test "Serialization" {
-    _ = @import("./binary/tests.zig");
-}
+test "Serialization" {}

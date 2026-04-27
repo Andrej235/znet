@@ -5,9 +5,6 @@ pub const http = @import("http/http.zig");
 pub const Options = @import("options.zig").Options;
 pub const Logger = @import("logger/logger.zig").Logger;
 
-pub const Serializer = @import("serialization/binary/serializer.zig").Serializer;
-pub const Deserializer = @import("serialization/binary/deserializer.zig").Deserializer;
-
 pub const Server = @import("server/server.zig").Server;
 
 pub const App = @import("app/app.zig").App;
