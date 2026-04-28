@@ -38,6 +38,7 @@ pub const Http1Parser = struct {
     current_chunk_size: ?usize = null,
 
     content_type: ?http.RequestContentType = null,
+    content_encoding: ?[]const u8 = null,
     accepts: ?[]const u8 = null,
 
     pub fn init() Http1Parser {
@@ -189,8 +190,9 @@ pub const Http1Parser = struct {
 
                                 .body = body,
                                 .chunked = self.transfer_encoding == .chunked,
-                                .accepts = self.accepts,
                                 .content_type = self.content_type,
+                                .content_encoding = self.content_encoding,
+                                .accepts = self.accepts,
                             },
                         },
                         .consumed_bytes = self.parse_offset,
@@ -288,6 +290,11 @@ pub const Http1Parser = struct {
                     },
                 };
             };
+        }
+
+        if (std.ascii.eqlIgnoreCase(name, "Content-Encoding")) {
+            self.content_encoding = value;
+            return .success;
         }
 
         if (std.ascii.eqlIgnoreCase(name, "Accept")) {

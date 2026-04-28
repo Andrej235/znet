@@ -6,3 +6,4 @@ pub const ResponseContentType = @import("response_content_type.zig").ResponseCon
 pub const Method = @import("method.zig").HttpMethod;
 pub const CacheConfig = @import("cache_config.zig").CacheConfig;
 pub const TransferEncoding = @import("transfer_encoding.zig").TransferEncoding;
+pub const ContentEncoding = @import("content_encoding.zig").ContentEncoding;

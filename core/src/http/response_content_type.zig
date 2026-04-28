@@ -16,7 +16,7 @@ pub const ResponseContentType = enum {
     /// Supports content negotiation with quality values (q), e.g. "application/json;q=0.8, application/xml;q=0.9"
     /// If content type is set to a wildcard ("*/*"), it will default to json
     /// If content type is null, it will be treated as "*/*"
-    /// If content type is not supported, an error will be returned
+    /// If content type is not supported, null will be returned
     pub fn fromAcceptHeader(content_type: []const u8) ?ResponseContentType {
         if (std.mem.eql(u8, content_type, "*/*")) {
             return .json;

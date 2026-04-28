@@ -13,5 +13,8 @@ pub const HttpRequest = struct {
     body: ?[]const u8,
     chunked: bool,
     content_type: ?http.RequestContentType,
+
+    // raw header values for content encoding and accepts, which will be parsed later when needed due to their complexity and potential for multiple values
+    content_encoding: ?[]const u8,
     accepts: ?[]const u8,
 };
