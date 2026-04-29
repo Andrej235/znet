@@ -1,6 +1,6 @@
 const std = @import("std");
 const ContentType = @import("../http/http.zig").RequestContentType;
-const ChunkedReader = @import("./chunked_reader.zig").ChunkedReader;
+const ChunkedReader = @import("../readers/chunked_reader.zig").ChunkedReader;
 
 pub const Json = @import("json/deserializer.zig").Deserializer;
 pub const FormUrlEncoded = @import("form_url_encoded/deserializer.zig").Deserializer;

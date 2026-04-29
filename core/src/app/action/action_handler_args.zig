@@ -3,6 +3,7 @@ const std = @import("std");
 const DIContainer = @import("../../dependency_injection/container.zig").Container;
 const Logger = @import("../../logger/logger.zig").Logger.scoped(.action_handler);
 
+const RequestReader = @import("../../readers/request_body_reader.zig").RequestBodyReader;
 const RequestContext = @import("../../requests/request_context.zig").RequestContext;
 const ParamKind = @import("../params/param_kind.zig").ParamKind;
 
@@ -92,8 +93,10 @@ pub fn ActionHandlerArgs(comptime TFn: type, comptime path: []const u8, comptime
             // Inject and deserialize body if needed
             if (params_info.TBody) |TBody| body_blk: {
                 if (context.body) |body| {
-                    var reader: std.io.Reader = .fixed(body);
-                    const deserialization_result = if (context.chunked_body) Deserializer.fromContentTypeChunked(TBody, context.body_content_type, allocator, &reader) else Deserializer.fromContentType(TBody, context.body_content_type, allocator, &reader);
+                    var reader = RequestReader.init();
+                    reader.initInterface(body, context.chunked_body);
+
+                    const deserialization_result = Deserializer.fromContentType(TBody, context.body_content_type, allocator, reader.interface);
                     const payload = deserialization_result catch {
                         const success = validation_errors.add(.body, null, "Failed to deserialize request body");
 
