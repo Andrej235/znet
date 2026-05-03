@@ -1,4 +1,5 @@
 const AppOptions = @import("../app.zig").AppOptions;
+const HostOptions = @import("../host/host_options.zig").HostOptions;
 const ScopeOptions = @import("scope_options.zig").ScopeOptions;
 
 const ActionExecutor = @import("../options/action_executor.zig").ActionExecutor;
@@ -26,6 +27,15 @@ pub const ResolvedScopeOptions = struct {
             .default_action_executor = app_options.default_action_executor,
             .default_action_protocol = app_options.default_action_protocol,
             .di = app_options.di,
+            .path = "",
+        };
+    }
+
+    pub fn fromHostAndAppOptions(host_options: HostOptions, app_options: AppOptions) ResolvedScopeOptions {
+        return ResolvedScopeOptions{
+            .default_action_executor = host_options.default_action_executor orelse app_options.default_action_executor,
+            .default_action_protocol = host_options.default_action_protocol orelse app_options.default_action_protocol,
+            .di = host_options.di orelse app_options.di,
             .path = "",
         };
     }

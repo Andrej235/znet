@@ -7,6 +7,7 @@ pub const SerializationErrors = error{
     NoSpaceLeft,
     IntegerSerializationFailed,
     InvalidErrorUnionValue,
+    SerializationFailed,
 };
 
 pub const DeserializationErrors = error{
@@ -17,7 +18,10 @@ pub const DeserializationErrors = error{
     EndOfStream,
     InvalidBooleanValue,
     IntegerDeserializationFailed,
+    FloatDeserializationFailed,
     BooleanDeserializationFailed,
     SliceDeserializationFailed,
     InvalidErrorUnionValue,
+    MissingRequiredField,
+    InvalidFormat,
 };

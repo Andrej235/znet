@@ -3,7 +3,7 @@ const posix = std.posix;
 const net = std.net;
 
 const Poller = @import("../poller/poller.zig");
-const Reactor = @import("../server/reactor.zig").Reactor;
+const IoThread = @import("../server/io-thread.zig").IoThread;
 
 pub const LinuxListener = struct {
     listener_fd: posix.socket_t,
@@ -37,10 +37,10 @@ pub const LinuxListener = struct {
     /// Called for all pending connections.
     pub fn drainAccepts(
         self: *LinuxListener,
-        reactor: anytype,
+        client_registry: anytype,
     ) !void {
         // the while loop will keep accepting connections until the first time posix.accept tries to block in order to wait for a new connection, i.e. there are no more pending connections
-        // or attachClientSocket returns an error indicating that the connection should be closed immediately (e.g. if the reactor is already full and cannot accept more connections)
+        // or attachClientSocket returns an error indicating that the connection should be closed immediately (e.g. server overloaded and cannot accept more connections)
         while (true) {
             var address: std.net.Address = undefined;
             var address_len: posix.socklen_t = @sizeOf(std.net.Address);
@@ -49,11 +49,11 @@ pub const LinuxListener = struct {
                 else => return err,
             };
 
-            reactor.attachClientSocket(socket, address) catch |err| {
+            client_registry.attachClientSocket(socket, address) catch |err| {
                 // todo: reject any other pending connections
                 posix.close(socket);
 
-                if (err == error.ReactorFull)
+                if (err == error.ClientRegistryFull)
                     return;
 
                 return err;

@@ -26,7 +26,7 @@ pub const WindowsListener = struct {
         try poller.add(self.listener_fd, index, true, false);
     }
 
-    pub fn drainAccepts(self: *WindowsListener, reactor: anytype) !void {
+    pub fn drainAccepts(self: *WindowsListener, client_registry: anytype) !void {
         while (true) {
             var address: std.net.Address = undefined;
             var address_len: posix.socklen_t = @sizeOf(std.net.Address);
@@ -42,9 +42,9 @@ pub const WindowsListener = struct {
                 continue;
             }
 
-            reactor.attachClientSocket(socket, address) catch |err| {
+            client_registry.attachClientSocket(socket, address) catch |err| {
                 posix.close(socket);
-                if (err == error.ReactorFull) return;
+                if (err == error.ClientRegistryFull) return;
                 return err;
             };
         }

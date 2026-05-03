@@ -4,12 +4,6 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const znet = b.dependency("znet", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const znet_module = znet.module("znet");
-
     var step = b.step("run", "Run the hello world server");
     var exe = b.addExecutable(.{
         .name = "hello_world",
@@ -19,7 +13,13 @@ pub fn build(b: *std.Build) !void {
             .optimize = optimize,
         }),
     });
-    exe.root_module.addImport("znet", znet_module);
+
+    const znet = b.dependency("znet", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
+    exe.root_module.addImport("znet", znet.module("znet"));
 
     step.dependOn(&b.addRunArtifact(exe).step);
 }

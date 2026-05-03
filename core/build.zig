@@ -4,7 +4,8 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const root_mod = b.addModule("znet", .{
+    // must be added so it can be imported by other projects
+    _ = b.addModule("znet", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
@@ -21,8 +22,4 @@ pub fn build(b: *std.Build) !void {
         ),
     });
     test_step.dependOn(&b.addRunArtifact(test_exe).step);
-
-    test_exe.root_module.addImport("znet", root_mod);
 }
-
-pub const setup = @import("build_system/setup.zig").setupZnet;

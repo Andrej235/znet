@@ -1,12 +1,13 @@
 const std = @import("std");
 const posix = std.posix;
-const linux = std.os.linux;
+
+const ConnectionReader = @import("./connection_reader.zig").ConnectionReader;
 
 const BufferPool = @import("../utils/buffer_pool.zig").BufferPool;
-const MessageHeadersByteSize = @import("../message_headers/message_headers.zig").HeadersByteSize;
-const deserializeMessageHeaders = @import("../message_headers/deserialize_message_headers.zig").deserializeMessageHeaders;
 const ConnectionId = @import("connection_id.zig").ConnectionId;
-const RequestHeaders = @import("../message_headers/request_headers.zig").RequestHeaders;
+
+const Response = @import("../responses/response.zig").Response;
+const RequestValidationError = @import("./validation_errors/request_validation_error.zig").RequestValidationError;
 
 const Queue = @import("../queues/spsc_queue.zig").Queue;
 const Job = @import("./job.zig").Job;
@@ -63,10 +64,7 @@ pub const ClientConnection = struct {
 
     pub fn deinit(self: *const ClientConnection) void {
         while (self.out_message_queue.tryPop()) |msg| {
-            switch (msg.data) {
-                .single => |single| self.output_buffer_pool.release(single.buffer_idx),
-                .shared => |shared| shared.release(),
-            }
+            self.output_buffer_pool.release(msg.buffer_idx);
         }
 
         self.reader.deinit();
@@ -75,20 +73,68 @@ pub const ClientConnection = struct {
         self.allocator.destroy(self.out_message_queue);
     }
 
-    pub fn readMessage(self: *ClientConnection) !void {
-        const msg = self.reader.readMessage(self.socket) catch |err| switch (err) {
-            error.WouldBlock => return,
-            else => return err,
-        } orelse return;
+    pub const ReadResult = union(enum) {
+        success,
+        not_enough_data,
+        parser_error: struct {
+            keep_alive: bool,
+            response: Response(RequestValidationError),
+        },
+        unrecoverable_parser_error: union(enum) {
+            with_details: Response(RequestValidationError),
+            generic: Response(void),
+        },
+    };
 
-        try self.job_queue.tryPush(.{
-            .data = msg.data,
-            .buffer_idx = msg.buffer_idx,
-            .client_id = self.id,
-        });
+    pub fn readMessage(self: *ClientConnection) !ReadResult {
+        const msg = try self.reader.readMessage(self.socket) orelse return .not_enough_data;
 
-        // wake up the reactor thread to process this new job
-        try self.waker.wake();
+        switch (msg) {
+            .success => |result| {
+                try self.job_queue.tryPush(.{
+                    .buffer_idx = result.buffer_idx,
+                    .client_id = self.id,
+                    .request = result.request,
+                });
+
+                // wake up the io thread to process this new job
+                try self.waker.wake();
+
+                return .success;
+            },
+
+            .parser_error => |err| {
+                return .{
+                    .parser_error = .{
+                        .keep_alive = err.keep_alive,
+                        .response = .{
+                            .http = .init(err.validation_error.error_code, if (err.keep_alive) .keep_alive else .close, null, err.validation_error),
+                        },
+                    },
+                };
+            },
+
+            .unrecoverable_parser_error => |err| {
+                if (err) |e| {
+                    return .{
+                        .unrecoverable_parser_error = .{
+                            .with_details = Response(RequestValidationError){
+                                .http = .init(e.error_code, .close, null, e),
+                            },
+                        },
+                    };
+                } else {
+                    return .{
+                        .unrecoverable_parser_error = .{
+                            .generic = Response(void){
+                                // bad request because we assume validation couldn't recover from a structurally invalid request
+                                .http = .init(.bad_request, .close, null, {}),
+                            },
+                        },
+                    };
+                }
+            },
+        }
     }
 
     pub fn enqueueMessage(self: *ClientConnection, msg: OutMessage) !void {
@@ -101,127 +147,5 @@ pub const ClientConnection = struct {
         };
 
         try self.poller.modify(self.socket, self.id.index, true, true);
-    }
-};
-
-const ConnectionReader = struct {
-    allocator: std.mem.Allocator,
-    connection_id: ConnectionId,
-    max_read_per_tick: usize,
-
-    current_buffer: []u8, // only valid if current_buffer_idx != null
-    current_buffer_idx: ?u32,
-    pos: usize,
-
-    current_headers: ?RequestHeaders,
-
-    input_buffer_pool: *BufferPool,
-
-    fn init(allocator: std.mem.Allocator, input_buffer_pool: *BufferPool, max_read_per_tick: usize, connection_id: ConnectionId) ConnectionReader {
-        return .{
-            .allocator = allocator,
-            .connection_id = connection_id,
-            .max_read_per_tick = max_read_per_tick,
-
-            .current_buffer = undefined,
-            .current_buffer_idx = null,
-            .pos = 0,
-
-            .current_headers = null,
-
-            .input_buffer_pool = input_buffer_pool,
-        };
-    }
-
-    fn deinit(self: *const ConnectionReader) void {
-        if (self.current_buffer_idx) |idx| {
-            self.input_buffer_pool.release(idx);
-        }
-    }
-
-    const MessageReadResult = struct {
-        buffer_idx: u32,
-        data: []const u8,
-    };
-
-    fn readMessage(self: *ConnectionReader, socket: posix.socket_t) !?MessageReadResult {
-        if (self.current_buffer_idx == null) {
-            const idx = self.input_buffer_pool.acquire() orelse return null;
-            self.current_buffer_idx = idx;
-            self.current_buffer = self.input_buffer_pool.buffer(idx);
-
-            self.pos = 0;
-            self.current_headers = null;
-        }
-
-        var reads: usize = 0;
-        while (reads < self.max_read_per_tick) {
-            // loop until we have a full message to process
-            if (try self.tryParseMessage()) |msg|
-                return msg;
-
-            // read more data from the socket, fills up the buffer from pos to the end
-            const n = try posix.recv(socket, self.current_buffer[self.pos..], 0);
-
-            if (n == 0) // no more data, connection closed or EOF
-                return error.Closed;
-
-            reads += n;
-            self.pos += n;
-        }
-
-        return null;
-    }
-
-    inline fn tryParseMessage(self: *ConnectionReader) !?MessageReadResult {
-        if (self.current_headers == null) {
-            var reader = std.io.Reader.fixed(self.current_buffer);
-
-            if (self.pos < MessageHeadersByteSize.Request) {
-                // not enough data to read the header
-                return null;
-            }
-
-            self.current_headers = (try deserializeMessageHeaders(&reader)).Request;
-        }
-
-        const payload_len = self.current_headers.?.payload_len;
-        const message_len = payload_len + MessageHeadersByteSize.Request;
-
-        if (self.pos < message_len) {
-            // not enough data to read the full message
-            return null;
-        }
-
-        const msg = self.current_buffer[0..message_len];
-        const current_buffer_idx = self.current_buffer_idx.?;
-
-        if (self.pos == message_len) {
-            self.current_buffer_idx = null;
-            return .{
-                .buffer_idx = current_buffer_idx,
-                .data = msg,
-            };
-        }
-
-        const remaining_bytes = self.current_buffer[message_len..self.pos];
-        // if there isn't a free buffer, we can't process this message yet
-        // we also can't return the fully read one because then we wouldn't be able to preserve the remaining data for the next read
-        const new_buffer_idx = self.input_buffer_pool.acquire() orelse return null;
-        const new_buffer = self.input_buffer_pool.buffer(new_buffer_idx);
-
-        // move the remaining bytes to the new buffer so that we can continue reading that message in this new buffer we just acquired from the pool
-        @memcpy(new_buffer[0..remaining_bytes.len], remaining_bytes);
-
-        self.current_buffer_idx = new_buffer_idx;
-        self.current_buffer = new_buffer;
-
-        self.pos -= message_len;
-        self.current_headers = null;
-
-        return .{
-            .buffer_idx = current_buffer_idx,
-            .data = msg,
-        };
     }
 };
